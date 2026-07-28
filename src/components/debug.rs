@@ -14,6 +14,8 @@ impl Plugin for DebugSpawnPlugin {
 
 fn spawn_test_system(
     mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // --- Sole (centro) ---
     commands.spawn((
@@ -24,18 +26,16 @@ fn spawn_test_system(
             color: [1.0, 0.9, 0.3],
             luminous: true,
         },
-        Sprite {
-            color: Color::srgb(1.0, 0.9, 0.3),
-            custom_size: Some(Vec2::new(60.0, 60.0)),
-            ..default()
-        },
+        Mesh2d(meshes.add(Circle::new(30.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgb(1.0, 0.9, 0.3)))),
         Transform::from_xyz(0.0, 0.0, 0.0),
         RigidBody::Dynamic,
         Collider::circle(30.0),
-        MassPropertiesBundle::from_shape(&Collider::circle(30.0), 5000.0),
+        Mass(5000.0),
+        ConstantForce(Vec2::ZERO),
     ));
 
-    // --- Pianeta 1 (orbita interna) ---
+    // --- Pianeta 1 (fermo a destra, test gravità) ---
     commands.spawn((
         CelestialBody {
             body_type: BodyType::Planet,
@@ -44,16 +44,14 @@ fn spawn_test_system(
             color: [0.3, 0.6, 1.0],
             luminous: false,
         },
-        Sprite {
-            color: Color::srgb(0.3, 0.6, 1.0),
-            custom_size: Some(Vec2::new(24.0, 24.0)),
-            ..default()
-        },
-        Transform::from_xyz(150.0, 0.0, 0.0),
+        Mesh2d(meshes.add(Circle::new(12.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgb(0.3, 0.6, 1.0)))),
+        Transform::from_xyz(200.0, 0.0, 0.0),
         RigidBody::Dynamic,
         Collider::circle(12.0),
-        MassPropertiesBundle::from_shape(&Collider::circle(12.0), 50.0),
-        LinearVelocity(Vec2::new(0.0, 120.0)),
+        Mass(50.0),
+        LinearVelocity(Vec2::new(0.0, 0.0)),  // velocità zero — test gravità
+        ConstantForce(Vec2::ZERO),
     ));
 
     // --- Pianeta 2 (orbita più lenta, più grande) ---
@@ -65,16 +63,14 @@ fn spawn_test_system(
             color: [0.8, 0.4, 0.2],
             luminous: false,
         },
-        Sprite {
-            color: Color::srgb(0.8, 0.4, 0.2),
-            custom_size: Some(Vec2::new(40.0, 40.0)),
-            ..default()
-        },
+        Mesh2d(meshes.add(Circle::new(20.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgb(0.8, 0.4, 0.2)))),
         Transform::from_xyz(250.0, 0.0, 0.0),
         RigidBody::Dynamic,
         Collider::circle(20.0),
-        MassPropertiesBundle::from_shape(&Collider::circle(20.0), 200.0),
+        Mass(200.0),
         LinearVelocity(Vec2::new(0.0, 80.0)),
+        ConstantForce(Vec2::ZERO),
     ));
 
     // --- Asteroide (piccolo, orbita veloce) ---
@@ -86,15 +82,13 @@ fn spawn_test_system(
             color: [0.6, 0.6, 0.6],
             luminous: false,
         },
-        Sprite {
-            color: Color::srgb(0.6, 0.6, 0.6),
-            custom_size: Some(Vec2::new(10.0, 10.0)),
-            ..default()
-        },
+        Mesh2d(meshes.add(Circle::new(5.0))),
+        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgb(0.6, 0.6, 0.6)))),
         Transform::from_xyz(100.0, 80.0, 0.0),
         RigidBody::Dynamic,
         Collider::circle(5.0),
-        MassPropertiesBundle::from_shape(&Collider::circle(5.0), 10.0),
+        Mass(10.0),
         LinearVelocity(Vec2::new(-60.0, 100.0)),
+        ConstantForce(Vec2::ZERO),
     ));
 }

@@ -41,8 +41,8 @@ pub fn wasm_main() {
         PhysicsPlugins::default(),
     ))
     .insert_resource(Gravity::ZERO)
-    .insert_resource(ClearColor(Color::srgb(0.8, 0.1, 0.05)))
+    .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
     .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin))
-    .add_systems(Update, gravity::gravity_system)
+    .add_systems(FixedUpdate, crate::systems::gravity::gravity_system)
     .run();
 }

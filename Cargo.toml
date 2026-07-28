@@ -6,6 +6,9 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "lib"]
 
+[features]
+dynamic_linking = ["bevy/dynamic_linking"]
+
 [dependencies]
 bevy = { version = "0.19", default-features = false, features = [
     "2d",
@@ -33,3 +36,16 @@ rand = "0.8"
 [target.wasm32-unknown-unknown.dependencies]
 web-sys = { version = "0.3", features = ["console", "Window", "Document"] }
 getrandom = { version = "0.2", features = ["js"] }
+
+# Enable optimization for dependencies only (keep own code unoptimized for fast compile)
+[profile.dev]
+opt-level = 0
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# WASM release profile: optimize for size
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+strip = "debuginfo"

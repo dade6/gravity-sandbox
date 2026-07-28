@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.3.0</title>
+    <title>Gravity Sandbox v0.5.0</title>
     <style>
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
@@ -25,7 +25,7 @@
 </head>
 <body>
     <canvas id="bevy-canvas"></canvas>
-    <div id="version">v0.3.0 caricamento...</div>
+    <div id="version">v0.5.0 caricamento...</div>
     <script type="module">
         import init from './gravity_sandbox.js';
 
@@ -44,20 +44,20 @@
 
         init().then(() => {
             const v = document.getElementById('version');
-            v.textContent = 'v0.3.0 ✅';
+            v.textContent = 'v0.5.0 ✅';
 
             // Poll for canvas state
             setInterval(() => {
                 const canvas = document.getElementById('bevy-canvas');
                 if (canvas) {
                     const ctx = canvas.getContext('webgl2') || canvas.getContext('webgl');
-                    v.textContent = 'v0.3.0 ✅ ' + canvas.width + 'x' + canvas.height
+                    v.textContent = 'v0.5.0 ✅ ' + canvas.width + 'x' + canvas.height
                         + (ctx ? ' gl' : ' no-gl');
                 }
             }, 3000);
         }).catch(err => {
             const v = document.getElementById('version');
-            v.textContent = 'v0.3.0 🛑WASM:' + err.message.substring(0, 80);
+            v.textContent = 'v0.5.0 🛑WASM:' + err.message.substring(0, 80);
         });
     </script>
 </body>

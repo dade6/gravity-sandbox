@@ -4,43 +4,50 @@ use avian2d::prelude::*;
 use crate::components::celestial::CelestialBody;
 
 /// Gravitational constant (tunable)
-const G: f32 = 1000.0;
+const G: f32 = 5000.0;
 /// Softening factor to avoid singularities at close distances
-const SOFTENING: f32 = 10.0;
+const SOFTENING: f32 = 5.0;
 
 /// N-body gravity system.
-/// For every pair of CelestialBody entities, computes F = G * m1 * m2 / (r² + ε²)
-/// and applies it via Forces QueryData on Avian rigid bodies.
+/// Runs in FixedUpdate to sync with Avian's physics solver.
 pub fn gravity_system(
     query: Query<(Entity, &CelestialBody, &GlobalTransform)>,
-    mut force_query: Query<Forces>,
+    mut force_query: Query<&mut ConstantForce>,
 ) {
-    let bodies: Vec<(Entity, CelestialBody, Vec2)> = query
+    // Collect all bodies
+    let bodies: Vec<(Entity, f32, Vec2)> = query
         .iter()
-        .map(|(e, body, xform)| (e, body.clone(), xform.translation().truncate()))
+        .map(|(e, body, xform)| (e, body.mass, xform.translation().truncate()))
         .collect();
 
+    if bodies.len() < 2 {
+        return;
+    }
+
+    // Zero all forces
+    for mut cf in force_query.iter_mut() {
+        cf.0 = Vec2::ZERO;
+    }
+
+    // Compute N-body forces
     for i in 0..bodies.len() {
+        let (e1, m1, t1) = bodies[i];
         for j in (i + 1)..bodies.len() {
-            let (e1, b1, t1) = &bodies[i];
-            let (e2, b2, t2) = &bodies[j];
-
-            let delta = *t2 - *t1;
+            let (e2, m2, t2) = bodies[j];
+            let delta = t2 - t1;
             let dist_sq = delta.length_squared();
-            let force_magnitude = G * b1.mass * b2.mass / (dist_sq + SOFTENING * SOFTENING);
-            let direction = if dist_sq > 0.0 {
-                delta / dist_sq.sqrt()
-            } else {
-                Vec2::ZERO
-            };
-            let force = direction * force_magnitude;
-
-            // Apply forces using Forces QueryData
-            if let Ok(mut f1) = force_query.get_mut(*e1) {
-                f1.apply_force(force);
+            if dist_sq < 1.0 {
+                continue;
             }
-            if let Ok(mut f2) = force_query.get_mut(*e2) {
-                f2.apply_force(-force);
+            let force_magnitude = G * m1 * m2 / (dist_sq + SOFTENING * SOFTENING);
+            let direction = delta / dist_sq.sqrt();
+            let force_vec = direction * force_magnitude;
+
+            if let Ok(mut cf) = force_query.get_mut(e1) {
+                cf.0 += force_vec;
+            }
+            if let Ok(mut cf) = force_query.get_mut(e2) {
+                cf.0 -= force_vec;
             }
         }
     }
