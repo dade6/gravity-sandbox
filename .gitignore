@@ -1,0 +1,19 @@
+# Rust
+target/
+Cargo.lock
+
+# WASM output
+wasm-dist/
+
+# Python
+__pycache__/
+*.pyc
+serve_wasm.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
