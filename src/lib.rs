@@ -11,6 +11,7 @@ pub mod version;
 use components::debug::DebugSpawnPlugin;
 use systems::camera::CameraControllerPlugin;
 use systems::gravity;
+use systems::timeline::TimelinePlugin;
 
 pub struct GravitySandboxPlugin;
 
@@ -44,7 +45,7 @@ pub fn wasm_main() {
     .insert_resource(Gravity::ZERO)
     .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
     .init_resource::<crate::systems::camera::PanState>()
-    .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin))
+    .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin, TimelinePlugin))
     .add_systems(FixedUpdate, gravity::gravity_system)
     .run();
 }

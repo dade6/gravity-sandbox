@@ -22,7 +22,6 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_render",
     "bevy_core_pipeline",
     "webgl2",
-    "webgpu",
     "x11",
     "wayland",
 ] }
