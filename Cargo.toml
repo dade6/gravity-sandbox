@@ -13,6 +13,8 @@ dynamic_linking = ["bevy/dynamic_linking"]
 bevy = { version = "0.19", default-features = false, features = [
     "2d",
     "bevy_ui",
+    "bevy_ui_render",
+    "bevy_ui_widgets",
     "bevy_window",
     "bevy_input_focus",
     "custom_cursor",

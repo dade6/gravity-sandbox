@@ -2,62 +2,43 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.8.0</title>
+    <title>Gravity Sandbox v0.10.0</title>
     <style>
         html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            overflow: hidden; background: #222;
+            overflow: hidden; background: #000;
         }
         #bevy-canvas {
             display: block;
             width: 100%; height: 100%;
         }
-        #version {
-            position: fixed; bottom: 8px; right: 12px;
-            color: rgba(255,255,255,0.7); font: 14px monospace;
-            pointer-events: none; z-index: 100;
-            background: rgba(0,0,0,0.6); padding: 3px 8px;
-            border-radius: 4px;
-            max-width: 80%;
-            text-align: right;
+        #debug-badge {
+            position: fixed; bottom: 52px; right: 10px;
+            color: rgba(255,255,255,0.35); font: 11px monospace;
+            pointer-events: none; z-index: 200;
+            background: rgba(0,0,0,0.5); padding: 2px 6px;
+            border-radius: 4px; max-width: 70%;
+            text-align: right; line-height: 1.4;
         }
     </style>
 </head>
 <body>
     <canvas id="bevy-canvas"></canvas>
-    <div id="version">v0.8.0 caricamento...</div>
+    <div id="debug-badge">v0.10.0 caricamento...</div>
     <script type="module">
-        import init from './gravity_sandbox.js';
+        import init from './gravity_sandbox.js?v=0.10.0';
 
         window.addEventListener('error', (e) => {
-            const v = document.getElementById('version');
-            if (v) v.textContent += ' 🛑JS:' + e.message.substring(0, 80);
+            const v = document.getElementById('debug-badge');
+            if (v) v.textContent += ' 🛑JS:' + e.message.substring(0, 60);
         });
 
-        // Capture console output in the version div
-        const origConsole = console.error;
-        console.error = function(...args) {
-            const v = document.getElementById('version');
-            if (v) v.textContent += ' 🛑' + String(args[0]).substring(0, 60);
-            origConsole.apply(console, args);
-        };
-
         init().then(() => {
-            const v = document.getElementById('version');
-            v.textContent = 'v0.8.0 ✅';
-
-            // Poll for canvas state
-            setInterval(() => {
-                const canvas = document.getElementById('bevy-canvas');
-                if (canvas) {
-                    const ctx = canvas.getContext('webgl2') || canvas.getContext('webgl');
-                    v.textContent = 'v0.8.0 ✅ ' + canvas.width + 'x' + canvas.height
-                        + (ctx ? ' gl' : ' no-gl');
-                }
-            }, 3000);
+            const v = document.getElementById('debug-badge');
+            v.textContent = 'v0.10.0 ✅';
         }).catch(err => {
-            const v = document.getElementById('version');
-            v.textContent = 'v0.8.0 🛑WASM:' + err.message.substring(0, 80);
+            const v = document.getElementById('debug-badge');
+            v.textContent = 'v0.10.0 🛑WASM:' + err.message.substring(0, 60);
         });
     </script>
 </body>
