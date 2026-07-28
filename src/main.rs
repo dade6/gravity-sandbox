@@ -6,6 +6,7 @@ use gravity_sandbox::components::debug::DebugSpawnPlugin;
 use gravity_sandbox::systems::camera::CameraControllerPlugin;
 use gravity_sandbox::systems::gravity;
 use gravity_sandbox::systems::timeline::TimelinePlugin;
+use gravity_sandbox::systems::ui::SandboxUIPlugin;
 use gravity_sandbox::version::VERSION;
 use gravity_sandbox::GravitySandboxPlugin;
 
@@ -26,7 +27,7 @@ fn main() {
         ))
         .insert_resource(Gravity::ZERO)
         .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
-        .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin, TimelinePlugin))
+        .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin, TimelinePlugin, SandboxUIPlugin))
         .add_systems(FixedUpdate, gravity::gravity_system)
         .run();
 }
