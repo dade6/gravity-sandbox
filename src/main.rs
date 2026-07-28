@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy::window::{Window, WindowResolution};
 
 use gravity_sandbox::components::debug::DebugSpawnPlugin;
+use gravity_sandbox::systems::camera::CameraControllerPlugin;
 use gravity_sandbox::systems::gravity;
 use gravity_sandbox::version::VERSION;
 use gravity_sandbox::GravitySandboxPlugin;
@@ -24,7 +25,7 @@ fn main() {
         ))
         .insert_resource(Gravity::ZERO)
         .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
-        .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin))
+        .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin))
         .add_systems(FixedUpdate, gravity::gravity_system)
         .run();
 }

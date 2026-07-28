@@ -9,6 +9,7 @@ pub mod systems;
 pub mod version;
 
 use components::debug::DebugSpawnPlugin;
+use systems::camera::CameraControllerPlugin;
 use systems::gravity;
 
 pub struct GravitySandboxPlugin;
@@ -23,7 +24,7 @@ fn setup(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
-/// WASM entry point — auto-called after init() from JS
+/// WASM entry point
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn wasm_main() {
     let mut app = App::new();
@@ -42,7 +43,8 @@ pub fn wasm_main() {
     ))
     .insert_resource(Gravity::ZERO)
     .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
-    .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin))
-    .add_systems(FixedUpdate, crate::systems::gravity::gravity_system)
+    .init_resource::<crate::systems::camera::PanState>()
+    .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin))
+    .add_systems(FixedUpdate, gravity::gravity_system)
     .run();
 }
