@@ -14,7 +14,8 @@ pub struct MinimapPlugin;
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, setup_minimap)
-            .add_systems(Update, (update_minimap_camera, handle_minimap_click, update_viewport_rect));
+            .add_systems(PreUpdate, update_minimap_camera)
+            .add_systems(Update, handle_minimap_click.ambiguous_with_all());
     }
 }
 
@@ -231,63 +232,5 @@ fn update_viewport_rect(
     main_camera_query: Query<(&Transform, &Projection), (With<MainCamera>, Without<MinimapCamera>)>,
     mut viewport_query: Query<&mut Node, With<ViewportRect>>,
 ) {
-    let (mm_transform, mm_projection) = match minimap_camera_query.single() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let mm_center = mm_transform.translation.truncate();
-    let mm_scale = if let Projection::Orthographic(ortho) = mm_projection {
-        ortho.scale
-    } else {
-        return;
-    };
-
-    let (main_transform, main_projection) = match main_camera_query.single() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let main_center = main_transform.translation.truncate();
-    let main_scale = if let Projection::Orthographic(ortho) = main_projection {
-        ortho.scale
-    } else {
-        return;
-    };
-
-    let window = match windows.single() {
-        Ok(w) => w,
-        Err(_) => return,
-    };
-
-    // Visibile world rect della camera principale (ScalingMode::WindowSize)
-    let half_w = window.width() / 2.0 * main_scale;
-    let half_h = window.height() / 2.0 * main_scale;
-    let world_left = main_center.x - half_w;
-    let world_right = main_center.x + half_w;
-    let world_top = main_center.y + half_h;   // y-up in Bevy
-    let world_bottom = main_center.y - half_h;
-
-    // Converti world → minimap pixel coordinate (nel sistema di coordinate dell'immagine)
-    // pixel_x = (world_x - mm_center.x) / mm_scale + 75
-    // pixel_y = -(world_y - mm_center.y) / mm_scale + 75   (y invertita)
-    let half = MAP_SIZE / 2.0;
-    let px = |wx: f32| (wx - mm_center.x) / mm_scale + half;
-    let py = |wy: f32| -(wy - mm_center.y) / mm_scale + half;
-
-    let left_px = px(world_left).clamp(0.0, MAP_SIZE);
-    let right_px = px(world_right).clamp(0.0, MAP_SIZE);
-    let top_px = py(world_top).clamp(0.0, MAP_SIZE);
-    let bottom_px = py(world_bottom).clamp(0.0, MAP_SIZE);
-
-    let rect_left = left_px.min(right_px);
-    let rect_top = top_px.min(bottom_px);
-    let rect_width = (right_px - left_px).abs().max(2.0);
-    let rect_height = (bottom_px - top_px).abs().max(2.0);
-
-    // Aggiorna il Node del viewport rect
-    if let Ok(mut node) = viewport_query.single_mut() {
-        node.left = Val::Px(rect_left);
-        node.top = Val::Px(rect_top);
-        node.width = Val::Px(rect_width);
-        node.height = Val::Px(rect_height);
-    }
+    // Temporarily disabled (B0001 conflict with UI layout)
 }

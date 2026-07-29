@@ -19,7 +19,7 @@ impl Plugin for CameraControllerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PanState>()
             .init_resource::<TouchPanState>()
-            .add_systems(Update, (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom));
+            .add_systems(Update, (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom).ambiguous_with_all());
     }
 }
 

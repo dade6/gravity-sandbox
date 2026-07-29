@@ -172,39 +172,52 @@ pub fn is_load_requested() -> bool {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn wasm_main() {
     let mut app = App::new();
-    app.add_plugins((
-        DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: format!("Gravity Sandbox {}", version::VERSION),
-                canvas: Some("#bevy-canvas".into()),
-                fit_canvas_to_parent: true,
-                resolution: WindowResolution::new(800, 600),
-                ..default()
-            }),
+    // Bevy 0.19: disabilita la rilevazione ambiguità (causa B0001 su WASM con molti plugin)
+    app.edit_schedule(Update, |schedule: &mut bevy::ecs::schedule::Schedule| {
+        schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+            ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+            ..default()
+        });
+    });
+    app.edit_schedule(PostUpdate, |schedule: &mut bevy::ecs::schedule::Schedule| {
+        schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+            ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+            ..default()
+        });
+    });
+    app.edit_schedule(FixedUpdate, |schedule: &mut bevy::ecs::schedule::Schedule| {
+        schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+            ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+            ..default()
+        });
+    });
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: format!("Gravity Sandbox {}", version::VERSION),
+            canvas: Some("#bevy-canvas".into()),
+            fit_canvas_to_parent: true,
+            resolution: WindowResolution::new(800, 600),
             ..default()
         }),
+        ..default()
+    }))
+    .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
+    .add_plugins((
+        GravitySandboxPlugin,
+        TimelinePlugin,
+        CameraControllerPlugin,
+        SelectionPlugin,
+        ToolPlugin,
+        TrajectoryPlugin,
+        LightingPlugin,
+        PersistencePlugin,
+        rendering::TexturePlugin,
+        PropertyEditorPlugin,
+        DebugSpawnPlugin,
+        ParallaxPlugin,
         PhysicsPlugins::default(),
     ))
     .insert_resource(Gravity::ZERO)
-    .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
-    .init_resource::<crate::systems::camera::PanState>()
-    .add_plugins((
-        GravitySandboxPlugin,
-        DebugSpawnPlugin,
-        CameraControllerPlugin,
-        TimelinePlugin,
-        PersistencePlugin,
-        #[cfg(not(target_family = "wasm"))]
-        SandboxUIPlugin,
-        SelectionPlugin,
-        ToolPlugin,
-        ParallaxPlugin,
-        MinimapPlugin,
-        TrajectoryPlugin,
-        rendering::TexturePlugin,
-        PropertyEditorPlugin,
-        LightingPlugin,
-    ))
     .add_systems(FixedUpdate, gravity::gravity_system)
     .run();
 }

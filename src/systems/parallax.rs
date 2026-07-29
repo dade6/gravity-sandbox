@@ -167,14 +167,14 @@ fn star_color(rng: &mut StdRng, factor: f32) -> Color {
 /// Each frame, offset each layer parent by `-camera_pos * factor`.
 /// Layer 1 (factor 0.0) stays fixed relative to the viewport.
 fn update_parallax(
-    camera_query: Query<&Transform, (With<Camera2d>, With<Projection>)>,
-    mut layer_query: Query<(&mut Transform, &ParallaxLayer)>,
+    mut cameras: ParamSet<(
+        Query<&Transform, (With<Camera2d>, With<Projection>)>,
+        Query<(&mut Transform, &ParallaxLayer)>,
+    )>,
 ) {
-    let camera_pos = camera_query.single().unwrap().translation;
-
-    for (mut transform, layer) in layer_query.iter_mut() {
+    let camera_pos = cameras.p0().single().unwrap().translation;
+    for (mut transform, layer) in cameras.p1().iter_mut() {
         transform.translation.x = -camera_pos.x * layer.factor;
         transform.translation.y = -camera_pos.y * layer.factor;
-        // Z is preserved (already set at spawn)
     }
 }
