@@ -1,10 +1,9 @@
-use bevy::prelude::*;
 use avian2d::prelude::*;
+use bevy::prelude::*;
 
 use crate::components::celestial::CelestialBody;
+use crate::systems::persistence::GravitationalConstant;
 
-/// Gravitational constant (tunable)
-const G: f32 = 5000.0;
 /// Softening factor to avoid singularities at close distances
 const SOFTENING: f32 = 5.0;
 
@@ -13,7 +12,10 @@ const SOFTENING: f32 = 5.0;
 pub fn gravity_system(
     query: Query<(Entity, &CelestialBody, &GlobalTransform)>,
     mut force_query: Query<&mut ConstantForce>,
+    grav: Res<GravitationalConstant>,
 ) {
+    let g = grav.0;
+
     // Collect all bodies
     let bodies: Vec<(Entity, f32, Vec2)> = query
         .iter()
@@ -39,7 +41,7 @@ pub fn gravity_system(
             if dist_sq < 1.0 {
                 continue;
             }
-            let force_magnitude = G * m1 * m2 / (dist_sq + SOFTENING * SOFTENING);
+            let force_magnitude = g * m1 * m2 / (dist_sq + SOFTENING * SOFTENING);
             let direction = delta / dist_sq.sqrt();
             let force_vec = direction * force_magnitude;
 

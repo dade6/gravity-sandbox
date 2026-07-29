@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use avian2d::prelude::*;
 
 use crate::components::celestial::{BodyType, CelestialBody};
+use crate::components::trajectory::TrajectoryHistory;
 
 /// Plugin che spawna corpi di test per il debug.
 pub struct DebugSpawnPlugin;
@@ -20,6 +21,7 @@ fn spawn_test_system(
     // --- Sole (centro) ---
     commands.spawn((
         CelestialBody {
+            name: "Sun".into(),
             body_type: BodyType::Star,
             mass: 5000.0,
             radius: 30.0,
@@ -33,11 +35,13 @@ fn spawn_test_system(
         Collider::circle(30.0),
         Mass(5000.0),
         ConstantForce(Vec2::ZERO),
+        TrajectoryHistory::default(),
     ));
 
     // --- Pianeta 1 (fermo a destra, test gravità) ---
     commands.spawn((
         CelestialBody {
+            name: "Planet Alpha".into(),
             body_type: BodyType::Planet,
             mass: 50.0,
             radius: 12.0,
@@ -52,11 +56,13 @@ fn spawn_test_system(
         Mass(50.0),
         LinearVelocity(Vec2::new(0.0, 0.0)),  // velocità zero — test gravità
         ConstantForce(Vec2::ZERO),
+        TrajectoryHistory::default(),
     ));
 
     // --- Pianeta 2 (orbita più lenta, più grande) ---
     commands.spawn((
         CelestialBody {
+            name: "Planet Beta".into(),
             body_type: BodyType::Planet,
             mass: 200.0,
             radius: 20.0,
@@ -71,11 +77,13 @@ fn spawn_test_system(
         Mass(200.0),
         LinearVelocity(Vec2::new(0.0, 80.0)),
         ConstantForce(Vec2::ZERO),
+        TrajectoryHistory::default(),
     ));
 
     // --- Asteroide (piccolo, orbita veloce) ---
     commands.spawn((
         CelestialBody {
+            name: "Rocky".into(),
             body_type: BodyType::Asteroid,
             mass: 10.0,
             radius: 5.0,
@@ -90,5 +98,6 @@ fn spawn_test_system(
         Mass(10.0),
         LinearVelocity(Vec2::new(-60.0, 100.0)),
         ConstantForce(Vec2::ZERO),
+        TrajectoryHistory::default(),
     ));
 }

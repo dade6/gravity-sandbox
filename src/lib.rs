@@ -1,21 +1,31 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use bevy::window::{Window, WindowResolution};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 pub mod components;
+pub mod rendering;
 pub mod systems;
 pub mod version;
 
 use components::debug::DebugSpawnPlugin;
-use systems::camera::CameraControllerPlugin;
+use systems::camera::{CameraControllerPlugin, MainCamera};
 use systems::gravity;
+use systems::light::LightPlugin;
+use systems::lighting::LightingPlugin;
 use systems::minimap::MinimapPlugin;
+use systems::parallax::ParallaxPlugin;
+use systems::persistence::PersistencePlugin;
+use systems::property_editor::PropertyEditorPlugin;
 use systems::selection::SelectionPlugin;
 use systems::timeline::TimelinePlugin;
 use systems::tools::ToolPlugin;
+use systems::trajectory::TrajectoryPlugin;
+#[cfg(not(target_family = "wasm"))]
 use systems::ui::SandboxUIPlugin;
+
 pub struct GravitySandboxPlugin;
 
 impl Plugin for GravitySandboxPlugin {
@@ -25,7 +35,137 @@ impl Plugin for GravitySandboxPlugin {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    commands.spawn((
+        Camera2d,
+        RenderLayers::from_layers(&[0, 1]),
+        MainCamera,
+    ));
+}
+
+// ============================================================
+// JS ↔ Rust communication bridge (wasm32 only)
+// ============================================================
+
+/// Global bridge for JS ↔ Rust communication (wasm32 only).
+/// Only persistence (save/load) and trajectory config remain;
+/// toolbar, timeline, property panel, and delete confirm are now native Bevy UI.
+#[cfg(target_arch = "wasm32")]
+mod js_bridge {
+    use std::sync::Mutex;
+
+    /// Trajectory config command from JS (set by slider/toggle changes)
+    pub static TRAJECTORY_CONFIG_CMD: Mutex<Option<String>> = Mutex::new(None);
+
+    /// Trajectory config snapshot for JS polling (written by Rust systems)
+    pub static TRAJECTORY_CONFIG_SNAPSHOT: std::sync::LazyLock<Mutex<String>> = std::sync::LazyLock::new(|| {
+        Mutex::new(r#"{"trail_length":500,"prediction_steps":200,"trails_visible":true}"#.into())
+    });
+
+    // ---- Persistence bridge (save / load) ----
+
+    /// Flag set by JS to request a save on the next ECS frame
+    pub static SAVE_REQUESTED: Mutex<bool> = Mutex::new(false);
+
+    /// Buffer holding the last saved level JSON, ready for JS polling
+    pub static SAVE_RESULT: Mutex<String> = Mutex::new(String::new());
+
+    /// Queue of level JSON strings pushed by JS to trigger a load
+    pub static LOAD_COMMANDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    /// Last error message from persistence operations (empty = no error)
+    pub static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
+    /// Flag set by the Ctrl+O keyboard shortcut to signal JS to open a file dialog
+    pub static LOAD_REQUESTED: Mutex<bool> = Mutex::new(false);
+}
+
+/// Set trajectory configuration from JavaScript (sliders, toggle).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn set_trajectory_config(config_json: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut cmd) = crate::js_bridge::TRAJECTORY_CONFIG_CMD.lock() {
+            *cmd = Some(config_json.to_string());
+        }
+    }
+}
+
+/// Get current trajectory configuration as JSON for JavaScript polling.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn get_trajectory_config() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(cfg) = crate::js_bridge::TRAJECTORY_CONFIG_SNAPSHOT.lock() {
+            return cfg.clone();
+        }
+    }
+    r#"{"trail_length":500,"prediction_steps":200,"trails_visible":true}"#.to_string()
+}
+
+// ============================================================
+// Persistence: save / load level data
+// ============================================================
+
+/// Request a save of the current level. Returns the last saved JSON
+/// (may be empty on first call; call again after one frame to get
+/// fresh data). JS side should call, wait a frame, then call again.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn save_level() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Trigger a save on the next ECS frame
+        if let Ok(mut req) = crate::js_bridge::SAVE_REQUESTED.lock() {
+            *req = true;
+        }
+        // Return current buffer content
+        if let Ok(result) = crate::js_bridge::SAVE_RESULT.lock() {
+            return result.clone();
+        }
+    }
+    String::new()
+}
+
+/// Queue a level JSON string to be loaded on the next ECS frame.
+/// The system will despawn all current bodies and spawn new ones
+/// from the level data, then pause the simulation.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn load_level(json: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut queue) = crate::js_bridge::LOAD_COMMANDS.lock() {
+            queue.push(json.to_string());
+        }
+    }
+}
+
+/// Get the last error message from persistence operations.
+/// Returns an empty string if no error occurred.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn get_last_error() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(err) = crate::js_bridge::LAST_ERROR.lock() {
+            return err.clone();
+        }
+    }
+    String::new()
+}
+
+/// Check if the Ctrl+O keyboard shortcut has requested a file-open dialog.
+/// Returns true once per request, then resets. JS should poll this and
+/// show a file picker when it returns true.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn is_load_requested() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut flag) = crate::js_bridge::LOAD_REQUESTED.lock() {
+            if *flag {
+                *flag = false;
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// WASM entry point
@@ -48,7 +188,23 @@ pub fn wasm_main() {
     .insert_resource(Gravity::ZERO)
     .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
     .init_resource::<crate::systems::camera::PanState>()
-    .add_plugins((GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin, TimelinePlugin, SandboxUIPlugin, SelectionPlugin, ToolPlugin, MinimapPlugin))
+    .add_plugins((
+        GravitySandboxPlugin,
+        DebugSpawnPlugin,
+        CameraControllerPlugin,
+        TimelinePlugin,
+        PersistencePlugin,
+        #[cfg(not(target_family = "wasm"))]
+        SandboxUIPlugin,
+        SelectionPlugin,
+        ToolPlugin,
+        ParallaxPlugin,
+        MinimapPlugin,
+        TrajectoryPlugin,
+        rendering::TexturePlugin,
+        PropertyEditorPlugin,
+        LightingPlugin,
+    ))
     .add_systems(FixedUpdate, gravity::gravity_system)
     .run();
 }

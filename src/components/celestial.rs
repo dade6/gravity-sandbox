@@ -12,6 +12,7 @@ pub enum BodyType {
 
 #[derive(Debug, Clone, Component, Serialize, Deserialize)]
 pub struct CelestialBody {
+    pub name: String,
     pub body_type: BodyType,
     pub mass: f32,
     pub radius: f32,
@@ -22,6 +23,7 @@ pub struct CelestialBody {
 impl Default for CelestialBody {
     fn default() -> Self {
         Self {
+            name: "Body".into(),
             body_type: BodyType::Planet,
             mass: 100.0,
             radius: 20.0,

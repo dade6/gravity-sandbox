@@ -2,43 +2,161 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.10.0</title>
+    <title>Gravity Sandbox v0.11.1</title>
     <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
-            margin: 0; padding: 0; width: 100%; height: 100%;
+            width: 100%; height: 100%;
             overflow: hidden; background: #000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
         #bevy-canvas {
             display: block;
             width: 100%; height: 100%;
+            position: absolute; top: 0; left: 0;
         }
-        #debug-badge {
-            position: fixed; bottom: 52px; right: 10px;
-            color: rgba(255,255,255,0.35); font: 11px monospace;
+        #ui-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+        #toolbar {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 48px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 0 12px;
+            background: rgba(12, 12, 24, 0.8);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            pointer-events: auto;
+        }
+        .tb-btn {
+            height: 30px;
+            padding: 0 12px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(60, 65, 90, 0.9);
+            color: #aaa;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            white-space: nowrap;
+        }
+        .tb-btn:hover { background: rgba(80, 85, 120, 0.95); color: #fff; }
+        .tb-btn.active {
+            background: rgba(100, 120, 255, 0.85);
+            color: #fff;
+            box-shadow: 0 0 8px rgba(100, 120, 255, 0.4);
+        }
+        #toolbar .spacer { flex: 1; }
+        #toolbar .version { color: rgba(255,255,255,0.3); font-size: 12px; pointer-events: none; }
+
+        #timeline {
+            position: absolute;
+            bottom: 0; left: 0;
+            width: 100%; height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 0 16px;
+            background: rgba(12, 12, 24, 0.8);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            pointer-events: auto;
+        }
+        .tl-btn {
+            height: 32px;
+            padding: 0 14px;
+            border: none;
+            border-radius: 6px;
+            background: rgba(60, 65, 90, 0.9);
+            color: #aaa;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+            white-space: nowrap;
+        }
+        .tl-btn:hover { background: rgba(80, 85, 120, 0.95); color: #fff; }
+        .tl-btn.active {
+            background: rgba(255, 200, 50, 0.25);
+            color: #ffd;
+        }
+        #timeline .info { color: rgba(255,255,255,0.4); font-size: 13px; pointer-events: none; }
+
+        #version-badge {
+            position: fixed; bottom: 64px; right: 12px;
+            color: rgba(255,255,255,0.25); font: 11px monospace;
             pointer-events: none; z-index: 200;
-            background: rgba(0,0,0,0.5); padding: 2px 6px;
-            border-radius: 4px; max-width: 70%;
-            text-align: right; line-height: 1.4;
+            background: rgba(0,0,0,0.4); padding: 2px 6px;
+            border-radius: 4px;
         }
     </style>
 </head>
 <body>
     <canvas id="bevy-canvas"></canvas>
-    <div id="debug-badge">v0.10.0 caricamento...</div>
+
+    <div id="ui-overlay">
+        <div id="toolbar">
+            <button class="tb-btn" data-tool="select" onclick="pressKey('1')">Select (1)</button>
+            <button class="tb-btn" data-tool="add" onclick="pressKey('2')">Add (2)</button>
+            <button class="tb-btn" data-tool="move" onclick="pressKey('3')">Move (3)</button>
+            <button class="tb-btn" data-tool="delete" onclick="pressKey('4')">Delete (4)</button>
+            <div class="spacer"></div>
+            <span class="version">Sandbox v0.11.1</span>
+        </div>
+
+        <div id="timeline">
+            <button class="tl-btn" id="play-btn" onclick="pressKey('Space')">⏸ Pause</button>
+            <button class="tl-btn" onclick="pressKey('.')">⏭ Step</button>
+            <span class="info" id="speed-display">Speed: 1.0×</span>
+        </div>
+    </div>
+
+    <div id="version-badge">v0.11.1</div>
+
+    <script>
+        // Simula pressione tasti per controllare Bevy
+        function pressKey(key) {
+            const e = new KeyboardEvent('keydown', {
+                key: key,
+                code: key === 'Space' ? 'Space' : 'Key' + key,
+                bubbles: true
+            });
+            document.dispatchEvent(e);
+        }
+
+        // Evidenzia tool attivo in base ai tasti premuti
+        document.addEventListener('keydown', (e) => {
+            const map = { '1': 'select', '2': 'add', '3': 'move', '4': 'delete' };
+            const tool = map[e.key];
+            if (tool) {
+                document.querySelectorAll('.tb-btn').forEach(b => {
+                    b.classList.toggle('active', b.dataset.tool === tool);
+                });
+            }
+        });
+    </script>
+
     <script type="module">
-        import init from './gravity_sandbox.js?v=0.10.0';
+        import init from './gravity_sandbox.js?v=0.11.1';
 
         window.addEventListener('error', (e) => {
-            const v = document.getElementById('debug-badge');
-            if (v) v.textContent += ' 🛑JS:' + e.message.substring(0, 60);
+            const v = document.getElementById('version-badge');
+            if (v) v.textContent += ' ERR:' + e.message.substring(0, 60);
         });
 
         init().then(() => {
-            const v = document.getElementById('debug-badge');
-            v.textContent = 'v0.10.0 ✅';
+            const v = document.getElementById('version-badge');
+            if (v) v.textContent = 'v0.11.1 ✅';
         }).catch(err => {
-            const v = document.getElementById('debug-badge');
-            v.textContent = 'v0.10.0 🛑WASM:' + err.message.substring(0, 60);
+            const v = document.getElementById('version-badge');
+            if (v) v.textContent = 'v0.11.1 🛑' + err.message.substring(0, 60);
         });
     </script>
 </body>

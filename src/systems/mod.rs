@@ -1,7 +1,13 @@
 pub mod camera;
 pub mod gravity;
+pub mod light;
+pub mod lighting;
 pub mod minimap;
+pub mod parallax;
+pub mod persistence;
+pub mod property_editor;
 pub mod selection;
 pub mod timeline;
 pub mod tools;
+pub mod trajectory;
 pub mod ui;

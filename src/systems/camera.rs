@@ -8,6 +8,10 @@ const ZOOM_SPEED: f32 = 0.1;
 const MIN_SCALE: f32 = 0.1;
 const MAX_SCALE: f32 = 50.0;
 
+/// Marker per la camera principale (quella controllata dall'utente)
+#[derive(Component)]
+pub struct MainCamera;
+
 /// Plugin per il controllo della camera (pan & zoom)
 pub struct CameraControllerPlugin;
 

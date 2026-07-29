@@ -76,7 +76,7 @@ fn repause_after_step(
     }
 }
 
-/// Cambio velocità con +/- o tasti 1-8
+/// Cambio velocità con +/- o tasti 5-8
 fn handle_speed_change(
     keys: Res<ButtonInput<KeyCode>>,
     mut sim_state: ResMut<SimulationState>,
@@ -88,10 +88,6 @@ fn handle_speed_change(
         sim_state.speed = (sim_state.speed * 0.5).max(0.1);
     }
     for (key, val) in [
-        (KeyCode::Digit1, 0.1),
-        (KeyCode::Digit2, 0.25),
-        (KeyCode::Digit3, 0.5),
-        (KeyCode::Digit4, 1.0),
         (KeyCode::Digit5, 2.0),
         (KeyCode::Digit6, 4.0),
         (KeyCode::Digit7, 8.0),

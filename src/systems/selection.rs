@@ -1,7 +1,7 @@
 use bevy::prelude::*;
-use avian2d::prelude::*;
 
 use crate::components::celestial::CelestialBody;
+use crate::systems::tools::CurrentTool;
 
 /// Marker per corpi selezionabili
 #[derive(Component)]
@@ -31,8 +31,13 @@ fn selection_system(
     camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     mut selected: ResMut<SelectedBody>,
+    current_tool: Res<CurrentTool>,
 ) {
     if !mouse_buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    // Only Select tool triggers selection; editing tools handle clicks themselves
+    if current_tool.0 != crate::systems::tools::Tool::Select {
         return;
     }
 
