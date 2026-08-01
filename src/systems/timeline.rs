@@ -1,3 +1,4 @@
+use avian2d::prelude::{Physics, PhysicsTime};
 use bevy::prelude::*;
 
 /// Stato della simulazione
@@ -30,22 +31,26 @@ impl Plugin for TimelinePlugin {
                 handle_speed_change,
                 apply_speed,
             ))
-            .add_systems(PostUpdate, repause_after_step);
+            .add_systems(Last, repause_after_step);
     }
 }
 
 /// Toggle Pause/Play con Spazio
+/// Ferma sia il tempo virtuale Bevy sia il timer fisico di Avian.
 fn handle_play_pause(
     keys: Res<ButtonInput<KeyCode>>,
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
+    mut physics_time: ResMut<Time<Physics>>,
 ) {
     if keys.just_pressed(KeyCode::Space) {
         sim_state.paused = !sim_state.paused;
         if sim_state.paused {
             virtual_time.pause();
+            physics_time.pause();
         } else {
             virtual_time.unpause();
+            physics_time.unpause();
         }
     }
 }
@@ -55,24 +60,28 @@ fn handle_step(
     keys: Res<ButtonInput<KeyCode>>,
     sim_state: Res<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
+    mut physics_time: ResMut<Time<Physics>>,
     mut step_writer: MessageWriter<StepMessage>,
 ) {
     if sim_state.paused
         && (keys.just_pressed(KeyCode::Period) || keys.just_pressed(KeyCode::ArrowRight))
     {
         virtual_time.unpause();
+        physics_time.unpause();
         step_writer.write(StepMessage);
     }
 }
 
-/// Re-pausa dopo uno step (eseguito dopo FixedUpdate)
+/// Re-pausa dopo uno step (eseguito in Last, dopo che la fisica ha fatto il passo)
 fn repause_after_step(
     mut step_reader: MessageReader<StepMessage>,
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
+    mut physics_time: ResMut<Time<Physics>>,
 ) {
     if step_reader.read().next().is_some() && sim_state.paused {
         virtual_time.pause();
+        physics_time.pause();
     }
 }
 
@@ -99,10 +108,12 @@ fn handle_speed_change(
     }
 }
 
-/// Applica la velocita' a Time<Virtual>
+/// Applica la velocita' a Time<Virtual> e Time<Physics>
 fn apply_speed(
     sim_state: Res<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
+    mut physics_time: ResMut<Time<Physics>>,
 ) {
     virtual_time.set_relative_speed(sim_state.speed);
+    physics_time.set_relative_speed(sim_state.speed);
 }

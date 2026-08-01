@@ -763,6 +763,7 @@ fn handle_ui_buttons(
     ), (Without<DeleteDialogBtn>, Without<DeleteDialog>)>,
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
+    mut physics_time: ResMut<Time<Physics>>,
     mut current_tool: ResMut<CurrentTool>,
     mut pending: ResMut<PendingDelete>,
     mut step_writer: MessageWriter<StepMessage>,
@@ -777,8 +778,10 @@ fn handle_ui_buttons(
                             sim_state.paused = !sim_state.paused;
                             if sim_state.paused {
                                 virtual_time.pause();
+                                physics_time.pause();
                             } else {
                                 virtual_time.unpause();
+                                physics_time.unpause();
                                 // Clear pending delete when unpausing
                                 pending.0 = None;
                             }
