@@ -27,28 +27,35 @@ const CLICK_RADIUS: f32 = 5.0;
 
 fn selection_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     mut selected: ResMut<SelectedBody>,
     current_tool: Res<CurrentTool>,
 ) {
-    if !mouse_buttons.just_pressed(MouseButton::Left) {
-        return;
+    // Supporto mouse E touch (iPhone/iPad): la posizione del click può
+    // venire dal cursore (mouse) oppure dal primo touch appena premuto.
+    let mut pressed_pos: Option<Vec2> = None;
+    if mouse_buttons.just_pressed(MouseButton::Left) {
+        if let Ok(w) = windows.single() {
+            pressed_pos = w.cursor_position();
+        }
     }
+    if pressed_pos.is_none() {
+        if let Some(touch) = touches.iter_just_pressed().next() {
+            pressed_pos = Some(touch.position());
+        }
+    }
+    let cursor = match pressed_pos {
+        Some(p) => p,
+        None => return,
+    };
     // Only Select tool triggers selection; editing tools handle clicks themselves
     if current_tool.0 != crate::systems::tools::Tool::Select {
         return;
     }
 
-    let window = match windows.single() {
-        Ok(w) => w,
-        Err(_) => return,
-    };
-    let cursor = match window.cursor_position() {
-        Some(p) => p,
-        None => return,
-    };
     let (camera, camera_transform) = match camera_query.single() {
         Ok(c) => c,
         Err(_) => return,
