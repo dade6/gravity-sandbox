@@ -1,7 +1,7 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
-use bevy::gizmos::GizmoConfigStore;
+use bevy::gizmos::prelude::{DefaultGizmoConfigGroup, GizmoConfigStore};
 use bevy::window::{Window, WindowResolution};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -42,7 +42,10 @@ fn setup(mut commands: Commands) {
 /// Gizmos (traiettorie, highlight selezione) su layer 1: visibili solo dalla
 /// camera principale ([0,1]), NON dalla minimap (layer 0).
 fn setup_gizmo_layers(mut store: ResMut<GizmoConfigStore>) {
-    store.default_config.render_layers = RenderLayers::layer(1);
+    store
+        .config_mut::<DefaultGizmoConfigGroup>()
+        .0
+        .render_layers = RenderLayers::layer(1);
 }
 
 // ============================================================
