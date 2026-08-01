@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.12.0</title>
+    <title>Gravity Sandbox v0.13.0</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -101,50 +101,10 @@
 <body>
     <canvas id="bevy-canvas"></canvas>
 
-    <div id="ui-overlay">
-        <div id="toolbar">
-            <button class="tb-btn" data-tool="select" onclick="pressKey('1')">Select (1)</button>
-            <button class="tb-btn" data-tool="add" onclick="pressKey('2')">Add (2)</button>
-            <button class="tb-btn" data-tool="move" onclick="pressKey('3')">Move (3)</button>
-            <button class="tb-btn" data-tool="delete" onclick="pressKey('4')">Delete (4)</button>
-            <div class="spacer"></div>
-            <span class="version">Sandbox v0.12.0</span>
-        </div>
-
-        <div id="timeline">
-            <button class="tl-btn" id="play-btn" onclick="pressKey('Space')">⏸ Pause</button>
-            <button class="tl-btn" onclick="pressKey('.')">⏭ Step</button>
-            <span class="info" id="speed-display">Speed: 1.0×</span>
-        </div>
-    </div>
-
-    <div id="version-badge">v0.12.0</div>
-
-    <script>
-        // Simula pressione tasti per controllare Bevy
-        function pressKey(key) {
-            const e = new KeyboardEvent('keydown', {
-                key: key,
-                code: key === 'Space' ? 'Space' : 'Key' + key,
-                bubbles: true
-            });
-            document.dispatchEvent(e);
-        }
-
-        // Evidenzia tool attivo in base ai tasti premuti
-        document.addEventListener('keydown', (e) => {
-            const map = { '1': 'select', '2': 'add', '3': 'move', '4': 'delete' };
-            const tool = map[e.key];
-            if (tool) {
-                document.querySelectorAll('.tb-btn').forEach(b => {
-                    b.classList.toggle('active', b.dataset.tool === tool);
-                });
-            }
-        });
-    </script>
+    <div id="version-badge">v0.13.0</div>
 
     <script type="module">
-        import init from './gravity_sandbox.js?v=0.12.0';
+        import init from './gravity_sandbox.js?v=0.13.0';
 
         window.addEventListener('error', (e) => {
             const v = document.getElementById('version-badge');
@@ -153,10 +113,10 @@
 
         init().then(() => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.12.0 ✅';
+            if (v) v.textContent = 'v0.13.0 ✅';
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.12.0 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.13.0 🛑' + err.message.substring(0, 60);
         });
     </script>
 </body>

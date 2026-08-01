@@ -23,7 +23,7 @@ use systems::selection::SelectionPlugin;
 use systems::timeline::TimelinePlugin;
 use systems::tools::ToolPlugin;
 use systems::trajectory::TrajectoryPlugin;
-#[cfg(not(target_family = "wasm"))]
+
 use systems::ui::SandboxUIPlugin;
 
 pub struct GravitySandboxPlugin;
@@ -216,6 +216,7 @@ pub fn wasm_main() {
         DebugSpawnPlugin,
         ParallaxPlugin,
         PhysicsPlugins::default(),
+        SandboxUIPlugin,
     ))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)

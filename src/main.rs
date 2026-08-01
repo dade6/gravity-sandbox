@@ -15,11 +15,12 @@ use gravity_sandbox::systems::selection::SelectionPlugin;
 use gravity_sandbox::systems::timeline::TimelinePlugin;
 use gravity_sandbox::systems::tools::ToolPlugin;
 use gravity_sandbox::systems::trajectory::TrajectoryPlugin;
-#[cfg(not(target_family = "wasm"))]
+
 use gravity_sandbox::systems::ui::SandboxUIPlugin;
 use gravity_sandbox::rendering::TexturePlugin;
 use gravity_sandbox::version::VERSION;
 use gravity_sandbox::GravitySandboxPlugin;
+
 
 #[cfg(not(target_family = "wasm"))]
 fn main() {
@@ -42,7 +43,7 @@ fn main() {
         .add_plugins((
             GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin,
             TimelinePlugin, PersistencePlugin, PropertyEditorPlugin,
-            #[cfg(not(target_family = "wasm"))]
+            
             SandboxUIPlugin,
             SelectionPlugin, ToolPlugin,
             ParallaxPlugin, LightPlugin, LightingPlugin, MinimapPlugin, TrajectoryPlugin, TexturePlugin,

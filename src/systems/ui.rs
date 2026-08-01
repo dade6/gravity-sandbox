@@ -1,39 +1,21 @@
-//! UI nativa Bevy — attiva solo su target desktop/native.
+//! UI nativa Bevy — attiva su tutti i target (native e WASM).
 //!
-//! ## Safari WebGL2 — problema noto
+//! ## Vincolo progettuale
 //!
-//! L'UI nativa Bevy (`bevy_ui_render`) aggiunge un passaggio di rendering
-//! separato con framebuffer sRGBA e blend state specifici. Su Safari (macOS
-//! e iOS) con backend WebGL2, wgpu passa attraverso ANGLE (OpenGL ES →
-//! Metal), e questa configurazione di framebuffer causa errori
-//! `INVALID_ENUM: framebufferTexture2D: invalid attachment`.
+//! L'interfaccia del sandbox usa **Bevy UI** (o altra UI compatibile Bevy
+//! scritta in Rust). **Nessun overlay HTML**: tutta la UI è renderizzata dal
+//! motore Bevy, così che l'esperienza sia identica su desktop e WASM.
 //!
-//! L'errore è nella catena wgpu/ANGLE/Metal — non risolvibile dal codice
-//! applicativo Bevy. Safari è l'unico browser che usa ANGLE su macOS;
-//! Chrome e Firefox hanno implementazioni WebGL2 native.
+//! ## Safari WebGL2 — problema noto (sotto osservazione)
 //!
-//! ## Soluzione adottata
+//! In passato (v0.11.0) l'UI nativa era stata disabilitata su WASM per un
+//! errore `INVALID_ENUM: framebufferTexture2D` segnalato su Safari WebGL2
+//! (catena wgpu/ANGLE/Metal). Tuttavia in v0.8 la Bevy UI funzionava su
+//! iPhone Safari, quindi il blocco è stato rimosso e la UI è di nuovo
+//! attiva ovunque. Se il problema Safari si ripresenta, va investigato
+//! insieme all'utente PRIMA di disabilitare l'UI nativa.
 //!
-//! Il progetto ha un'overlay HTML completo (`index.html`) che fornisce TUTTA
-//! l'interfaccia per il target WASM: toolbar, timeline, property panel,
-//! trajectory panel, Salva/Carica, dialogo conferma eliminazione.
-//! La comunicazione JS ↔ Rust avviene via `wasm-bindgen` (statics condivisi
-//! in `lib.rs`).
-//!
-//! Questo modulo (`SandboxUIPlugin`) è registrato SOLO per target non-WASM
-//! (vedi `cfg(not(target_family = "wasm"))` in `main.rs` e `lib.rs`).
-//!
-//! ## Workaround testati (non risolutivi su Safari WebGL2)
-//!
-//! - Rimozione `ZIndex` — non presente nel codice attuale
-//! - Camera UI separata con `RenderLayers` dedicato — la fase UI pass
-//!   fallisce comunque a livello wgpu, indipendentemente dal layer
-//! - Rimozione `bevy_ui_render` / `bevy_ui_widgets` — elimina il rendering
-//!   UI ma anche le definizioni dei componenti UI nativi
-//! - Rimozione feature `webgl2` — peggiora: tenta WebGPU non supportato
-//! - Solo `bevy_ui` senza `bevy_ui_render` — layout senza rendering visibile
-//!
-//! ## Link utili
+//! ## Link utili (contesto storico)
 //!
 //! - Bevy #14710 — UI flickering su Android (WebGL2, stesso meccanismo)
 //!   <https://github.com/bevyengine/bevy/issues/14710>
@@ -41,12 +23,6 @@
 //!   <https://github.com/bevyengine/bevy/discussions/12678>
 //! - wgpu #2399 — framebuffer attachment su GL backend
 //!   <https://github.com/gfx-rs/wgpu/issues/2399>
-//!
-//! ## Raccomandazione
-//!
-//! Usare Chrome o Firefox per sviluppo WASM con UI nativa Bevy.
-//! Safari non è supportato per UI Bevy via WebGL2. L'overlay HTML in
-//! `index.html` è il sostituto ufficiale per il target WASM.
 
 use avian2d::prelude::*;
 use bevy::prelude::*;
@@ -66,10 +42,10 @@ use crate::systems::tools::{CurrentTool, PendingDelete, Tool, ToolBtn};
 /// Safari a causa di limitazioni nel backend wgpu/ANGLE/Metal. Il progetto
 /// usa un overlay HTML (`index.html`) come alternativa cross-browser per il
 /// target WASM. Vedi la doc del modulo per i dettagli.
-#[cfg(not(target_family = "wasm"))]
+
 pub struct SandboxUIPlugin;
 
-#[cfg(not(target_family = "wasm"))]
+
 impl Plugin for SandboxUIPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_ui)
@@ -85,42 +61,42 @@ impl Plugin for SandboxUIPlugin {
 }
 
 // === Marker components (native-only) ===
-#[cfg(not(target_family = "wasm"))]
+
 #[derive(Component)]
 pub struct TimelinBtn(pub &'static str);
 
 /// Marker per il pannello proprietà
-#[cfg(not(target_family = "wasm"))]
+
 #[derive(Component)]
 struct PropertyPanel;
 
 /// Markers per i campi del property panel (label)
-#[cfg(not(target_family = "wasm"))]
+
 #[derive(Component)]
 struct PropField(&'static str);
 
 /// Marker per gli input editabili del property panel
-#[cfg(not(target_family = "wasm"))]
+
 #[derive(Component)]
 struct PropInput(pub &'static str);
 
 /// Marker per la velocità nella timeline
-#[cfg(not(target_family = "wasm"))]
+
 #[derive(Component)]
 struct TimelinSpeed;
 
 /// Marker per dialog di conferma cancellazione
-#[cfg(not(target_family = "wasm"))]
+
 #[derive(Component)]
 struct DeleteDialog;
 
 /// Marker per bottoni del dialog cancellazione
-#[cfg(not(target_family = "wasm"))]
+
 #[derive(Component)]
 struct DeleteDialogBtn(&'static str);
 
 // === Colori tema (solo nativo) ===
-#[cfg(not(target_family = "wasm"))]
+
 const TEXT_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.75);
 const BORDER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.25);
 const BTN_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
@@ -131,7 +107,7 @@ const INPUT_BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
 const OVERLAY_FG: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 const DIALOG_BG: Color = Color::srgba(0.12, 0.12, 0.22, 0.95);
 
-#[cfg(not(target_family = "wasm"))]
+
 fn spawn_ui(mut commands: Commands) {
     // === Toolbar in alto ===
     spawn_toolbar(&mut commands);
@@ -143,7 +119,7 @@ fn spawn_ui(mut commands: Commands) {
     spawn_property_panel(&mut commands);
 }
 
-#[cfg(not(target_family = "wasm"))]
+
 fn spawn_toolbar(commands: &mut Commands) {
     commands
         .spawn((
@@ -193,7 +169,7 @@ fn spawn_toolbar(commands: &mut Commands) {
         });
 }
 
-#[cfg(not(target_family = "wasm"))]
+
 fn spawn_timeline(commands: &mut Commands) {
     commands
         .spawn((
@@ -244,7 +220,7 @@ fn spawn_timeline(commands: &mut Commands) {
         });
 }
 
-#[cfg(not(target_family = "wasm"))]
+
 fn spawn_property_panel(commands: &mut Commands) {
     commands
         .spawn((
@@ -364,12 +340,14 @@ fn spawn_property_panel(commands: &mut Commands) {
 // === Timeline button sync ===
 
 /// Aggiorna testo bottoni timeline (Play↔Pause) e display velocità
-#[cfg(not(target_family = "wasm"))]
+
 fn update_timeline_buttons(
     sim_state: Res<SimulationState>,
     mut btn_query: Query<(&TimelinBtn, &Children)>,
-    mut text_query: Query<&mut Text>,
-    mut speed_query: Query<&mut Text, (With<TimelinSpeed>, Without<TimelinBtn>)>,
+    mut text_queries: ParamSet<(
+        Query<&mut Text>,
+        Query<&mut Text, (With<TimelinSpeed>, Without<TimelinBtn>)>,
+    )>,
 ) {
     // Update Play/Pause button text
     for (btn, children) in btn_query.iter_mut() {
@@ -380,7 +358,7 @@ fn update_timeline_buttons(
                 "⏸ Pause"
             };
             for child in children.iter() {
-                if let Ok(mut text) = text_query.get_mut(child) {
+                if let Ok(mut text) = text_queries.p0().get_mut(child) {
                     if text.0 != new_label {
                         text.0 = new_label.to_string();
                     }
@@ -392,7 +370,7 @@ fn update_timeline_buttons(
 
     // Update speed display
     if sim_state.is_changed() {
-        if let Ok(mut speed_text) = speed_query.single_mut() {
+        if let Ok(mut speed_text) = text_queries.p1().single_mut() {
             speed_text.0 = format!("Speed {:.1}×", sim_state.speed);
         }
     }
@@ -401,7 +379,7 @@ fn update_timeline_buttons(
 // === Property panel update ===
 
 /// Aggiorna pannello proprietà basato su corpo selezionato
-#[cfg(not(target_family = "wasm"))]
+
 fn update_property_panel(
     selected: Res<SelectedBody>,
     bodies_query: Query<(&CelestialBody, &GlobalTransform), Without<PropertyPanel>>,
@@ -482,7 +460,7 @@ fn update_property_panel(
 }
 
 /// Legge modifiche da EditableText e le scrive al corpo selezionato
-#[cfg(not(target_family = "wasm"))]
+
 fn sync_property_input_to_body(
     input_query: Query<(&PropInput, &EditableText)>,
     selected: Res<SelectedBody>,
@@ -577,7 +555,7 @@ fn sync_property_input_to_body(
 // === Delete Dialog (native Bevy UI) ===
 
 /// Gestisce spawn/despawn del dialog di cancellazione
-#[cfg(not(target_family = "wasm"))]
+
 fn manage_delete_dialog(
     pending: Res<PendingDelete>,
     current_tool: Res<CurrentTool>,
@@ -614,7 +592,7 @@ fn manage_delete_dialog(
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+
 fn spawn_delete_dialog(commands: &mut Commands, window_size: Vec2, body_name: &str) {
     commands
         .spawn((
@@ -712,7 +690,7 @@ fn spawn_delete_dialog(commands: &mut Commands, window_size: Vec2, body_name: &s
 }
 
 /// Gestisce click su bottoni del dialog di cancellazione
-#[cfg(not(target_family = "wasm"))]
+
 fn handle_delete_dialog_buttons(
     mut interaction_query: Query<(&Interaction, &DeleteDialogBtn, &mut BackgroundColor)>,
     mut pending: ResMut<PendingDelete>,
@@ -767,7 +745,7 @@ fn handle_delete_dialog_buttons(
 
 // === Gestione unificata click e hover ===
 
-#[cfg(not(target_family = "wasm"))]
+
 fn handle_ui_buttons(
     mut interaction_query: Query<(
         &Interaction,
