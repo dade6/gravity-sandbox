@@ -39,6 +39,10 @@ pub struct MoveDragState {
     pub offset: Vec2,
     /// Original alpha value to restore on release
     pub original_alpha: f32,
+    /// Cursore (pixel schermo) al momento del press — usato per la soglia di drag
+    pub press_cursor: Option<Vec2>,
+    /// True quando il drag ha superato la soglia di movimento (engaged)
+    pub engaged: bool,
 }
 
 /// Risorsa: corpo in attesa di conferma cancellazione
@@ -95,6 +99,10 @@ fn handle_tool_shortcuts(
 // ============================================================
 
 const CLICK_RADIUS: f32 = 5.0;
+
+/// Soglia minima di movimento (pixel schermo) prima che il drag agganci il corpo.
+/// Sotto questa soglia un click su un corpo in Move non sposta nulla.
+const DRAG_THRESHOLD_PX: f32 = 5.0;
 
 /// Trova il corpo più vicino sotto il punto indicato (coordinate mondo)
 fn hit_test_body(
@@ -215,64 +223,112 @@ fn move_tool_system(
     // Se non siamo in Move+pausa, cancella eventuale drag attivo
     if current_tool.0 != Tool::Move || !sim_state.paused {
         if drag_state.active {
-            // Ripristina opacità prima di cancellare il drag
-            if let Some(entity) = drag_state.entity {
-                restore_alpha(entity, &material_query, &mut materials, drag_state.original_alpha);
-            }
-            drag_state.active = false;
-            drag_state.entity = None;
+            close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
         }
         return;
     }
 
+    let window = match windows.single() {
+        Ok(w) => w,
+        Err(_) => return,
+    };
+    // Posizione cursore in pixel schermo (per la soglia di drag)
+    let cursor_px = match window.cursor_position() {
+        Some(p) => p,
+        None => return,
+    };
     let world_pos = match cursor_to_world(&windows, &camera_query) {
         Some(p) => p,
         None => return,
     };
 
     if mouse_buttons.just_pressed(MouseButton::Left) {
-        // Inizia drag: cerca corpo sotto il cursore
+        // Se un drag precedente è rimasto attivo (es. release persa su WASM),
+        // chiudilo prima di iniziarne uno nuovo.
+        if drag_state.active {
+            close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
+        }
+        // Inizia drag: cerca corpo sotto il cursore. Non sposta ancora nulla:
+        // il corpo viene agganciato solo quando il cursore supera la soglia.
         if let Some(entity) = hit_test_body(world_pos, &bodies) {
             if let Ok(transform) = transforms.get(entity) {
                 let body_pos = transform.translation.truncate();
                 drag_state.active = true;
                 drag_state.entity = Some(entity);
                 drag_state.offset = body_pos - world_pos;
+                drag_state.press_cursor = Some(cursor_px);
+                drag_state.engaged = false;
 
-                // Riduci opacità durante il drag — salva il valore originale
+                // Salva l'alpha originale per il ripristino — ma NON ridurre
+                // ancora l'opacità: il feedback 0.5 parte solo oltre soglia.
                 if let Ok(mat_handle) = material_query.get(entity) {
                     if let Some(material) = materials.get(&mat_handle.0) {
                         drag_state.original_alpha = 1.0; // default
-                        // Extract current alpha from the material's color
                         let srgba = material.color.to_srgba();
                         drag_state.original_alpha = srgba.alpha;
                     }
                 }
-                set_alpha(entity, &material_query, &mut materials, 0.5);
             }
         }
     } else if mouse_buttons.just_released(MouseButton::Left) {
         // Fine drag: ripristina opacità, azzera velocita'
         if drag_state.active {
-            if let Some(entity) = drag_state.entity {
-                if let Ok(mut vel) = velocities.get_mut(entity) {
-                    vel.0 = Vec2::ZERO;
+            close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
+        }
+    } else if drag_state.active
+        && mouse_buttons.pressed(MouseButton::Left)
+        // Re-check tool/pausa: blocca qualunque movimento residuo con drag
+        // preesistente o switch di tool avvenuto nello stesso frame.
+        && current_tool.0 == Tool::Move
+        && sim_state.paused
+    {
+        // Soglia di drag: il corpo si aggancia solo oltre DRAG_THRESHOLD_PX px
+        if !drag_state.engaged {
+            if let Some(press) = drag_state.press_cursor {
+                if press.distance(cursor_px) >= DRAG_THRESHOLD_PX {
+                    drag_state.engaged = true;
+                    // Feedback trasparenza solo oltre soglia
+                    if let Some(entity) = drag_state.entity {
+                        set_alpha(entity, &material_query, &mut materials, 0.5);
+                    }
                 }
-                // Ripristina opacità originale
-                restore_alpha(entity, &material_query, &mut materials, drag_state.original_alpha);
-            }
-            drag_state.active = false;
-            drag_state.entity = None;
-        }
-    } else if drag_state.active && mouse_buttons.pressed(MouseButton::Left) {
-        // Aggiorna posizione durante il drag
-        if let Some(entity) = drag_state.entity {
-            if let Ok(mut transform) = transforms.get_mut(entity) {
-                transform.translation.x = world_pos.x + drag_state.offset.x;
-                transform.translation.y = world_pos.y + drag_state.offset.y;
             }
         }
+        if drag_state.engaged {
+            // Aggiorna posizione durante il drag
+            if let Some(entity) = drag_state.entity {
+                if let Ok(mut transform) = transforms.get_mut(entity) {
+                    transform.translation.x = world_pos.x + drag_state.offset.x;
+                    transform.translation.y = world_pos.y + drag_state.offset.y;
+                }
+            }
+        }
+    } else if drag_state.active {
+        // WASM: press+release nello stesso frame (o release persa) → al frame
+        // successivo pressed() è già false ma active è ancora true. Chiudi il
+        // drag senza spostare il corpo: se non ha superato la soglia non si è
+        // mai mosso.
+        close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
     }
+}
+
+/// Chiude un drag attivo: ripristina l'opacità originale e azzera la velocità.
+fn close_drag(
+    drag_state: &mut ResMut<MoveDragState>,
+    velocities: &mut Query<&mut LinearVelocity>,
+    material_query: &Query<&MeshMaterial2d<ColorMaterial>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) {
+    if let Some(entity) = drag_state.entity {
+        if let Ok(mut vel) = velocities.get_mut(entity) {
+            vel.0 = Vec2::ZERO;
+        }
+        restore_alpha(entity, material_query, materials, drag_state.original_alpha);
+    }
+    drag_state.active = false;
+    drag_state.entity = None;
+    drag_state.engaged = false;
+    drag_state.press_cursor = None;
 }
 
 /// Set the alpha of a body's material. Also switches alpha_mode to Blend when alpha < 1.0.

@@ -1,6 +1,8 @@
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
 use bevy::prelude::*;
 
+use crate::systems::tools::MoveDragState;
+
 /// Sensitivity e limiti per pan e zoom
 const PAN_SPEED: f32 = 1.0;
 const SCROLL_PAN_SPEED: f32 = 2.0;
@@ -47,8 +49,14 @@ fn pan_camera(
     mut state: ResMut<PanState>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
+    drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
+    if drag_state.active {
+        // Durante il drag di un corpo (Move tool) la camera non si muove
+        state.dragging = false;
+        return;
+    }
     let was_dragging = state.dragging;
     state.dragging = mouse_buttons.pressed(MouseButton::Right);
 
@@ -65,8 +73,12 @@ fn pan_camera(
 fn scroll_pan(
     scroll: Res<AccumulatedMouseScroll>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
+    if drag_state.active {
+        return;
+    }
     if mouse_buttons.pressed(MouseButton::Right) {
         return;
     }
@@ -83,8 +95,12 @@ fn scroll_pan(
 fn zoom_camera(
     scroll: Res<AccumulatedMouseScroll>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
 ) {
+    if drag_state.active {
+        return;
+    }
     if mouse_buttons.pressed(MouseButton::Right) {
         return;
     }
@@ -109,8 +125,13 @@ fn zoom_camera(
 fn touch_pan(
     mut state: ResMut<TouchPanState>,
     touches: Res<Touches>,
+    drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
+    if drag_state.active {
+        state.active = false;
+        return;
+    }
     if touches.iter().count() == 1 {
         if let Some(touch) = touches.iter().next() {
             if touches.just_pressed(touch.id()) {
@@ -140,8 +161,13 @@ fn touch_pan(
 fn touch_zoom(
     touches: Res<Touches>,
     mut state: Local<TouchPinchState>,
+    drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
 ) {
+    if drag_state.active {
+        state.active = false;
+        return;
+    }
     let count = touches.iter().count();
     if count >= 2 {
         let mut positions: Vec<Vec2> = touches.iter().map(|t| t.position()).collect();

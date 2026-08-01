@@ -7,6 +7,7 @@ use bevy::render::render_resource::{
 
 use crate::components::celestial::CelestialBody;
 use crate::systems::camera::MainCamera;
+use crate::systems::tools::MoveDragState;
 
 /// Plugin per la minimap
 pub struct MinimapPlugin;
@@ -166,7 +167,13 @@ fn handle_minimap_click(
     windows: Query<&Window>,
     minimap_camera_query: Query<(&Transform, &Projection), With<MinimapCamera>>,
     mut main_camera_query: Query<&mut Transform, (With<MainCamera>, Without<MinimapCamera>)>,
+    drag_state: Res<MoveDragState>,
 ) {
+    if drag_state.active {
+        // Durante il drag di un corpo (Move tool) il click sulla minimap
+        // non deve spostare/teletrasportare la camera.
+        return;
+    }
     if !mouse_buttons.just_pressed(MouseButton::Left) {
         return;
     }
