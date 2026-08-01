@@ -98,6 +98,8 @@ struct DeleteDialogBtn(&'static str);
 // === Colori tema (solo nativo) ===
 
 const TEXT_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.75);
+/// Colore testo campi proprietà quando NON si è in pausa (readonly visivo)
+const TEXT_COLOR_READONLY: Color = Color::srgba(1.0, 1.0, 1.0, 0.3);
 const BORDER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.25);
 const BTN_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
 const BTN_PRESS: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
@@ -386,7 +388,7 @@ fn update_property_panel(
     velocity_query: Query<&LinearVelocity>,
     sim_state: Res<SimulationState>,
     mut panel_query: Query<&mut Node, With<PropertyPanel>>,
-    mut editable_inputs: Query<(&PropInput, &mut EditableText)>,
+    mut editable_inputs: Query<(&PropInput, &mut EditableText, &mut TextColor)>,
     mut text_labels: Query<(&PropField, &mut Text), (Without<PropInput>, Without<EditableText>)>,
 ) {
     // Show/hide panel
@@ -424,7 +426,13 @@ fn update_property_panel(
     };
 
     // Update EditableText fields
-    for (prop, mut editable_text) in editable_inputs.iter_mut() {
+    for (prop, mut editable_text, mut text_color) in editable_inputs.iter_mut() {
+        // Gray-out fields when not paused (readonly visivo)
+        text_color.0 = if sim_state.paused {
+            TEXT_COLOR
+        } else {
+            TEXT_COLOR_READONLY
+        };
         let current_text = editable_text.value().to_string();
         let expected = match prop.0 {
             "name" => body.name.clone(),
