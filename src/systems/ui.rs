@@ -32,6 +32,7 @@ use bevy::ui::widget::TextScroll;
 use bevy::text::EditableText;
 
 use crate::components::celestial::CelestialBody;
+use crate::systems::reset::ResetMessage;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::{SimulationState, StepMessage};
 use crate::systems::tools::{CurrentTool, PendingDelete, Tool, ToolBtn};
@@ -164,6 +165,28 @@ fn spawn_toolbar(commands: &mut Commands) {
                     TextColor(TEXT_COLOR),
                 ));
             }
+            // Bottone Reset: ripristina lo stato iniziale senza cambiare il
+            // CurrentTool (usa TimelinBtn come marker per non toccare i tool).
+            bar.spawn((
+                Button,
+                TimelinBtn("reset"),
+                Node {
+                    height: Val::Px(36.0),
+                    padding: UiRect::horizontal(Val::Px(14.0)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::px(8.0, 8.0, 8.0, 8.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                BorderColor::all(BORDER_COLOR),
+            ))
+            .with_child((
+                Text::new("Reset"),
+                TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
+                TextColor(TEXT_COLOR),
+            ));
             bar.spawn(Node { flex_grow: 1.0, ..default() });
             bar.spawn((
                 Text::new(format!("Sandbox v{}", crate::version::VERSION)),
@@ -769,6 +792,7 @@ fn handle_ui_buttons(
     mut current_tool: ResMut<CurrentTool>,
     mut pending: ResMut<PendingDelete>,
     mut step_writer: MessageWriter<StepMessage>,
+    mut reset_writer: MessageWriter<ResetMessage>,
 ) {
     for (interaction, tool, timeline, mut bg) in interaction_query.iter_mut() {
         match *interaction {
@@ -793,6 +817,11 @@ fn handle_ui_buttons(
                                 virtual_time.unpause();
                                 step_writer.write(StepMessage);
                             }
+                        }
+                        "reset" => {
+                            // Ripristina lo stato iniziale (play o pausa),
+                            // senza cambiare il CurrentTool né lo stato di pausa.
+                            reset_writer.write(ResetMessage);
                         }
                         _ => {}
                     }

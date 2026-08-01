@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use avian2d::prelude::*;
 
 use crate::components::celestial::{BodyType, CelestialBody};
+use crate::components::initial_state::InitialBodyState;
 use crate::components::trajectory::TrajectoryHistory;
 
 /// Plugin che spawna corpi di test per il debug.
@@ -36,6 +37,12 @@ fn spawn_test_system(
         Mass(5000.0),
         ConstantForce(Vec2::ZERO),
         TrajectoryHistory::default(),
+        InitialBodyState {
+            position: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            mass: 5000.0,
+            radius: 30.0,
+        },
     ));
 
     // --- Pianeta 1 (fermo a destra, test gravità) ---
@@ -57,6 +64,12 @@ fn spawn_test_system(
         LinearVelocity(Vec2::new(0.0, 0.0)),  // velocità zero — test gravità
         ConstantForce(Vec2::ZERO),
         TrajectoryHistory::default(),
+        InitialBodyState {
+            position: Vec2::new(200.0, 0.0),
+            velocity: Vec2::ZERO,
+            mass: 50.0,
+            radius: 12.0,
+        },
     ));
 
     // --- Pianeta 2 (orbita più lenta, più grande) ---
@@ -78,6 +91,12 @@ fn spawn_test_system(
         LinearVelocity(Vec2::new(0.0, 80.0)),
         ConstantForce(Vec2::ZERO),
         TrajectoryHistory::default(),
+        InitialBodyState {
+            position: Vec2::new(250.0, 0.0),
+            velocity: Vec2::new(0.0, 80.0),
+            mass: 200.0,
+            radius: 20.0,
+        },
     ));
 
     // --- Asteroide (piccolo, orbita veloce) ---
@@ -99,5 +118,11 @@ fn spawn_test_system(
         LinearVelocity(Vec2::new(-60.0, 100.0)),
         ConstantForce(Vec2::ZERO),
         TrajectoryHistory::default(),
+        InitialBodyState {
+            position: Vec2::new(100.0, 80.0),
+            velocity: Vec2::new(-60.0, 100.0),
+            mass: 10.0,
+            radius: 5.0,
+        },
     ));
 }

@@ -145,6 +145,8 @@ fn process_load_commands(
 ) {
     #[cfg(target_arch = "wasm32")]
     {
+        use crate::components::initial_state::InitialBodyState;
+
         // Drain the command queue (take the most recent command)
         let json = match crate::js_bridge::LOAD_COMMANDS.lock() {
             Ok(mut queue) if !queue.is_empty() => queue.pop(),
@@ -200,6 +202,12 @@ fn process_load_commands(
                 Mass(body_data.mass),
                 LinearVelocity(Vec2::new(body_data.velocity[0], body_data.velocity[1])),
                 ConstantForce(Vec2::ZERO),
+                InitialBodyState {
+                    position: Vec2::new(body_data.position[0], body_data.position[1]),
+                    velocity: Vec2::new(body_data.velocity[0], body_data.velocity[1]),
+                    mass: body_data.mass,
+                    radius,
+                },
             ));
         }
 

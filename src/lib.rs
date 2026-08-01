@@ -20,6 +20,7 @@ use systems::minimap::MinimapPlugin;
 use systems::parallax::ParallaxPlugin;
 use systems::persistence::PersistencePlugin;
 use systems::property_editor::PropertyEditorPlugin;
+use systems::reset::ResetPlugin;
 use systems::selection::SelectionPlugin;
 use systems::timeline::TimelinePlugin;
 use systems::tools::ToolPlugin;
@@ -225,7 +226,7 @@ pub fn wasm_main() {
         ParallaxPlugin,
         PhysicsPlugins::default(),
     ))
-    .add_plugins((SandboxUIPlugin,))
+    .add_plugins((SandboxUIPlugin, ResetPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
     .run();

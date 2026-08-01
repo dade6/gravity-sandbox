@@ -6,6 +6,7 @@ pub mod minimap;
 pub mod parallax;
 pub mod persistence;
 pub mod property_editor;
+pub mod reset;
 pub mod selection;
 pub mod timeline;
 pub mod tools;

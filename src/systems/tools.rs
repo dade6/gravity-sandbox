@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::AlphaMode2d;
 
 use crate::components::celestial::{BodyType, CelestialBody};
+use crate::components::initial_state::InitialBodyState;
 use crate::systems::camera::MainCamera;
 use crate::components::trajectory::TrajectoryHistory;
 use crate::systems::selection::SelectedBody;
@@ -182,6 +183,12 @@ fn add_tool_system(
         LinearVelocity(Vec2::ZERO),
         ConstantForce(Vec2::ZERO),
         TrajectoryHistory::default(),
+        InitialBodyState {
+            position: world_pos,
+            velocity: Vec2::ZERO,
+            mass: 100.0,
+            radius,
+        },
     )).id();
 
     // Auto-select the newly spawned body so the property panel opens
