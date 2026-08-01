@@ -41,6 +41,8 @@ pub struct MoveDragState {
     pub original_alpha: f32,
     /// Cursore (pixel schermo) al momento del press — usato per la soglia di drag
     pub press_cursor: Option<Vec2>,
+    /// Timestamp (Time<Real>) del press — usato per la soglia temporale
+    pub press_start: Option<f64>,
     /// True quando il drag ha superato la soglia di movimento (engaged)
     pub engaged: bool,
 }
@@ -103,6 +105,9 @@ const CLICK_RADIUS: f32 = 5.0;
 /// Soglia minima di movimento (pixel schermo) prima che il drag agganci il corpo.
 /// Sotto questa soglia un click su un corpo in Move non sposta nulla.
 const DRAG_THRESHOLD_PX: f32 = 5.0;
+/// Durata minima di pressione (in secondi) perché il drag parta:
+/// un click rapido (< DRAG_HOLD_SECS) seleziona, non sposta.
+const DRAG_HOLD_SECS: f64 = 0.15;
 
 /// Trova il corpo più vicino sotto il punto indicato (coordinate mondo)
 fn hit_test_body(
@@ -216,6 +221,8 @@ fn move_tool_system(
     mut velocities: Query<&mut LinearVelocity>,
     current_tool: Res<CurrentTool>,
     sim_state: Res<SimulationState>,
+    time: Res<Time<Real>>,
+    mut selected: ResMut<SelectedBody>,
     mut drag_state: ResMut<MoveDragState>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     material_query: Query<&MeshMaterial2d<ColorMaterial>>,
@@ -257,6 +264,7 @@ fn move_tool_system(
                 drag_state.entity = Some(entity);
                 drag_state.offset = body_pos - world_pos;
                 drag_state.press_cursor = Some(cursor_px);
+                drag_state.press_start = Some(time.elapsed_secs_f64());
                 drag_state.engaged = false;
 
                 // Salva l'alpha originale per il ripristino — ma NON ridurre
@@ -271,8 +279,15 @@ fn move_tool_system(
             }
         }
     } else if mouse_buttons.just_released(MouseButton::Left) {
-        // Fine drag: ripristina opacità, azzera velocita'
+        // Fine drag: ripristina opacità, azzera velocita'.
+        // Se il drag non era engaged (click semplice, sotto soglia) → SELEZIONA
+        // il corpo invece di spostarlo: click = select, drag = move.
         if drag_state.active {
+            if !drag_state.engaged {
+                if let Some(entity) = drag_state.entity {
+                    selected.0 = Some(entity);
+                }
+            }
             close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
         }
     } else if drag_state.active
@@ -283,9 +298,14 @@ fn move_tool_system(
         && sim_state.paused
     {
         // Soglia di drag: il corpo si aggancia solo oltre DRAG_THRESHOLD_PX px
+        // E dopo almeno DRAG_HOLD_SECS di pressione (click rapido = selezione)
         if !drag_state.engaged {
-            if let Some(press) = drag_state.press_cursor {
-                if press.distance(cursor_px) >= DRAG_THRESHOLD_PX {
+            if let (Some(press), Some(start)) =
+                (drag_state.press_cursor, drag_state.press_start)
+            {
+                let moved = press.distance(cursor_px) >= DRAG_THRESHOLD_PX;
+                let held = time.elapsed_secs_f64() - start >= DRAG_HOLD_SECS;
+                if moved && held {
                     drag_state.engaged = true;
                     // Feedback trasparenza solo oltre soglia
                     if let Some(entity) = drag_state.entity {
@@ -329,6 +349,7 @@ fn close_drag(
     drag_state.entity = None;
     drag_state.engaged = false;
     drag_state.press_cursor = None;
+    drag_state.press_start = None;
 }
 
 /// Set the alpha of a body's material. Also switches alpha_mode to Blend when alpha < 1.0.
