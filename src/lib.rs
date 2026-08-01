@@ -210,14 +210,16 @@ pub fn wasm_main() {
         ToolPlugin,
         TrajectoryPlugin,
         LightingPlugin,
+        LightPlugin,
+        MinimapPlugin,
         PersistencePlugin,
         rendering::TexturePlugin,
         PropertyEditorPlugin,
         DebugSpawnPlugin,
         ParallaxPlugin,
         PhysicsPlugins::default(),
-        SandboxUIPlugin,
     ))
+    .add_plugins((SandboxUIPlugin,))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
     .run();

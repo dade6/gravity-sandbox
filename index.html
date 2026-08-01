@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.0</title>
+    <title>Gravity Sandbox v0.14.1</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -101,7 +101,7 @@
 <body>
     <canvas id="bevy-canvas"></canvas>
 
-    <div id="version-badge">v0.14.0</div>
+    <div id="version-badge">v0.14.1</div>
 
     <script type="module">
         import init from './gravity_sandbox.js?v=0.13.1';
@@ -113,10 +113,10 @@
 
         init().then(() => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.0 ✅';
+            if (v) v.textContent = 'v0.14.1 ✅';
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.0 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.1 🛑' + err.message.substring(0, 60);
         });
     </script>
 </body>
