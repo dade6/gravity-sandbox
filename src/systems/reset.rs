@@ -48,7 +48,7 @@ fn lazy_init_initial_state(
 /// alla ricezione di `ResetMessage`.
 ///
 /// - Ripristina posizione, velocità, massa e raggio dallo `InitialBodyState`.
-/// - Pulisce le traiettorie (`TrajectoryHistory`).
+/// - Pulisce le traiettorie (`TrajectoryHistory`) quando presenti.
 /// - Rimuove eventuali `PendingDelete` e deseleziona.
 /// - NON ricrea i corpi cancellati dall'utente: agisce solo sui corpi esistenti.
 ///
@@ -63,14 +63,14 @@ fn reset_simulation(
         &mut LinearVelocity,
         &mut Mass,
         &mut CelestialBody,
-        &mut TrajectoryHistory,
+        Option<&mut TrajectoryHistory>,
     )>,
 ) {
     if reset_reader.read().next().is_none() {
         return;
     }
 
-    for (initial, mut transform, mut velocity, mut mass, mut body, mut history) in bodies.iter_mut()
+    for (initial, mut transform, mut velocity, mut mass, mut body, history) in bodies.iter_mut()
     {
         transform.translation.x = initial.position.x;
         transform.translation.y = initial.position.y;
@@ -78,7 +78,11 @@ fn reset_simulation(
         mass.0 = initial.mass;
         body.mass = initial.mass;
         body.radius = initial.radius;
-        history.positions.clear();
+        // Le traiettorie possono mancare (es. corpi caricati da livello JSON):
+        // in quel caso non c'è nulla da pulire.
+        if let Some(mut history) = history {
+            history.positions.clear();
+        }
     }
 
     // Cleanup stato UI: niente più corpo in attesa di cancellazione né selezione.
@@ -355,5 +359,70 @@ mod tests {
         assert_eq!(init.velocity, Vec2::new(1.0, 2.0));
         assert_eq!(init.mass, 42.0);
         assert_eq!(init.radius, 9.0);
+    }
+
+    /// Regressione: i corpi caricati da un livello JSON (persistence.rs) NON
+    /// hanno TrajectoryHistory; il reset deve comunque ripristinare il loro
+    /// stato (prima venivano esclusi dalla query e non venivano ripristinati).
+    #[test]
+    fn reset_works_for_bodies_without_trajectory_history() {
+        let mut app = test_app();
+        let entity = {
+            let mut world = app.world_mut();
+            let e = world
+                .spawn((
+                    CelestialBody {
+                        name: "Loaded".into(),
+                        body_type: BodyType::Planet,
+                        mass: 77.0,
+                        radius: 11.0,
+                        color: [0.5, 0.5, 0.5],
+                        luminous: false,
+                    },
+                    Transform::from_xyz(400.0, -100.0, 0.0),
+                    RigidBody::Dynamic,
+                    Collider::circle(11.0),
+                    Mass(77.0),
+                    LinearVelocity(Vec2::new(5.0, 6.0)),
+                    InitialBodyState {
+                        position: Vec2::new(400.0, -100.0),
+                        velocity: Vec2::new(5.0, 6.0),
+                        mass: 77.0,
+                        radius: 11.0,
+                    },
+                    // Volutamente SENZA TrajectoryHistory
+                ))
+                .id();
+            world.flush();
+            e
+        };
+
+        // Rovina lo stato
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<Transform>()
+            .unwrap()
+            .translation = Vec3::new(1.0, 2.0, 0.0);
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<LinearVelocity>()
+            .unwrap()
+            .0 = Vec2::new(9.0, 9.0);
+
+        app.world_mut()
+            .resource_mut::<Messages<ResetMessage>>()
+            .write(ResetMessage);
+        run_updates(&mut app, 2);
+
+        let world = app.world();
+        assert_eq!(
+            world.entity(entity).get::<Transform>().unwrap().translation.truncate(),
+            Vec2::new(400.0, -100.0),
+            "body without TrajectoryHistory must still be reset"
+        );
+        assert_eq!(
+            world.entity(entity).get::<LinearVelocity>().unwrap().0,
+            Vec2::new(5.0, 6.0)
+        );
     }
 }
