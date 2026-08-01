@@ -38,11 +38,13 @@ Implementare il sistema di selezione dei corpi celesti e la visualizzazione dell
 - `src/systems/ui.rs` — spawn toolbar/timeline/property panel, sync input→body, readonly in play
 
 ## Test di verifica (da eseguire in browser, native e WASM)
-- [ ] Tasto 1 → tool Select attivo, bottone "Select (1)" nella toolbar si illumina
-- [ ] Click su un corpo → highlight visibile (cerchio attorno), property panel mostra i dati
-- [ ] Click su sfondo → deseleziona, panel si nasconde
-- [ ] In play mode, i campi property panel sono grigi (readonly visivo) e le modifiche non si applicano
-- [ ] In pausa, modificare "mass" nel panel → corpo cambia massa
-- [ ] Property panel mostra: nome, tipo, massa, raggio, pos (x,y), vel (vx,vy), colore hex
+- [x] Tasto 1 → tool Select attivo, bottone "Select (1)" nella toolbar si illumina — ✅ verificato su iPhone (v0.13.1)
+- [x] Click su un corpo → highlight visibile (cerchio attorno), property panel mostra i dati — ✅ verificato su iPhone
+- [x] Click su sfondo → deseleziona, panel si nasconde — ✅ verificato su iPhone
+- [x] In play mode, i campi property panel sono grigi (readonly visivo) e le modifiche non si applicano — ✅ verificato su iPhone
+- [ ] In pausa, modificare "mass" nel panel → corpo cambia massa — ⏳ da verificare su computer (input testuale EditableText non testabile da iPhone; nota: su iOS la tastiera virtuale potrebbe non comparire, verificare focus/keyboard)
+- [x] Property panel mostra: nome, tipo, massa, raggio, pos (x,y), vel (vx,vy), colore hex — ✅ verificato su iPhone
+
+> **Stato verifica**: 5/6 test superati su iPhone Safari. Resta il test 5 (editing campi) da verificare da desktop.
 
 ## Bloccanti: nessuno
