@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use crate::systems::camera::MainCamera;
 use bevy::camera::visibility::RenderLayers;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -168,7 +169,7 @@ fn star_color(rng: &mut StdRng, factor: f32) -> Color {
 /// Layer 1 (factor 0.0) stays fixed relative to the viewport.
 fn update_parallax(
     mut cameras: ParamSet<(
-        Query<&Transform, (With<Camera2d>, With<Projection>)>,
+        Query<&Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
         Query<(&mut Transform, &ParallaxLayer)>,
     )>,
 ) {

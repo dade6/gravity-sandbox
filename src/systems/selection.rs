@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::celestial::CelestialBody;
+use crate::systems::camera::MainCamera;
 use crate::systems::tools::CurrentTool;
 
 /// Marker per corpi selezionabili
@@ -29,7 +30,7 @@ fn selection_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
     windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    camera_query: Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     mut selected: ResMut<SelectedBody>,
     current_tool: Res<CurrentTool>,

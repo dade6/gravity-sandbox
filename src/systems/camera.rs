@@ -47,7 +47,7 @@ fn pan_camera(
     mut state: ResMut<PanState>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
-    mut camera_query: Query<&mut Transform, (With<Camera2d>, With<Projection>)>,
+    mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
     let was_dragging = state.dragging;
     state.dragging = mouse_buttons.pressed(MouseButton::Right);
@@ -65,7 +65,7 @@ fn pan_camera(
 fn scroll_pan(
     scroll: Res<AccumulatedMouseScroll>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut camera_query: Query<&mut Transform, (With<Camera2d>, With<Projection>)>,
+    mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
     if mouse_buttons.pressed(MouseButton::Right) {
         return;
@@ -83,7 +83,7 @@ fn scroll_pan(
 fn zoom_camera(
     scroll: Res<AccumulatedMouseScroll>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    mut camera_query: Query<&mut Projection, With<Camera2d>>,
+    mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
 ) {
     if mouse_buttons.pressed(MouseButton::Right) {
         return;
@@ -109,7 +109,7 @@ fn zoom_camera(
 fn touch_pan(
     mut state: ResMut<TouchPanState>,
     touches: Res<Touches>,
-    mut camera_query: Query<&mut Transform, (With<Camera2d>, With<Projection>)>,
+    mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
     if touches.iter().count() == 1 {
         if let Some(touch) = touches.iter().next() {
@@ -140,7 +140,7 @@ fn touch_pan(
 fn touch_zoom(
     touches: Res<Touches>,
     mut state: Local<TouchPinchState>,
-    mut camera_query: Query<&mut Projection, With<Camera2d>>,
+    mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
 ) {
     let count = touches.iter().count();
     if count >= 2 {

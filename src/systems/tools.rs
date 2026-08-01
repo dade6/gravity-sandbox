@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::AlphaMode2d;
 
 use crate::components::celestial::{BodyType, CelestialBody};
+use crate::systems::camera::MainCamera;
 use crate::components::trajectory::TrajectoryHistory;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::SimulationState;
@@ -118,7 +119,7 @@ fn hit_test_body(
 /// Converte posizione cursore a coordinate mondo
 fn cursor_to_world(
     windows: &Query<&Window>,
-    camera_query: &Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    camera_query: &Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
 ) -> Option<Vec2> {
     let window = windows.single().ok()?;
     let cursor = window.cursor_position()?;
@@ -133,7 +134,7 @@ fn cursor_to_world(
 fn add_tool_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    camera_query: Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     current_tool: Res<CurrentTool>,
     sim_state: Res<SimulationState>,
@@ -194,7 +195,7 @@ fn add_tool_system(
 fn move_tool_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    camera_query: Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     mut transforms: Query<&mut Transform>,
     mut velocities: Query<&mut LinearVelocity>,
@@ -304,7 +305,7 @@ fn restore_alpha(
 fn delete_tool_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
-    camera_query: Query<(&Camera, &GlobalTransform), With<Camera2d>>,
+    camera_query: Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
     current_tool: Res<CurrentTool>,
     sim_state: Res<SimulationState>,
