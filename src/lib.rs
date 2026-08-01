@@ -1,6 +1,7 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
+use bevy::gizmos::GizmoConfigStore;
 use bevy::window::{Window, WindowResolution};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -30,16 +31,18 @@ pub struct GravitySandboxPlugin;
 
 impl Plugin for GravitySandboxPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup);
+        app.add_systems(Startup, (setup, setup_gizmo_layers));
     }
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn((
-        Camera2d,
-        RenderLayers::from_layers(&[0, 1]),
-        MainCamera,
-    ));
+    commands.spawn((Camera2d, RenderLayers::from_layers(&[0, 1]), MainCamera));
+}
+
+/// Gizmos (traiettorie, highlight selezione) su layer 1: visibili solo dalla
+/// camera principale ([0,1]), NON dalla minimap (layer 0).
+fn setup_gizmo_layers(mut store: ResMut<GizmoConfigStore>) {
+    store.default_config.render_layers = RenderLayers::layer(1);
 }
 
 // ============================================================
