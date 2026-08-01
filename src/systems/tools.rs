@@ -53,7 +53,6 @@ impl Plugin for ToolPlugin {
             .init_resource::<PendingDelete>()
             .add_systems(Update, (
                 handle_tool_shortcuts,
-                sync_tool_buttons,
                 add_tool_system,
                 move_tool_system,
                 delete_tool_system,
@@ -85,30 +84,6 @@ fn handle_tool_shortcuts(
                     current.0 = Tool::Select;
                 }
             }
-        }
-    }
-}
-
-/// Sincronizza bottoni toolbar con tool attivo (highlight)
-fn sync_tool_buttons(
-    current: Res<CurrentTool>,
-    mut btn_query: Query<(&mut BackgroundColor, &ToolBtn)>,
-) {
-    if !current.is_changed() {
-        return;
-    }
-    for (mut bg, btn) in btn_query.iter_mut() {
-        let is_active = match (btn.0, &current.0) {
-            ("Select", Tool::Select) => true,
-            ("Add", Tool::Add) => true,
-            ("Move", Tool::Move) => true,
-            ("Delete", Tool::Delete) => true,
-            _ => false,
-        };
-        if is_active {
-            bg.0 = Color::srgba(1.0, 1.0, 1.0, 0.15);
-        } else {
-            bg.0 = Color::srgba(0.0, 0.0, 0.0, 0.0);
         }
     }
 }

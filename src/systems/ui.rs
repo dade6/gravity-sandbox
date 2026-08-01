@@ -803,7 +803,25 @@ fn handle_ui_buttons(
                 }
             }
             Interaction::Hovered => { *bg = BTN_HOVER.into(); }
-            Interaction::None => { *bg = Color::srgba(0.0, 0.0, 0.0, 0.0).into(); }
+            Interaction::None => {
+                if let Some(t) = tool {
+                    // Mantieni l'highlight del tool attivo anche senza interazione
+                    let is_active = match (t.0, &current_tool.0) {
+                        ("Select", Tool::Select) => true,
+                        ("Add", Tool::Add) => true,
+                        ("Move", Tool::Move) => true,
+                        ("Delete", Tool::Delete) => true,
+                        _ => false,
+                    };
+                    *bg = if is_active {
+                        BTN_PRESS.into()
+                    } else {
+                        Color::srgba(0.0, 0.0, 0.0, 0.0).into()
+                    };
+                } else {
+                    *bg = Color::srgba(0.0, 0.0, 0.0, 0.0).into();
+                }
+            }
         }
     }
 }
