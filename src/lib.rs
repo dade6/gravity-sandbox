@@ -84,6 +84,9 @@ mod js_bridge {
 
     /// Flag set by the Ctrl+O keyboard shortcut to signal JS to open a file dialog
     pub static LOAD_REQUESTED: Mutex<bool> = Mutex::new(false);
+
+    /// DEBUG: snapshot JSON dello stato interno (tool, drag, selezione, corpi)
+    pub static DEBUG_STATE: Mutex<String> = Mutex::new(String::new());
 }
 
 /// Set trajectory configuration from JavaScript (sliders, toggle).
@@ -107,6 +110,19 @@ pub fn get_trajectory_config() -> String {
         }
     }
     r#"{"trail_length":500,"prediction_steps":200,"trails_visible":true}"#.to_string()
+}
+
+/// DEBUG: legge lo snapshot dello stato interno (tool, drag, selezione, corpi).
+/// Riempito ogni frame dal sistema `debug_state_snapshot` (solo wasm32).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn debug_state() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(s) = crate::js_bridge::DEBUG_STATE.lock() {
+            return s.clone();
+        }
+    }
+    "{}".to_string()
 }
 
 // ============================================================
@@ -229,5 +245,57 @@ pub fn wasm_main() {
     .add_plugins((SandboxUIPlugin, ResetPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
+    .add_systems(Update, debug_state_snapshot)
     .run();
+}
+
+/// DEBUG (solo WASM): scrive ogni frame lo snapshot dello stato interno in
+/// `DEBUG_STATE` (leggibile da JS via `debug_state()`). Serve per diagnosticare
+/// il bug "il pianeta si sposta con Select attivo".
+#[cfg(target_arch = "wasm32")]
+fn debug_state_snapshot(
+    current_tool: Res<crate::systems::tools::CurrentTool>,
+    drag_state: Res<crate::systems::tools::MoveDragState>,
+    selected: Res<crate::systems::selection::SelectedBody>,
+    sim_state: Res<crate::systems::timeline::SimulationState>,
+    bodies: Query<(
+        Entity,
+        &crate::components::celestial::CelestialBody,
+        &Transform,
+        Option<&LinearVelocity>,
+    )>,
+) {
+    use crate::systems::tools::Tool;
+    let tool = match current_tool.0 {
+        Tool::Select => "Select",
+        Tool::Add => "Add",
+        Tool::Move => "Move",
+        Tool::Delete => "Delete",
+    };
+    let selected_id = selected.0.map(|e| e.index().index()).unwrap_or(u32::MAX);
+    let mut parts = Vec::new();
+    for (e, body, tf, vel) in bodies.iter() {
+        let v = vel.map(|v| v.0).unwrap_or(Vec2::ZERO);
+        parts.push(format!(
+            r#"{{"id":{},"name":"{}","x":{:.2},"y":{:.2},"vx":{:.2},"vy":{:.2}}}"#,
+            e.index(),
+            body.name,
+            tf.translation.x,
+            tf.translation.y,
+            v.x,
+            v.y
+        ));
+    }
+    let json = format!(
+        r#"{{"tool":"{}","paused":{},"selected":{},"drag_active":{},"drag_engaged":{},"bodies":[{}]}}"#,
+        tool,
+        sim_state.paused,
+        selected_id,
+        drag_state.active,
+        drag_state.engaged,
+        parts.join(",")
+    );
+    if let Ok(mut shared) = crate::js_bridge::DEBUG_STATE.lock() {
+        *shared = json;
+    }
 }
