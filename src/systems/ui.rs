@@ -103,6 +103,8 @@ const TEXT_COLOR_READONLY: Color = Color::srgba(1.0, 1.0, 1.0, 0.3);
 const BORDER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.25);
 const BTN_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
 const BTN_PRESS: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
+/// Colore bottoni Add/Move/Delete quando la simulazione è in play (disabilitati)
+const BTN_DISABLED: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
 const PANEL_BG: Color = Color::srgba(0.08, 0.08, 0.15, 0.85);
 const INPUT_BG: Color = Color::srgba(0.0, 0.0, 0.0, 0.3);
 const INPUT_BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
@@ -796,12 +798,16 @@ fn handle_ui_buttons(
                     }
                 }
                 if let Some(t) = tool {
-                    match t.0 {
-                        "Select" => current_tool.0 = Tool::Select,
-                        "Add" => current_tool.0 = Tool::Add,
-                        "Move" => current_tool.0 = Tool::Move,
-                        "Delete" => current_tool.0 = Tool::Delete,
-                        _ => {}
+                    // Select sempre permesso; Add/Move/Delete solo in pausa
+                    let can_switch = t.0 == "Select" || sim_state.paused;
+                    if can_switch {
+                        match t.0 {
+                            "Select" => current_tool.0 = Tool::Select,
+                            "Add" => current_tool.0 = Tool::Add,
+                            "Move" => current_tool.0 = Tool::Move,
+                            "Delete" => current_tool.0 = Tool::Delete,
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -816,8 +822,12 @@ fn handle_ui_buttons(
                         ("Delete", Tool::Delete) => true,
                         _ => false,
                     };
+                    // Add/Move/Delete sembrano disabilitati quando si è in play
+                    let disabled = !sim_state.paused && t.0 != "Select";
                     *bg = if is_active {
                         BTN_PRESS.into()
+                    } else if disabled {
+                        BTN_DISABLED.into()
                     } else {
                         Color::srgba(0.0, 0.0, 0.0, 0.0).into()
                     };

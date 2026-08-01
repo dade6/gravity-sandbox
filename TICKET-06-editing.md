@@ -18,19 +18,20 @@ Permettere all'utente di aggiungere nuovi corpi celesti, spostare quelli esisten
 - Mostrare un feedback visivo (il corpo diventa leggermente trasparente durante il drag)
 
 ### 3. Delete tool
-- Click su un corpo in tool Delete → mostra conferma (dialog HTML "Eliminare [nome]?")
+- Click su un corpo in tool Delete → mostra conferma (dialog **Bevy UI** "Eliminare [nome]?")
 - Conferma → despawn entity + cleanup (rimuovi mesh, material, collider, rigidbody)
 - Annulla → deseleziona
 
 ### 4. Regole
 - Tutti i tool sono disabilitati quando `SimulationState.paused == false`
-- I bottoni HTML mostrano stato disabilitato (opacity ridotta) quando in play
+- I bottoni Add/Move/Delete mostrano stato disabilitato (opacity ridotta via `BTN_DISABLED`) quando in play — implementato in `handle_ui_buttons`
+- Select resta sempre attivo
 
 ## Test di verifica
 - [ ] Metti in pausa, tool Add → click canvas → nuovo corpo appare, property panel mostra i suoi dati
 - [ ] Tool Move → drag corpo → si sposta, posizione aggiornata nel panel
-- [ ] Tool Delete → click corpo → dialog conferma → conferma → corpo scompare
-- [ ] In play mode → click su canvas non fa nulla, bottoni Add/Move/Delete sembrano disabilitati
+- [ ] Tool Delete → click corpo → dialog conferma (Bevy UI) → conferma → corpo scompare
+- [ ] In play mode → click su canvas non fa nulla, bottoni Add/Move/Delete sembrano disabilitati (opacity ridotta)
 
 ## Bloccanti
-- Ticket 05 (serve il tool system e la selezione)
+- Ticket 05 (serve il tool system e la selezione) — ✅ completato

@@ -32,58 +32,46 @@ Sostituire l'attuale overlay HTML/CSS con una UI realizzata interamente con il s
 - Rettangolo viewport che segue la camera principale
 - Click → centra camera principale
 
-## Sub-task previsti
+## Sub-task previsti — STATO ATTUALE
 
-### ST-01: Diagnostica rendering UI su Safari WebGL2
-- Identificare perché Bevy UI non renderizza su Safari WebGL2
-- Testare con feature flags minimi: `bevy_ui` + `bevy_ui_render` + `bevy_ui_widgets`
-- Provare configurazioni alternative: rimozione `ZIndex`, diverso ordine rendering, camera separata UI
-- Documentare la soluzione trovata
+### ST-01: Diagnostica rendering UI su Safari WebGL2 ✅ RISOLTO
+- La diagnosi originale ("Safari-only") era **sbagliata**: la causa reale era un
+  B0001 (due query `&mut Text` in `update_timeline_buttons` + conflitto in
+  `update_parallax`), risolto con `ParamSet`. La UI Bevy renderizza
+  correttamente su Safari iOS (verificato dall'utente, v0.13.x).
 
-### ST-02: Creazione struttura UI di base
-- Rimuovere dipendenze HTML overlay non necessarie
-- Creare struttura Node principale con toolbar + timeline + panel
-- Usare esclusivamente componenti Bevy UI (Button, Node, Text, BackgroundColor)
-- Verificare compilazione incrociata (native + WASM)
+### ST-02: Creazione struttura UI di base ✅
+- Overlay HTML rimosso (index.html = solo canvas + version badge)
+- Toolbar + timeline + property panel + delete dialog in Bevy UI (`ui.rs`)
 
-### ST-03: Toolbar funzionante
+### ST-03: Toolbar funzionante ✅
 - Bottoni Select/Add/Move/Delete con highlight del tool attivo
-- Collegamento al sistema CurrentTool (già esistente)
-- Keyboard shortcut 1-4 riflessa visualmente
-- Tooltip con nome tool
+- Shortcut 1-4 riflesse visivamente; Select sempre attivo, gli altri solo in pausa
 
-### ST-04: Timeline funzionante
-- Bottone Play/Pause che cambia icona/testo
-- Bottone Step
+### ST-04: Timeline funzionante ✅
+- Play/Pause/Step/Speed con `SimulationState` + `Time<Virtual>` + `Time<Physics>` (Avian)
 - Display velocità aggiornato in tempo reale
-- Collegamento a SimulationState e Time<Virtual>
 
-### ST-05: Property Panel
-- Pannello laterale con campi editabili
-- Read-only quando in play
-- Scrittura modifiche al corpo selezionato
-- Scomparsa quando deselezionato
+### ST-05: Property Panel ✅
+- Campi editabili solo in pausa, grigi (readonly) in play
+- Scrittura modifiche al corpo via `sync_property_input_to_body`
+- Scompare quando deselezionato
 
-### ST-06: Minimap integrata
-- Render target + camera secondaria
-- UI container con ImageNode
-- Aggiornamento bounding box corpi
-- Click per centrare camera principale
+### ST-06: Minimap integrata ✅
+- Camera secondaria con render target + container UI Bevy con `ImageNode`
+- Viewport rect + click-to-center
 
-### ST-07: Verifica multipiattaforma
-- Test su Chrome (desktop)
-- Test su Firefox (desktop)
-- Test su Safari macOS
-- Test su Safari iOS
-- Test su WASM build
+### ST-07: Verifica multipiattaforma ⚠️ PARZIALE
+- ✅ iPhone Safari iOS (test T05 + UI verificati dall'utente)
+- ⏳ Chrome desktop, Firefox desktop, Safari macOS — da verificare
 
 ## Test di verifica (per ogni sub-task)
 Ogni ST deve avere:
-- [ ] Compilazione senza errori
-- [ ] Test visivo su browser di riferimento
-- [ ] Test di regressione: keyboard shortcut funzionano ancora
-- [ ] Test di regressione: simulazione gravità funziona
-- [ ] WASM build produce output giocabile
+- [x] Compilazione senza errori (native + WASM)
+- [x] Test visivo su browser di riferimento — iPhone Safari ✅, altri da fare (ST-07)
+- [x] Test di regressione: keyboard shortcut funzionano ancora
+- [x] Test di regressione: simulazione gravità funziona
+- [x] WASM build produce output giocabile
 
 ## Priorità
 1. ST-01 (diagnostica Safari) — sblocca tutto il resto
