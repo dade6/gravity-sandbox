@@ -1,2 +1,5 @@
+[build]
+target-dir = "/home/ubuntu/rust-target/gravity"
+
 [target.wasm32-unknown-unknown]
 runner = "wasm-server-runner"
