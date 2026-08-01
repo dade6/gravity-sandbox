@@ -216,7 +216,7 @@ fn spawn_timeline(commands: &mut Commands) {
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
         ))
         .with_children(|bar| {
-            for (label, action) in &[("▶ Play", "play"), ("⏭ Step", "step")] {
+            for (label, action) in &[("Play", "play"), ("Step", "step")] {
                 bar.spawn((
                     Button,
                     TimelinBtn(action),
@@ -240,7 +240,7 @@ fn spawn_timeline(commands: &mut Commands) {
             }
             bar.spawn((
                 TimelinSpeed,
-                Text::new("Speed 1.0×"),
+                Text::new("Speed 1.0x"),
                 TextFont { font: FontSource::default(), font_size: FontSize::Px(13.0), ..default() },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
             ));
@@ -380,9 +380,9 @@ fn update_timeline_buttons(
     for (btn, children) in btn_query.iter_mut() {
         if btn.0 == "play" {
             let new_label = if sim_state.paused {
-                "▶ Play"
+                "Play"
             } else {
-                "⏸ Pause"
+                "Pause"
             };
             for child in children.iter() {
                 if let Ok(mut text) = text_queries.p0().get_mut(child) {
@@ -398,7 +398,7 @@ fn update_timeline_buttons(
     // Update speed display
     if sim_state.is_changed() {
         if let Ok(mut speed_text) = text_queries.p1().single_mut() {
-            speed_text.0 = format!("Speed {:.1}×", sim_state.speed);
+            speed_text.0 = format!("Speed {:.1}x", sim_state.speed);
         }
     }
 }
@@ -445,9 +445,9 @@ fn update_property_panel(
 
     // Edit hint based on pause state
     let edit_hint = if sim_state.paused {
-        "✏️ Edit mode"
+        "Edit mode"
     } else {
-        "⏸ Pause to edit"
+        "Pause to edit"
     };
 
     // Update EditableText fields
@@ -780,12 +780,24 @@ fn handle_delete_dialog_buttons(
 
 
 fn handle_ui_buttons(
+    // Query principale: colori/highlight + cambio tool. SENZA filtro
+    // `Changed<Interaction>`: deve aggiornare i colori anche a bottoni
+    // invariati (es. highlight del tool attivo in stato None).
     mut interaction_query: Query<(
         &Interaction,
         Option<&ToolBtn>,
         Option<&TimelinBtn>,
         &mut BackgroundColor,
     ), (Without<DeleteDialogBtn>, Without<DeleteDialog>)>,
+    // Query separata con edge detection per i toggle (play/step/reset):
+    // `Changed<Interaction>` scatta UNA volta per transizione di stato
+    // (es. None/Hovered -> Pressed), NON a ogni frame mentre il bottone
+    // resta premuto. Senza questo filtro il toggle di play/pausa
+    // flapperebbe decine di volte al secondo tenendo premuto il mouse.
+    toggle_query: Query<
+        (&Interaction, &TimelinBtn),
+        (Changed<Interaction>, Without<DeleteDialogBtn>, Without<DeleteDialog>),
+    >,
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut physics_time: ResMut<Time<Physics>>,
@@ -794,38 +806,44 @@ fn handle_ui_buttons(
     mut step_writer: MessageWriter<StepMessage>,
     mut reset_writer: MessageWriter<ResetMessage>,
 ) {
-    for (interaction, tool, timeline, mut bg) in interaction_query.iter_mut() {
+    // 1) Toggle azioni: un solo scatto per pressione (edge-triggered)
+    for (interaction, timeline) in toggle_query.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match timeline.0 {
+            "play" => {
+                sim_state.paused = !sim_state.paused;
+                if sim_state.paused {
+                    virtual_time.pause();
+                    physics_time.pause();
+                } else {
+                    virtual_time.unpause();
+                    physics_time.unpause();
+                    // Clear pending delete when unpausing
+                    pending.0 = None;
+                }
+            }
+            "step" => {
+                if sim_state.paused {
+                    virtual_time.unpause();
+                    step_writer.write(StepMessage);
+                }
+            }
+            "reset" => {
+                // Ripristina lo stato iniziale (play o pausa),
+                // senza cambiare il CurrentTool né lo stato di pausa.
+                reset_writer.write(ResetMessage);
+            }
+            _ => {}
+        }
+    }
+
+    // 2) Query principale: colori/highlight + cambio tool
+    for (interaction, tool, _timeline, mut bg) in interaction_query.iter_mut() {
         match *interaction {
             Interaction::Pressed => {
                 *bg = BTN_PRESS.into();
-                if let Some(t) = timeline {
-                    match t.0 {
-                        "play" => {
-                            sim_state.paused = !sim_state.paused;
-                            if sim_state.paused {
-                                virtual_time.pause();
-                                physics_time.pause();
-                            } else {
-                                virtual_time.unpause();
-                                physics_time.unpause();
-                                // Clear pending delete when unpausing
-                                pending.0 = None;
-                            }
-                        }
-                        "step" => {
-                            if sim_state.paused {
-                                virtual_time.unpause();
-                                step_writer.write(StepMessage);
-                            }
-                        }
-                        "reset" => {
-                            // Ripristina lo stato iniziale (play o pausa),
-                            // senza cambiare il CurrentTool né lo stato di pausa.
-                            reset_writer.write(ResetMessage);
-                        }
-                        _ => {}
-                    }
-                }
                 if let Some(t) = tool {
                     // Select sempre permesso; Add/Move/Delete solo in pausa
                     let can_switch = t.0 == "Select" || sim_state.paused;

@@ -15,6 +15,7 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_ui",
     "bevy_ui_render",
     "bevy_ui_widgets",
+    "default_font",
     "bevy_window",
     "bevy_input_focus",
     "bevy_picking",
