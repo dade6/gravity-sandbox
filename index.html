@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.6</title>
+    <title>Gravity Sandbox v0.14.7</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -101,11 +101,11 @@
 <body>
     <canvas id="bevy-canvas"></canvas>
 
-    <div id="version-badge">v0.14.6</div>
+    <div id="version-badge">v0.14.7</div>
     <div id="debug-state" style="position:fixed;top:22px;left:8px;color:rgba(255,255,255,0.35);font:11px monospace;z-index:99;"></div>
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox.js?v=0.14.6';
+        import init, * as sandbox from './gravity_sandbox.js?v=0.14.7';
 
         window.addEventListener('error', (e) => {
             const v = document.getElementById('version-badge');
@@ -116,10 +116,10 @@
             // Espone le funzioni del modulo WASM (es. debug_state) per diagnostica
             window.__sandbox = sandbox;
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.6 ✅';
+            if (v) v.textContent = 'v0.14.7 ✅';
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.6 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.7 🛑' + err.message.substring(0, 60);
         });
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio)

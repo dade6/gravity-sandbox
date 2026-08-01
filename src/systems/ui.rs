@@ -187,11 +187,11 @@ fn spawn_toolbar(commands: &mut Commands) {
                 TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
                 TextColor(TEXT_COLOR),
             ));
-            bar.spawn(Node { flex_grow: 1.0, ..default() });
+            bar.spawn((Node { flex_grow: 1.0, ..default() }));
             bar.spawn((
                 Text::new(format!("Sandbox v{}", crate::version::VERSION)),
                 TextFont { font: FontSource::default(), font_size: FontSize::Px(11.0), ..default() },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
             ));
         });
 }
