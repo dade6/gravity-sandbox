@@ -102,6 +102,7 @@
     <canvas id="bevy-canvas"></canvas>
 
     <div id="version-badge">v0.14.6</div>
+    <div id="debug-state" style="position:fixed;top:22px;left:8px;color:rgba(255,255,255,0.35);font:11px monospace;z-index:99;"></div>
 
     <script type="module">
         import init, * as sandbox from './gravity_sandbox.js?v=0.14.6';
@@ -120,6 +121,16 @@
             const v = document.getElementById('version-badge');
             if (v) v.textContent = 'v0.14.6 🛑' + err.message.substring(0, 60);
         });
+
+        // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio)
+        setInterval(() => {
+            const el = document.getElementById('debug-state');
+            if (!el || !window.__sandbox) return;
+            try {
+                const s = JSON.parse(window.__sandbox.debug_state());
+                el.textContent = `tool=${s.tool} paused=${s.paused ? 1 : 0} drag=${s.drag_active ? 'ON' : 'off'}${s.drag_engaged ? '/eng' : ''} bodies=${s.bodies ? s.bodies.length : 0}`;
+            } catch (e) { /* snapshot non ancora pronto */ }
+        }, 500);
     </script>
 </body>
 </html>
