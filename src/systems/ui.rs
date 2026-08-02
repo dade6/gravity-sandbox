@@ -29,7 +29,7 @@ use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
 use bevy::ui::widget::TextScroll;
 
-use bevy::text::EditableText;
+use bevy::text::{EditableText, TextCursorStyle};
 use bevy::input_focus::InputFocus;
 
 use crate::components::celestial::CelestialBody;
@@ -51,14 +51,18 @@ pub struct SandboxUIPlugin;
 impl Plugin for SandboxUIPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_ui)
-            .add_systems(Update, (
-                handle_ui_buttons,
-                update_property_panel,
-                sync_property_input_to_body,
-                update_timeline_buttons,
-                manage_delete_dialog,
-                handle_delete_dialog_buttons,
-            ));
+            .add_systems(
+                Update,
+                (
+                    handle_ui_buttons,
+                    update_property_panel,
+                    sync_property_input_to_body,
+                    update_field_focus_feedback,
+                    update_timeline_buttons,
+                    manage_delete_dialog,
+                    handle_delete_dialog_buttons,
+                ),
+            );
     }
 }
 
@@ -110,6 +114,10 @@ const BTN_DISABLED: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
 const PANEL_BG: Color = Color::srgba(0.08, 0.08, 0.15, 0.85);
 const INPUT_BG: Color = Color::srgba(0.0, 0.0, 0.0, 0.3);
 const INPUT_BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
+/// Bordo del campo quando ha il focus (feedback visivo di editing)
+const INPUT_FOCUS_BORDER: Color = Color::srgba(0.45, 0.75, 1.0, 0.95);
+/// Sfondo del campo quando ha il focus
+const INPUT_FOCUS_BG: Color = Color::srgba(0.1, 0.25, 0.4, 0.5);
 const OVERLAY_FG: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 const DIALOG_BG: Color = Color::srgba(0.12, 0.12, 0.22, 0.95);
 
@@ -344,7 +352,14 @@ fn spawn_property_panel(commands: &mut Commands) {
                             },
                             TextColor(TEXT_COLOR),
                             TextScroll(Vec2::ZERO),
-                            // Nodes are required but added automatically via Node requirement on child? 
+                            // Cursore di testo visibile quando il campo ha il focus
+                            TextCursorStyle {
+                                color: Color::WHITE,
+                                selection_color: Color::srgba(0.45, 0.75, 1.0, 0.6),
+                                unfocused_selection_color: Color::srgba(0.45, 0.75, 1.0, 0.2),
+                                selected_text_color: None,
+                            },
+                            // Nodes are required but added automatically via Node requirement on child?
                             // Let's be explicit:
                             Node {
                                 width: Val::Percent(100.0),
@@ -592,6 +607,30 @@ fn sync_property_input_to_body(
                 }
             }
             _ => {}
+        }
+    }
+}
+
+// === Feedback visivo del campo focussato ===
+
+/// Evidenzia il container del campo che ha il focus (bordo/sfondo azzurro):
+/// l'utente vede quale campo sta editando.
+fn update_field_focus_feedback(
+    input_focus: Res<InputFocus>,
+    fields: Query<(Entity, &bevy::ecs::hierarchy::ChildOf), With<EditableText>>,
+    mut containers: Query<(&mut BorderColor, &mut BackgroundColor)>,
+) {
+    let focused_entity = input_focus.get();
+    for (entity, parent) in fields.iter() {
+        let focused = Some(entity) == focused_entity;
+        if let Ok((mut border, mut bg)) = containers.get_mut(parent.0) {
+            if focused {
+                *border = BorderColor::all(INPUT_FOCUS_BORDER);
+                *bg = BackgroundColor(INPUT_FOCUS_BG);
+            } else {
+                *border = BorderColor::all(INPUT_BORDER);
+                *bg = BackgroundColor(INPUT_BG);
+            }
         }
     }
 }
