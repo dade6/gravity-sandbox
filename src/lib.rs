@@ -259,6 +259,7 @@ fn debug_state_snapshot(
     selected: Res<crate::systems::selection::SelectedBody>,
     sim_state: Res<crate::systems::timeline::SimulationState>,
     input_focus: Res<bevy::input_focus::InputFocus>,
+    prop_texts: Query<(Entity, &crate::systems::ui::PropInput, &bevy::text::EditableText)>,
     bodies: Query<(
         Entity,
         &crate::components::celestial::CelestialBody,
@@ -275,6 +276,13 @@ fn debug_state_snapshot(
     };
     let selected_id = selected.0.map(|e| e.index().index()).unwrap_or(u32::MAX);
     let focused_id = input_focus.get().map(|e| e.index().index()).unwrap_or(u32::MAX);
+    // Testo del campo focussato (per capire se la tastiera arriva)
+    let mut focused_text = String::new();
+    for (e, prop, editable) in prop_texts.iter() {
+        if Some(e) == input_focus.get() {
+            focused_text = format!("{}={}", prop.0, editable.value());
+        }
+    }
     let mut parts = Vec::new();
     for (e, body, tf, vel) in bodies.iter() {
         let v = vel.map(|v| v.0).unwrap_or(Vec2::ZERO);
@@ -289,11 +297,12 @@ fn debug_state_snapshot(
         ));
     }
     let json = format!(
-        r#"{{"tool":"{}","paused":{},"selected":{},"focus":{},"drag_active":{},"drag_engaged":{},"bodies":[{}]}}"#,
+        r#"{{"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"bodies":[{}]}}"#,
         tool,
         sim_state.paused,
         selected_id,
         focused_id,
+        focused_text.replace('"', "\\\""),
         drag_state.active,
         drag_state.engaged,
         parts.join(",")

@@ -80,7 +80,7 @@ struct PropField(&'static str);
 /// Marker per gli input editabili del property panel
 
 #[derive(Component)]
-struct PropInput(pub &'static str);
+pub(crate) struct PropInput(pub &'static str);
 
 /// Marker per la velocità nella timeline
 
