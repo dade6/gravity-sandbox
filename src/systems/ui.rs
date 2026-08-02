@@ -30,6 +30,7 @@ use bevy::text::{FontSize, FontSource};
 use bevy::ui::widget::TextScroll;
 
 use bevy::text::EditableText;
+use bevy::input_focus::InputFocus;
 
 use crate::components::celestial::CelestialBody;
 use crate::systems::reset::ResetMessage;
@@ -495,7 +496,7 @@ fn update_property_panel(
 /// Legge modifiche da EditableText e le scrive al corpo selezionato
 
 fn sync_property_input_to_body(
-    input_query: Query<(&PropInput, &EditableText)>,
+    input_query: Query<(&PropInput, &EditableText, Option<&InputFocus>)>,
     selected: Res<SelectedBody>,
     sim_state: Res<SimulationState>,
     mut bodies: Query<(
@@ -519,7 +520,15 @@ fn sync_property_input_to_body(
         return;
     };
 
-    for (prop, editable) in input_query.iter() {
+    for (prop, editable, focus) in input_query.iter() {
+        // Applica SOLO il campo che l'utente sta effettivamente editando
+        // (ha il focus). Senza questo check, al cambio di selezione i campi
+        // contengono ancora i valori del corpo PRECEDENTE e il corpo nuovo
+        // veniva teletrasportato su quello vecchio ("in coincidenza di un
+        // altro pianeta").
+        if focus.is_none() {
+            continue;
+        }
         let text_value = editable.value().to_string();
 
         match prop.0 {
