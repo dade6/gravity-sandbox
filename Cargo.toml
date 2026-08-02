@@ -20,6 +20,7 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_input_focus",
     "bevy_picking",
     "mesh_picking",
+    "ui_picking",
     "custom_cursor",
     "bevy_world_serialization",
     "bevy_asset",
