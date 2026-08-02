@@ -102,7 +102,7 @@
     <canvas id="bevy-canvas"></canvas>
 
     <div id="version-badge">v0.14.7</div>
-    <div id="debug-state" style="position:fixed;top:22px;left:8px;color:rgba(255,255,255,0.35);font:11px monospace;z-index:99;"></div>
+    <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:44px monospace;z-index:99;"></div>
 
     <script type="module">
         import init, * as sandbox from './gravity_sandbox.js?v=0.14.7';
@@ -128,7 +128,8 @@
             if (!el || !window.__sandbox) return;
             try {
                 const s = JSON.parse(window.__sandbox.debug_state());
-                el.textContent = `tool=${s.tool} paused=${s.paused ? 1 : 0} drag=${s.drag_active ? 'ON' : 'off'}${s.drag_engaged ? '/eng' : ''} bodies=${s.bodies ? s.bodies.length : 0}`;
+                const toolShort = { Select: 'SEL', Add: 'ADD', Move: 'MOV', Delete: 'DEL' }[s.tool] || s.tool;
+                el.textContent = `${toolShort} | ${s.paused ? 'PAUSA' : 'PLAY'} | drag ${s.drag_active ? (s.drag_engaged ? 'ON' : 'hold') : 'off'} | ${s.bodies ? s.bodies.length : 0} corpi`;
             } catch (e) { /* snapshot non ancora pronto */ }
         }, 500);
     </script>
