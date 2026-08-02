@@ -1,1 +1,9 @@
-(shader_defs: [])
+(
+    meta_format_version: "1.0",
+    asset: Load(
+        loader: "bevy_shader::shader::ShaderLoader",
+        settings: (
+            shader_defs: [],
+        ),
+    ),
+)

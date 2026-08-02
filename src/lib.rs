@@ -258,6 +258,7 @@ fn debug_state_snapshot(
     drag_state: Res<crate::systems::tools::MoveDragState>,
     selected: Res<crate::systems::selection::SelectedBody>,
     sim_state: Res<crate::systems::timeline::SimulationState>,
+    input_focus: Res<bevy::input_focus::InputFocus>,
     bodies: Query<(
         Entity,
         &crate::components::celestial::CelestialBody,
@@ -273,12 +274,13 @@ fn debug_state_snapshot(
         Tool::Delete => "Delete",
     };
     let selected_id = selected.0.map(|e| e.index().index()).unwrap_or(u32::MAX);
+    let focused_id = input_focus.get().map(|e| e.index().index()).unwrap_or(u32::MAX);
     let mut parts = Vec::new();
     for (e, body, tf, vel) in bodies.iter() {
         let v = vel.map(|v| v.0).unwrap_or(Vec2::ZERO);
         parts.push(format!(
             r#"{{"id":{},"name":"{}","x":{:.2},"y":{:.2},"vx":{:.2},"vy":{:.2}}}"#,
-            e.index(),
+            e.index().index(),
             body.name,
             tf.translation.x,
             tf.translation.y,
@@ -287,10 +289,11 @@ fn debug_state_snapshot(
         ));
     }
     let json = format!(
-        r#"{{"tool":"{}","paused":{},"selected":{},"drag_active":{},"drag_engaged":{},"bodies":[{}]}}"#,
+        r#"{{"tool":"{}","paused":{},"selected":{},"focus":{},"drag_active":{},"drag_engaged":{},"bodies":[{}]}}"#,
         tool,
         sim_state.paused,
         selected_id,
+        focused_id,
         drag_state.active,
         drag_state.engaged,
         parts.join(",")

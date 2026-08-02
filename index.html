@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.9</title>
+    <title>Gravity Sandbox v0.14.10</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -101,11 +101,11 @@
 <body>
     <canvas id="bevy-canvas"></canvas>
 
-    <div id="version-badge">v0.14.9</div>
+    <div id="version-badge">v0.14.10</div>
     <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:44px monospace;z-index:99;"></div>
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox.js?v=0.14.9';
+        import init, * as sandbox from './gravity_sandbox.js?v=0.14.10';
 
         window.addEventListener('error', (e) => {
             const v = document.getElementById('version-badge');
@@ -116,10 +116,10 @@
             // Espone le funzioni del modulo WASM (es. debug_state) per diagnostica
             window.__sandbox = sandbox;
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.9 ✅';
+            if (v) v.textContent = 'v0.14.10 ✅';
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.9 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.10 🛑' + err.message.substring(0, 60);
         });
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio)
@@ -129,7 +129,7 @@
             try {
                 const s = JSON.parse(window.__sandbox.debug_state());
                 const toolShort = { Select: 'SEL', Add: 'ADD', Move: 'MOV', Delete: 'DEL' }[s.tool] || s.tool;
-                el.textContent = `${toolShort} | ${s.paused ? 'PAUSA' : 'PLAY'} | drag ${s.drag_active ? (s.drag_engaged ? 'ON' : 'hold') : 'off'} | ${s.bodies ? s.bodies.length : 0} corpi`;
+                el.textContent = `${toolShort} | ${s.paused ? 'PAUSA' : 'PLAY'} | drag ${s.drag_active ? (s.drag_engaged ? 'ON' : 'hold') : 'off'} | focus ${s.focus !== 4294967295 ? 'ON' : 'off'} | ${s.bodies ? s.bodies.length : 0} corpi`;
             } catch (e) { /* snapshot non ancora pronto */ }
         }, 500);
     </script>
