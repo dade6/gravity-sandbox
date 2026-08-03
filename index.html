@@ -113,12 +113,6 @@
     <script type="module">
         import init, * as sandbox from './gravity_sandbox.js?v=0.14.14';
 
-        // Focus DOM del canvas: senza questo, il browser non instrada gli
-        // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
-        const canvasEl = document.getElementById('bevy-canvas');
-        canvasEl.addEventListener('click', () => canvasEl.focus());
-        canvasEl.addEventListener('pointerdown', () => canvasEl.focus());
-
         // === Tastiera mobile (iOS) ===
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
             (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -126,6 +120,18 @@
         let lastFieldText = '';
         // Rects dei campi (aggiornati dal polling) per l'hit test sincrono al tocco
         let fieldRects = [];
+
+        // Focus DOM del canvas: senza questo, il browser non instrada gli
+        // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
+        // Su iOS è ESCLUSO: il click che segue il tap ruberebbe il focus
+        // all'input nascosto della tastiera (campo che si disattiva dopo
+        // mezzo secondo). Su iOS i tasti arrivano via hidden-input.
+        const canvasEl = document.getElementById('bevy-canvas');
+        if (!isIOS) {
+            canvasEl.addEventListener('click', () => canvasEl.focus());
+            canvasEl.addEventListener('pointerdown', () => canvasEl.focus());
+        }
+
         if (isIOS && hiddenInput) {
             // Il testo digitato nella tastiera iOS viene inoltrato al campo Bevy
             hiddenInput.addEventListener('input', () => {
