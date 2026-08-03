@@ -69,6 +69,8 @@ fn save_level_system(
     bodies: Query<(&CelestialBody, &GlobalTransform, &LinearVelocity)>,
     grav_constant: Res<GravitationalConstant>,
 ) {
+    crate::mark_system("save_level_system");
+
     #[cfg(target_arch = "wasm32")]
     {
         // Check if a save has been requested by the JS side
@@ -143,6 +145,8 @@ fn process_load_commands(
     mut virtual_time: ResMut<Time<Virtual>>,
     mut grav_constant: ResMut<GravitationalConstant>,
 ) {
+    crate::mark_system("process_load_commands");
+
     #[cfg(target_arch = "wasm32")]
     {
         use crate::components::initial_state::InitialBodyState;
@@ -230,6 +234,8 @@ fn process_load_commands(
 fn handle_save_load_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
 ) {
+    crate::mark_system("handle_save_load_shortcuts");
+
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
 
     #[cfg(target_arch = "wasm32")]

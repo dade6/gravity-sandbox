@@ -115,19 +115,21 @@ mod js_bridge {
 /// Registra il sistema in esecuzione nel flight recorder (ogni frame) e
 /// scrive il nome nel DOM in modo SINCRONO: se il WASM muore con un trap
 /// a metà frame, il testo resta congelato sull'ultimo sistema avviato.
-#[cfg(target_arch = "wasm32")]
 pub fn mark_system(name: &str) {
-    if let Ok(mut f) = crate::js_bridge::FLIGHT.lock() {
-        f.0 = name.to_string();
-        f.1 = f.1.wrapping_add(1);
-    }
-    if let Ok(mut last) = crate::js_bridge::FLIGHT_DOM.lock() {
-        if *last != name {
-            *last = name.to_string();
-            use wasm_bindgen::JsCast;
-            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
-                if let Some(el) = doc.get_element_by_id("debug-state") {
-                    let _ = el.set_text_content(Some(name));
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut f) = crate::js_bridge::FLIGHT.lock() {
+            f.0 = name.to_string();
+            f.1 = f.1.wrapping_add(1);
+        }
+        if let Ok(mut last) = crate::js_bridge::FLIGHT_DOM.lock() {
+            if *last != name {
+                *last = name.to_string();
+                use wasm_bindgen::JsCast;
+                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                    if let Some(el) = doc.get_element_by_id("debug-state") {
+                        let _ = el.set_text_content(Some(name));
+                    }
                 }
             }
         }

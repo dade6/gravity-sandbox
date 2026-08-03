@@ -173,6 +173,8 @@ fn update_parallax(
         Query<(&mut Transform, &ParallaxLayer)>,
     )>,
 ) {
+    crate::mark_system("update_parallax");
+
     let camera_pos = cameras.p0().single().unwrap().translation;
     for (mut transform, layer) in cameras.p1().iter_mut() {
         transform.translation.x = -camera_pos.x * layer.factor;

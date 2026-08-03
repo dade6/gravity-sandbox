@@ -74,6 +74,8 @@ fn handle_tool_shortcuts(
     mut current: ResMut<CurrentTool>,
     sim_state: Res<SimulationState>,
 ) {
+    crate::mark_system("handle_tool_shortcuts");
+
     let new_tool = if keys.just_pressed(KeyCode::Digit1) { Some(Tool::Select) }
     else if keys.just_pressed(KeyCode::Digit2) { Some(Tool::Add) }
     else if keys.just_pressed(KeyCode::Digit3) { Some(Tool::Move) }
@@ -157,6 +159,8 @@ fn add_tool_system(
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut selected: ResMut<SelectedBody>,
 ) {
+    crate::mark_system("add_tool_system");
+
     if current_tool.0 != Tool::Add || !sim_state.paused {
         return;
     }
@@ -227,6 +231,8 @@ fn move_tool_system(
     mut materials: ResMut<Assets<ColorMaterial>>,
     material_query: Query<&MeshMaterial2d<ColorMaterial>>,
 ) {
+    crate::mark_system("move_tool_system");
+
     // Se non siamo in Move+pausa, cancella eventuale drag attivo
     if current_tool.0 != Tool::Move || !sim_state.paused {
         if drag_state.active {
@@ -396,6 +402,8 @@ fn delete_tool_system(
     mut selected: ResMut<SelectedBody>,
     mut pending: ResMut<PendingDelete>,
 ) {
+    crate::mark_system("delete_tool_system");
+
     if current_tool.0 != Tool::Delete || !sim_state.paused {
         return;
     }

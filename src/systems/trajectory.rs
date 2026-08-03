@@ -98,6 +98,8 @@ pub fn prediction_system(
     bodies: Query<(Entity, &CelestialBody, &GlobalTransform, &LinearVelocity)>,
     mut trail: ResMut<PredictionTrail>,
 ) {
+    crate::mark_system("prediction_system");
+
     if !config.enabled {
         trail.0.clear();
         return;
@@ -178,6 +180,8 @@ fn sample_trajectory(
     sim_state: Option<Res<SimulationState>>,
     mut bodies: Query<(&GlobalTransform, &mut TrajectoryHistory), With<CelestialBody>>,
 ) {
+    crate::mark_system("sample_trajectory");
+
     // Don't sample when paused
     if let Some(sim) = sim_state {
         if sim.paused {
@@ -277,6 +281,8 @@ fn sync_trajectory_config_to_js(
 fn apply_js_trajectory_config(
     mut config: ResMut<TrajectoryConfig>,
 ) {
+    crate::mark_system("apply_js_trajectory_config");
+
     #[cfg(target_arch = "wasm32")]
     {
         let cmd = if let Ok(mut c) = crate::js_bridge::TRAJECTORY_CONFIG_CMD.lock() {

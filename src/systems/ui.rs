@@ -136,6 +136,8 @@ fn spawn_ui(mut commands: Commands) {
 
 
 fn spawn_toolbar(commands: &mut Commands) {
+    crate::mark_system("spawn_toolbar");
+
     commands
         .spawn((
             Node {
@@ -208,6 +210,8 @@ fn spawn_toolbar(commands: &mut Commands) {
 
 
 fn spawn_timeline(commands: &mut Commands) {
+    crate::mark_system("spawn_timeline");
+
     commands
         .spawn((
             Node {
@@ -259,6 +263,8 @@ fn spawn_timeline(commands: &mut Commands) {
 
 
 fn spawn_property_panel(commands: &mut Commands) {
+    crate::mark_system("spawn_property_panel");
+
     commands
         .spawn((
             PropertyPanel,
@@ -393,6 +399,8 @@ fn update_timeline_buttons(
         Query<&mut Text, (With<TimelinSpeed>, Without<TimelinBtn>)>,
     )>,
 ) {
+    crate::mark_system("update_timeline_buttons");
+
     // Update Play/Pause button text
     for (btn, children) in btn_query.iter_mut() {
         if btn.0 == "play" {
@@ -433,6 +441,8 @@ fn update_property_panel(
     mut editable_inputs: Query<(&PropInput, &mut EditableText, &mut TextColor)>,
     mut text_labels: Query<(&PropField, &mut Text), (Without<PropInput>, Without<EditableText>)>,
 ) {
+    crate::mark_system("update_property_panel");
+
     // Show/hide panel
     if let Ok(mut panel_node) = panel_query.single_mut() {
         if selected.0.is_some() {
@@ -601,6 +611,8 @@ fn sync_property_input_to_body(
         &mut Mass,
     )>,
 ) {
+    crate::mark_system("sync_property_input_to_body");
+
     if !sim_state.paused {
         return; // Don't apply edits while playing
     }
@@ -663,6 +675,8 @@ fn update_field_focus_feedback(
     fields: Query<(Entity, &bevy::ecs::hierarchy::ChildOf), With<EditableText>>,
     mut containers: Query<(&mut BorderColor, &mut BackgroundColor)>,
 ) {
+    crate::mark_system("update_field_focus_feedback");
+
     let focused_entity = input_focus.get();
     for (entity, parent) in fields.iter() {
         let focused = Some(entity) == focused_entity;
@@ -690,6 +704,8 @@ fn manage_delete_dialog(
     mut commands: Commands,
     windows: Query<&Window>,
 ) {
+    crate::mark_system("manage_delete_dialog");
+
     let has_dialog = dialog_query.single().is_ok();
 
     // Always despawn dialog if pending is cleared
@@ -824,6 +840,8 @@ fn handle_delete_dialog_buttons(
     mut commands: Commands,
     dialog_query: Query<Entity, With<DeleteDialog>>,
 ) {
+    crate::mark_system("handle_delete_dialog_buttons");
+
     let mut action: Option<&'static str> = None;
 
     for (interaction, btn, mut bg) in interaction_query.iter_mut() {
@@ -899,6 +917,8 @@ fn handle_ui_buttons(
     mut step_writer: MessageWriter<StepMessage>,
     mut reset_writer: MessageWriter<ResetMessage>,
 ) {
+    crate::mark_system("handle_ui_buttons");
+
     // 1) Toggle azioni: un solo scatto per pressione (edge-triggered)
     for (interaction, timeline) in toggle_query.iter() {
         if *interaction != Interaction::Pressed {

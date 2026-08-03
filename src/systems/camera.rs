@@ -52,6 +52,8 @@ fn pan_camera(
     drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
+    crate::mark_system("pan_camera");
+
     if drag_state.active {
         // Durante il drag di un corpo (Move tool) la camera non si muove
         state.dragging = false;
@@ -76,6 +78,8 @@ fn scroll_pan(
     drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
+    crate::mark_system("scroll_pan");
+
     if drag_state.active {
         return;
     }
@@ -98,6 +102,8 @@ fn zoom_camera(
     drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
 ) {
+    crate::mark_system("zoom_camera");
+
     if drag_state.active {
         return;
     }
@@ -128,6 +134,8 @@ fn touch_pan(
     drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
 ) {
+    crate::mark_system("touch_pan");
+
     if drag_state.active {
         state.active = false;
         return;
@@ -164,6 +172,8 @@ fn touch_zoom(
     drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
 ) {
+    crate::mark_system("touch_zoom");
+
     if drag_state.active {
         state.active = false;
         return;

@@ -43,6 +43,8 @@ fn handle_play_pause(
     mut virtual_time: ResMut<Time<Virtual>>,
     mut physics_time: ResMut<Time<Physics>>,
 ) {
+    crate::mark_system("handle_play_pause");
+
     if keys.just_pressed(KeyCode::Space) {
         sim_state.paused = !sim_state.paused;
         if sim_state.paused {
@@ -63,6 +65,8 @@ fn handle_step(
     mut physics_time: ResMut<Time<Physics>>,
     mut step_writer: MessageWriter<StepMessage>,
 ) {
+    crate::mark_system("handle_step");
+
     if sim_state.paused
         && (keys.just_pressed(KeyCode::Period) || keys.just_pressed(KeyCode::ArrowRight))
     {
@@ -90,6 +94,8 @@ fn handle_speed_change(
     keys: Res<ButtonInput<KeyCode>>,
     mut sim_state: ResMut<SimulationState>,
 ) {
+    crate::mark_system("handle_speed_change");
+
     if keys.just_pressed(KeyCode::Equal) || keys.just_pressed(KeyCode::NumpadAdd) {
         sim_state.speed = (sim_state.speed * 2.0).min(10.0);
     }
@@ -114,6 +120,8 @@ fn apply_speed(
     mut virtual_time: ResMut<Time<Virtual>>,
     mut physics_time: ResMut<Time<Physics>>,
 ) {
+    crate::mark_system("apply_speed");
+
     virtual_time.set_relative_speed(sim_state.speed);
     physics_time.set_relative_speed(sim_state.speed);
 }

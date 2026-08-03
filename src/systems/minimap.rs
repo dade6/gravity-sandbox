@@ -36,6 +36,8 @@ const MAP_MARGIN: f32 = 12.0;
 const BOUNDS_PADDING: f32 = 1.4;
 
 fn setup_minimap(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    crate::mark_system("setup_minimap");
+
     let size = Extent3d {
         width: MAP_SIZE as u32,
         height: MAP_SIZE as u32,
@@ -126,6 +128,8 @@ fn update_minimap_camera(
     bodies: Query<(&CelestialBody, &GlobalTransform)>,
     mut camera_query: Query<(&mut Transform, &mut Projection), With<MinimapCamera>>,
 ) {
+    crate::mark_system("update_minimap_camera");
+
     let (mut transform, mut projection) = match camera_query.single_mut() {
         Ok(c) => c,
         Err(_) => return,
@@ -169,6 +173,8 @@ fn handle_minimap_click(
     mut main_camera_query: Query<&mut Transform, (With<MainCamera>, Without<MinimapCamera>)>,
     drag_state: Res<MoveDragState>,
 ) {
+    crate::mark_system("handle_minimap_click");
+
     if drag_state.active {
         // Durante il drag di un corpo (Move tool) il click sulla minimap
         // non deve spostare/teletrasportare la camera.
@@ -239,5 +245,7 @@ fn update_viewport_rect(
     main_camera_query: Query<(&Transform, &Projection), (With<MainCamera>, Without<MinimapCamera>)>,
     mut viewport_query: Query<&mut Node, With<ViewportRect>>,
 ) {
+    crate::mark_system("update_viewport_rect");
+
     // Temporarily disabled (B0001 conflict with UI layout)
 }

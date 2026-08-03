@@ -34,6 +34,8 @@ fn lazy_init_initial_state(
         Without<InitialBodyState>,
     >,
 ) {
+    crate::mark_system("lazy_init_initial_state");
+
     for (entity, transform, velocity, body) in bodies.iter() {
         commands.entity(entity).insert(InitialBodyState {
             position: transform.translation.truncate(),
@@ -66,6 +68,8 @@ fn reset_simulation(
         Option<&mut TrajectoryHistory>,
     )>,
 ) {
+    crate::mark_system("reset_simulation");
+
     if reset_reader.read().next().is_none() {
         return;
     }

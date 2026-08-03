@@ -14,6 +14,8 @@ pub fn gravity_system(
     mut force_query: Query<&mut ConstantForce>,
     grav: Res<GravitationalConstant>,
 ) {
+    crate::mark_system("gravity_system");
+
     let g = grav.0;
 
     // Collect all bodies

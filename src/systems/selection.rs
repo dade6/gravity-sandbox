@@ -37,6 +37,8 @@ fn selection_system(
     mut selected: ResMut<SelectedBody>,
     current_tool: Res<CurrentTool>,
 ) {
+    crate::mark_system("selection_system");
+
     // Supporto mouse E touch (iPhone/iPad): la posizione del click può
     // venire dal cursore (mouse) oppure dal primo touch appena premuto.
     let mut pressed_pos: Option<Vec2> = None;
