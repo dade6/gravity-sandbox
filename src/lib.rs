@@ -239,6 +239,7 @@ pub fn is_load_requested() -> bool {
 }
 
 /// WASM entry point
+#[cfg(target_arch = "wasm32")]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn wasm_main() {
     #[cfg(target_arch = "wasm32")]
@@ -252,7 +253,7 @@ pub fn wasm_main() {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Some(el) = doc.get_element_by_id("version-badge") {
                     let cur = el.text_content().unwrap_or_default();
-                    el.set_text_content(Some(&format!("{} | {}", cur, &msg[..msg.len().min(120)])));
+                    el.set_text_content(Some(&format!("{} | {}", cur, &msg[..msg.len().min(300)])));
                 }
             }
         }));
@@ -305,12 +306,113 @@ pub fn wasm_main() {
         ParallaxPlugin,
         PhysicsPlugins::default(),
     ))
-    .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
+    // TEMP-DIAG v0.14.23: KeypadPlugin disabilitato per isolare il trap del
+    // primo frame su Mac/iPhone (bisettrice: se la sandbox parte, il keypad
+    // è il colpevole; verrà riattivato nel fix definitivo)
+    .add_plugins((SandboxUIPlugin, ResetPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
     .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_on_outside_press))
     .run();
     crate::mark_system("after_run");
+}
+
+/// Primo update con TUTTI i sistemi del progetto: se c'è un B0001 (query
+/// conflittuali nello stesso sistema), il test panica QUI con i nomi esatti
+/// (eseguire con `cargo test --features bevy/debug -- --nocapture`).
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sandbox_app() -> App {
+        let mut app = App::new();
+        app.edit_schedule(Update, |s: &mut bevy::ecs::schedule::Schedule| {
+            s.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+                ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+                ..default()
+            });
+        });
+        app.edit_schedule(PostUpdate, |s: &mut bevy::ecs::schedule::Schedule| {
+            s.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+                ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+                ..default()
+            });
+        });
+        app.edit_schedule(FixedUpdate, |s: &mut bevy::ecs::schedule::Schedule| {
+            s.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+                ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+                ..default()
+            });
+        });
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                // RenderPlugin ATTIVO: necessario per init_asset::<Shader>
+                // (LightMaterial). Il B0001 eventuale scatta nell'Update,
+                // prima del render; senza window il render non parte.
+                .disable::<bevy::winit::WinitPlugin>() // event loop: main-thread only
+                .disable::<bevy::window::WindowPlugin>(),
+        )
+        .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
+        .add_plugins((
+            GravitySandboxPlugin,
+            TimelinePlugin,
+            CameraControllerPlugin,
+            SelectionPlugin,
+            ToolPlugin,
+            TrajectoryPlugin,
+            LightingPlugin,
+            LightPlugin,
+            MinimapPlugin,
+            PersistencePlugin,
+            rendering::TexturePlugin,
+            PropertyEditorPlugin,
+            DebugSpawnPlugin,
+            ParallaxPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
+        .insert_resource(Gravity::ZERO)
+        .add_systems(FixedUpdate, gravity::gravity_system);
+        // N.B.: debug_state_snapshot/apply_mobile_text_input/clear_focus_*
+        // sono wasm32-only: non esistono in native
+        app
+    }
+
+    fn sandbox_app_with_window() -> App {
+        let mut app = sandbox_app();
+        // Senza WindowPlugin i Message di bevy_window non sono registrati e
+        // manca la Window resource: li forniamo a mano per far girare anche
+        // il render (su llvmpipe) e riprodurre il primo frame reale.
+        app.add_message::<bevy::window::WindowResized>();
+        app.add_message::<bevy::window::WindowCreated>();
+        app.add_message::<bevy::window::WindowCloseRequested>();
+        app.add_message::<bevy::window::WindowScaleFactorChanged>();
+        app.add_message::<bevy::window::WindowFocused>();
+        app.add_message::<bevy::window::CursorMoved>();
+        app.add_message::<bevy::window::CursorEntered>();
+        app.add_message::<bevy::window::CursorLeft>();
+        app.add_message::<bevy::window::Ime>();
+        app.add_message::<bevy::window::WindowEvent>();
+        // In Bevy 0.19 Window è un Component: la spawno come entità
+        // (con PrimaryWindow) invece di insert_resource.
+        app.world_mut().spawn((
+            Window {
+                title: "test".into(),
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            bevy::window::PrimaryWindow,
+        ));
+        app
+    }
+
+    #[test]
+    fn first_update_no_b0001() {
+        let mut app = sandbox_app_with_window();
+        app.update();
+        app.update();
+    }
 }
 
 /// Tastiera mobile (iOS): JS invia il testo digitato nell'input nascosto.

@@ -66,10 +66,13 @@ fn keypad_visibility(
     mut commands: Commands,
 ) {
     crate::mark_system("keypad_visibility");
+    #[cfg(target_arch = "wasm32")]
     let mobile = crate::js_bridge::MOBILE_DEVICE
         .lock()
         .map(|m| *m)
         .unwrap_or(false);
+    #[cfg(not(target_arch = "wasm32"))]
+    let mobile = false;
     let mut should_show = false;
     if mobile {
         if let Some(f) = input_focus.get() {
@@ -81,6 +84,7 @@ fn keypad_visibility(
     let exists = keypad_query.iter().next().is_some();
     if should_show && !exists {
         spawn_keypad(&mut commands);
+        #[cfg(target_arch = "wasm32")]
         if let Ok(mut a) = crate::js_bridge::TEXT_INPUT_ACTIVE.lock() {
             *a = true;
         }
@@ -88,6 +92,7 @@ fn keypad_visibility(
         for e in keypad_query.iter() {
             commands.entity(e).despawn();
         }
+        #[cfg(target_arch = "wasm32")]
         if let Ok(mut a) = crate::js_bridge::TEXT_INPUT_ACTIVE.lock() {
             *a = false;
         }
