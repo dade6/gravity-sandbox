@@ -129,6 +129,10 @@
             eventLog.push(msg);
             if (eventLog.length > 5) eventLog.shift();
         }
+        // Focus bevy registrato al touchstart (per distinguere tap su campo / fuori)
+        let focusAtTap = null;
+        // Stato "tastiera mobile aperta" (evita chiamate ripetute a Rust)
+        let mobileActive = false;
 
         // Focus DOM del canvas: senza questo, il browser non instrada gli
         // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
@@ -159,58 +163,39 @@
             // Chiusura tastiera (manuale o per tap fuori): riattiva il sync
             hiddenInput.addEventListener('blur', () => {
                 logEv('BLUR_input');
+                mobileActive = false;
                 if (window.__sandbox) window.__sandbox.set_mobile_input_active(false);
             });
             hiddenInput.addEventListener('focus', () => {
                 logEv('focus_input');
             });
 
-            // Hit test SINCrono al tocco: iOS permette il focus su un input solo
-            // dentro un handler di tocco. Se il dito è su un campo: focus + tastiera.
-            // Se è fuori: chiudi tastiera e focus Bevy (zoom/pan non disturbati).
+            // touchstart: focus SINCrono dell'input (iOS lo permette solo in un
+            // handler di tocco) + registra il focus bevy prima del tap.
             canvasEl.addEventListener('touchstart', (e) => {
                 if (!window.__sandbox) return;
-                // Refresh sincrono dei rects (lo snapshot ha max ~300ms di ritardo)
+                try {
+                    focusAtTap = JSON.parse(window.__sandbox.debug_state()).focus;
+                } catch (err) { focusAtTap = null; }
+                hiddenInput.focus();
+            }, { passive: true });
+
+            // click nativo (arriva ~0.3-0.5s dopo OGNI tap): se il campo bevy
+            // attivo NON è cambiato rispetto a prima del tap, il tap era FUORI
+            // da un campo -> clear del focus (campo disattivato, tastiera chiusa).
+            // Se il focus è cambiato, il tap era su un campo -> nessun clear.
+            canvasEl.addEventListener('click', () => {
+                if (!window.__sandbox || focusAtTap === null) return;
                 try {
                     const s = JSON.parse(window.__sandbox.debug_state());
-                    if (Array.isArray(s.field_rects) && s.field_rects.length > 0) fieldRects = s.field_rects;
-                    if (s.focused_text) lastFieldText = s.focused_text;
+                    if (s.focus !== 4294967295 && s.focus === focusAtTap) {
+                        logEv('click:fuori');
+                        window.__sandbox.clear_field_focus();
+                    } else {
+                        logEv('click:campo');
+                    }
                 } catch (err) { /* snapshot non pronto */ }
-                const t = e.touches[0];
-                if (!t) return;
-                const rect = canvasEl.getBoundingClientRect();
-                const x = t.clientX - rect.left;
-                const y = t.clientY - rect.top;
-                const onField = fieldRects.some(r => x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]);
-                if (onField) {
-                    // Tap su campo: focus sincrono (gesture) + select-all + sync sospeso
-                    logEv('tap:CAMPO');
-                    hiddenInput.value = '';
-                    hiddenInput.readOnly = false;
-                    hiddenInput.focus();
-                    window.__sandbox.set_mobile_input_active(true);
-                    window.__sandbox.set_mobile_input_mode(1);
-                    window.__sandbox.set_focused_text(lastFieldText || '');
-                } else {
-                    // Tap fuori: applica l'ultimo valore digitato, poi chiudi tutto
-                    logEv('tap:fuori');
-                    if (hiddenInput.value !== '') {
-                        window.__sandbox.set_focused_text(hiddenInput.value);
-                    }
-                    window.__sandbox.set_mobile_input_active(false);
-                    hiddenInput.readOnly = true;
-                    hiddenInput.blur();
-                    // Il clear del focus Bevy un attimo dopo (il sync ha applicato).
-                    // Solo se conosciamo i rects: senza, non toccare il focus
-                    // (evita la disattivazione del campo appena aperto).
-                    if (fieldRects.length > 0) {
-                        setTimeout(() => {
-                            logEv('clear_focus');
-                            if (window.__sandbox) window.__sandbox.clear_field_focus();
-                        }, 250);
-                    }
-                }
-            }, { passive: true });
+            });
         }
 
         window.addEventListener('error', (e) => {
@@ -247,9 +232,26 @@
                 const logEl = document.getElementById('event-log');
                 if (logEl) logEl.textContent = eventLog.join('  ');
 
-                // Mantiene i dati per l'hit test sincrono del touchstart (iOS):
-                // rects dei campi + testo del campo attivo
+                // === Tastiera mobile (iOS): lo stato lo decide il focus Bevy ===
                 if (isIOS) {
+                    if (focusOn) {
+                        // Campo attivo: input editabile -> la tastiera esce
+                        // (l'input è già focussato dal touchstart sincrono)
+                        if (!mobileActive) {
+                            mobileActive = true;
+                            window.__sandbox.set_mobile_input_active(true);
+                        }
+                        if (hiddenInput.readOnly) hiddenInput.readOnly = false;
+                    } else {
+                        // Nessun campo attivo: readonly -> la tastiera non esce;
+                        // se era aperta, blur per chiuderla
+                        if (mobileActive) {
+                            mobileActive = false;
+                            window.__sandbox.set_mobile_input_active(false);
+                        }
+                        if (!hiddenInput.readOnly) hiddenInput.readOnly = true;
+                        if (document.activeElement === hiddenInput) hiddenInput.blur();
+                    }
                     if (Array.isArray(s.field_rects)) fieldRects = s.field_rects;
                     if (s.focused_text) lastFieldText = s.focused_text;
                 }
