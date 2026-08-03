@@ -104,8 +104,10 @@
     <div id="version-badge">v0.14.13</div>
     <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:44px monospace;z-index:99;"></div>
     <!-- Tastiera mobile: input invisibile che cattura i tasti iOS (fuori schermo,
-         NON display:none — altrimenti iOS non mostra la tastiera) -->
-    <input id="hidden-input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+         NON display:none — altrimenti iOS non mostra la tastiera).
+         Parte in stato readonly: il focus sincrono non apre la tastiera finché
+         il polling non toglie readonly quando un campo Bevy è attivo. -->
+    <input id="hidden-input" type="text" readonly autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
            style="position:fixed;top:-300px;left:0;width:1px;height:1px;opacity:0;border:none;padding:0;z-index:-1;">
 
     <script type="module">
@@ -121,21 +123,19 @@
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
             (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
         const hiddenInput = document.getElementById('hidden-input');
-        let mobileTyping = false;
         let lastFieldText = '';
-        // La tastiera si attiva SOLO dopo che l'utente ha toccato la pagina:
-        // niente focus automatico all'avvio (iOS mostrava la tastiera da sola)
-        let userInteracted = false;
-        document.addEventListener('pointerdown', () => { userInteracted = true; });
-        document.addEventListener('touchstart', () => { userInteracted = true; }, { passive: true });
         if (isIOS && hiddenInput) {
             // Il testo digitato nella tastiera iOS viene inoltrato al campo Bevy
             hiddenInput.addEventListener('input', () => {
                 if (window.__sandbox) window.__sandbox.set_focused_text(hiddenInput.value);
             });
-            // NON rifocalizzare a forza qui: iOS blocca la riapertura
-            // programmatica della tastiera subito dopo la chiusura manuale.
-            // Sarà il polling a rifocalizzare al prossimo tap sul campo.
+            // iOS permette il focus su un input SOLO dentro un handler di tocco
+            // sincrono. L'input parte readonly, quindi il focus a ogni tocco NON
+            // apre la tastiera: sarà il polling a togliere readonly quando un
+            // campo Bevy è attivo (a quel punto la tastiera appare da sola).
+            canvasEl.addEventListener('touchstart', () => {
+                hiddenInput.focus();
+            }, { passive: true });
         }
 
         window.addEventListener('error', (e) => {
@@ -166,21 +166,18 @@
                 // === Tastiera mobile (solo iOS) ===
                 if (isIOS) {
                     const focusedText = s.focused_text || '';
-                    if (focusOn && userInteracted) {
-                        // Il campo Bevy è attivo: l'input nascosto deve avere il
-                        // focus per tenere aperta la tastiera. Se l'ha perso
-                        // (chiusura manuale), rifocalizzalo solo se l'utente ha
-                        // toccato la pagina (gesture -> iOS permette la riapertura).
-                        if (document.activeElement !== hiddenInput) {
-                            // Primo attivarsi: carica il testo corrente del campo
-                            if (!mobileTyping) {
-                                hiddenInput.value = focusedText;
-                                mobileTyping = true;
-                            }
-                            hiddenInput.focus();
+                    if (focusOn) {
+                        // Campo Bevy attivo: rendi l'input editabile. Essendo già
+                        // focussato dal touchstart, iOS apre la tastiera da sola.
+                        if (hiddenInput.readOnly) {
+                            hiddenInput.readOnly = false;
+                            // carica il testo corrente del campo la prima volta
+                            hiddenInput.value = focusedText;
                         }
-                    } else if (!focusOn) {
-                        mobileTyping = false;
+                    } else {
+                        // Nessun campo attivo: chiudi la tastiera (readonly su
+                        // input focussato la nasconde su iOS)
+                        if (!hiddenInput.readOnly) hiddenInput.readOnly = true;
                         if (document.activeElement === hiddenInput) hiddenInput.blur();
                     }
                     lastFieldText = focusedText;
