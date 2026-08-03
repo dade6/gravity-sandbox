@@ -104,17 +104,33 @@ mod js_bridge {
     /// Flight recorder: ultimo sistema eseguito + contatore frame.
     /// Se il WASM crasha con un trap (non-panic), il polling JS legge
     /// l'ultimo valore congelato e mostra DOVE si è fermato.
-    pub static FLIGHT: std::sync::LazyLock<Mutex<(String, u32)>> = std::sync::LazyLock::new(|| {
-        Mutex::new(("boot".to_string(), 0))
-    });
+    pub static FLIGHT: std::sync::LazyLock<Mutex<(String, u32)>> =
+        std::sync::LazyLock::new(|| Mutex::new(("boot".to_string(), 0)));
+
+    /// Ultimo nome scritto nel DOM da mark_system (per evitare reflow a ogni frame)
+    pub static FLIGHT_DOM: std::sync::LazyLock<Mutex<String>> =
+        std::sync::LazyLock::new(|| Mutex::new(String::new()));
 }
 
-/// Registra il sistema in esecuzione nel flight recorder (ogni frame).
+/// Registra il sistema in esecuzione nel flight recorder (ogni frame) e
+/// scrive il nome nel DOM in modo SINCRONO: se il WASM muore con un trap
+/// a metà frame, il testo resta congelato sull'ultimo sistema avviato.
 #[cfg(target_arch = "wasm32")]
 pub fn mark_system(name: &str) {
     if let Ok(mut f) = crate::js_bridge::FLIGHT.lock() {
         f.0 = name.to_string();
         f.1 = f.1.wrapping_add(1);
+    }
+    if let Ok(mut last) = crate::js_bridge::FLIGHT_DOM.lock() {
+        if *last != name {
+            *last = name.to_string();
+            use wasm_bindgen::JsCast;
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Some(el) = doc.get_element_by_id("debug-state") {
+                    let _ = el.set_text_content(Some(name));
+                }
+            }
+        }
     }
 }
 
@@ -292,6 +308,7 @@ pub fn wasm_main() {
     .add_systems(FixedUpdate, gravity::gravity_system)
     .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_on_outside_press))
     .run();
+    crate::mark_system("after_run");
 }
 
 /// Tastiera mobile (iOS): JS invia il testo digitato nell'input nascosto.

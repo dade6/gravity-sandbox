@@ -123,6 +123,7 @@ const DIALOG_BG: Color = Color::srgba(0.12, 0.12, 0.22, 0.95);
 
 
 fn spawn_ui(mut commands: Commands) {
+    crate::mark_system("spawn_ui");
     // === Toolbar in alto ===
     spawn_toolbar(&mut commands);
 
