@@ -254,7 +254,7 @@ pub fn wasm_main() {
     .add_plugins((SandboxUIPlugin, ResetPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
-    .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_system))
+    .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_on_outside_press))
     .run();
 }
 
@@ -333,20 +333,38 @@ fn apply_mobile_text_input(
     }
 }
 
-/// Clear del focus Bevy richiesto da JS (tap fuori da un campo su iOS)
+/// Quando l'utente preme FUORI da un campo editabile, il focus Bevy viene
+/// rimosso (il campo si disattiva). Fonte di verità: la posizione del press
+/// + i rects reali dei campi. Sostituisce l'hit test JS (fragile su iOS).
 #[cfg(target_arch = "wasm32")]
-fn clear_focus_system(mut input_focus: ResMut<bevy::input_focus::InputFocus>) {
-    let doit = if let Ok(mut c) = crate::js_bridge::CLEAR_FOCUS_CMD.lock() {
-        if *c {
-            *c = false;
-            true
-        } else {
-            false
-        }
+fn clear_focus_on_outside_press(
+    touches: Res<Touches>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut input_focus: ResMut<bevy::input_focus::InputFocus>,
+    fields: Query<(
+        &crate::systems::ui::PropInput,
+        &bevy::ui::ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+    )>,
+) {
+    let pressed_pos: Option<Vec2> = if mouse_buttons.just_pressed(MouseButton::Left) {
+        windows.iter().next().and_then(|w| w.cursor_position())
+    } else if touches.any_just_pressed() {
+        touches.iter_just_pressed().next().map(|t| t.position())
     } else {
-        false
+        None
     };
-    if doit {
+    let Some(pos) = pressed_pos else { return };
+    // Se il press NON è sopra un campo editabile, rimuovi il focus
+    let over_field = fields.iter().any(|(_, node, gt)| {
+        let half = node.size / 2.0;
+        pos.x >= gt.translation.x - half.x
+            && pos.x <= gt.translation.x + half.x
+            && pos.y >= gt.translation.y - half.y
+            && pos.y <= gt.translation.y + half.y
+    });
+    if !over_field {
         *input_focus = bevy::input_focus::InputFocus::default();
     }
 }

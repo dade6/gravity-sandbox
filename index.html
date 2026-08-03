@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.14</title>
+    <title>Gravity Sandbox v0.14.15</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -101,7 +101,7 @@
 <body>
     <canvas id="bevy-canvas" tabindex="0"></canvas>
 
-    <div id="version-badge">v0.14.14</div>
+    <div id="version-badge">v0.14.15</div>
     <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:44px monospace;z-index:99;"></div>
     <!-- Log eventi tastiera (diagnosi iOS): mostra l'ultima sequenza di eventi -->
     <div id="event-log" style="position:fixed;bottom:20px;left:12px;color:#ffd27f;background:rgba(0,0,0,0.6);padding:6px 12px;border-radius:8px;font:16px monospace;z-index:99;"></div>
@@ -113,26 +113,22 @@
            style="position:fixed;top:-300px;left:0;width:1px;height:1px;opacity:0;border:none;padding:0;z-index:-1;">
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox.js?v=0.14.14';
+        import init, * as sandbox from './gravity_sandbox.js?v=0.14.15';
 
         // === Tastiera mobile (iOS) ===
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
             (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
         const hiddenInput = document.getElementById('hidden-input');
-        let lastFieldText = '';
-        let lastFocusOn = false;
-        // Rects dei campi (aggiornati dal polling) per l'hit test sincrono al tocco
-        let fieldRects = [];
         // Log eventi per la diagnosi della tastiera iOS
         let eventLog = [];
         function logEv(msg) {
             eventLog.push(msg);
             if (eventLog.length > 5) eventLog.shift();
         }
-        // Focus bevy registrato al touchstart (per distinguere tap su campo / fuori)
-        let focusAtTap = null;
         // Stato "tastiera mobile aperta" (evita chiamate ripetute a Rust)
         let mobileActive = false;
+        // Ultimo stato di focus letto (per il log delle transizioni)
+        let lastFocusOn = false;
 
         // Focus DOM del canvas: senza questo, il browser non instrada gli
         // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
@@ -171,31 +167,13 @@
             });
 
             // touchstart: focus SINCrono dell'input (iOS lo permette solo in un
-            // handler di tocco) + registra il focus bevy prima del tap.
-            canvasEl.addEventListener('touchstart', (e) => {
-                if (!window.__sandbox) return;
-                try {
-                    focusAtTap = JSON.parse(window.__sandbox.debug_state()).focus;
-                } catch (err) { focusAtTap = null; }
+            // handler di tocco). L'input è readonly di default: la tastiera NON
+            // esce. La decisione su campo/fuori la prende Bevy (picking per
+            // attivare, clear_focus_on_outside_press per disattivare); il
+            // polling toglie/mette readonly seguendo il focus Bevy.
+            canvasEl.addEventListener('touchstart', () => {
                 hiddenInput.focus();
             }, { passive: true });
-
-            // click nativo (arriva ~0.3-0.5s dopo OGNI tap): se il campo bevy
-            // attivo NON è cambiato rispetto a prima del tap, il tap era FUORI
-            // da un campo -> clear del focus (campo disattivato, tastiera chiusa).
-            // Se il focus è cambiato, il tap era su un campo -> nessun clear.
-            canvasEl.addEventListener('click', () => {
-                if (!window.__sandbox || focusAtTap === null) return;
-                try {
-                    const s = JSON.parse(window.__sandbox.debug_state());
-                    if (s.focus !== 4294967295 && s.focus === focusAtTap) {
-                        logEv('click:fuori');
-                        window.__sandbox.clear_field_focus();
-                    } else {
-                        logEv('click:campo');
-                    }
-                } catch (err) { /* snapshot non pronto */ }
-            });
         }
 
         window.addEventListener('error', (e) => {
@@ -207,10 +185,10 @@
             // Espone le funzioni del modulo WASM (es. debug_state) per diagnostica
             window.__sandbox = sandbox;
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.14 ✅';
+            if (v) v.textContent = 'v0.14.15 ✅';
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.14 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.15 🛑' + err.message.substring(0, 60);
         });
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio)
@@ -252,8 +230,6 @@
                         if (!hiddenInput.readOnly) hiddenInput.readOnly = true;
                         if (document.activeElement === hiddenInput) hiddenInput.blur();
                     }
-                    if (Array.isArray(s.field_rects)) fieldRects = s.field_rects;
-                    if (s.focused_text) lastFieldText = s.focused_text;
                 }
             } catch (e) { /* snapshot non ancora pronto */ }
         }, 300);
