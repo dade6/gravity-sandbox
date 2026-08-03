@@ -123,16 +123,19 @@
         const hiddenInput = document.getElementById('hidden-input');
         let mobileTyping = false;
         let lastFieldText = '';
+        // La tastiera si attiva SOLO dopo che l'utente ha toccato la pagina:
+        // niente focus automatico all'avvio (iOS mostrava la tastiera da sola)
+        let userInteracted = false;
+        document.addEventListener('pointerdown', () => { userInteracted = true; });
+        document.addEventListener('touchstart', () => { userInteracted = true; }, { passive: true });
         if (isIOS && hiddenInput) {
             // Il testo digitato nella tastiera iOS viene inoltrato al campo Bevy
             hiddenInput.addEventListener('input', () => {
                 if (window.__sandbox) window.__sandbox.set_focused_text(hiddenInput.value);
             });
-            // Se il campo Bevy è ancora attivo ma l'input perde il focus,
-            // rifocalizzalo per non chiudere la tastiera
-            hiddenInput.addEventListener('blur', () => {
-                if (mobileTyping) setTimeout(() => { if (mobileTyping) hiddenInput.focus(); }, 100);
-            });
+            // NON rifocalizzare a forza qui: iOS blocca la riapertura
+            // programmatica della tastiera subito dopo la chiusura manuale.
+            // Sarà il polling a rifocalizzare al prossimo tap sul campo.
         }
 
         window.addEventListener('error', (e) => {
@@ -161,22 +164,24 @@
                 el.textContent = `${toolShort} | ${s.paused ? 'PAUSA' : 'PLAY'} | drag ${s.drag_active ? (s.drag_engaged ? 'ON' : 'hold') : 'off'} | focus ${focusOn ? 'ON' : 'off'} | ${s.bodies ? s.bodies.length : 0} corpi${s.focused_text ? ' | ' + s.focused_text.substring(0, 14) : ''}`;
 
                 // === Tastiera mobile (solo iOS) ===
-                // Quando un campo Bevy ha il focus, il focus dell'input nascosto
-                // fa comparire la tastiera virtuale; il testo digitato viene
-                // inoltrato a Rust via set_focused_text().
                 if (isIOS) {
                     const focusedText = s.focused_text || '';
-                    if (focusOn) {
-                        if (!mobileTyping) {
-                            mobileTyping = true;
-                            hiddenInput.value = '';
+                    if (focusOn && userInteracted) {
+                        // Il campo Bevy è attivo: l'input nascosto deve avere il
+                        // focus per tenere aperta la tastiera. Se l'ha perso
+                        // (chiusura manuale), rifocalizzalo solo se l'utente ha
+                        // toccato la pagina (gesture -> iOS permette la riapertura).
+                        if (document.activeElement !== hiddenInput) {
+                            // Primo attivarsi: carica il testo corrente del campo
+                            if (!mobileTyping) {
+                                hiddenInput.value = focusedText;
+                                mobileTyping = true;
+                            }
                             hiddenInput.focus();
-                        } else if (focusedText !== lastFieldText && !hiddenInput.value) {
-                            hiddenInput.value = focusedText;
                         }
-                    } else if (mobileTyping) {
+                    } else if (!focusOn) {
                         mobileTyping = false;
-                        hiddenInput.blur();
+                        if (document.activeElement === hiddenInput) hiddenInput.blur();
                     }
                     lastFieldText = focusedText;
                 }
