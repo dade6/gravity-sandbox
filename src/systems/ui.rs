@@ -520,6 +520,72 @@ fn update_property_panel(
     }
 }
 
+/// Applica il testo di un campo al corpo selezionato.
+/// Condivisa tra: sync_property_input_to_body (editing desktop),
+/// il keypad numerico mobile e la chiusura del focus (tap fuori).
+pub(crate) fn apply_prop_value(
+    prop: &str,
+    text: &str,
+    body: &mut CelestialBody,
+    transform: &mut Transform,
+    velocity: &mut LinearVelocity,
+    mass_component: &mut Mass,
+) {
+    match prop {
+        "name" => {
+            if body.name != text {
+                body.name = text.to_string();
+            }
+        }
+        "mass" => {
+            if let Ok(v) = text.parse::<f32>() {
+                let clamped = v.max(0.1);
+                if (body.mass - clamped).abs() > 0.001 {
+                    body.mass = clamped;
+                    mass_component.0 = clamped;
+                }
+            }
+        }
+        "radius" => {
+            if let Ok(v) = text.parse::<f32>() {
+                let clamped = v.max(1.0);
+                if (body.radius - clamped).abs() > 0.001 {
+                    body.radius = clamped;
+                }
+            }
+        }
+        "pos_x" => {
+            if let Ok(v) = text.parse::<f32>() {
+                if (transform.translation.x - v).abs() > 0.001 {
+                    transform.translation.x = v;
+                }
+            }
+        }
+        "pos_y" => {
+            if let Ok(v) = text.parse::<f32>() {
+                if (transform.translation.y - v).abs() > 0.001 {
+                    transform.translation.y = v;
+                }
+            }
+        }
+        "vel_x" => {
+            if let Ok(v) = text.parse::<f32>() {
+                if (velocity.x - v).abs() > 0.001 {
+                    velocity.x = v;
+                }
+            }
+        }
+        "vel_y" => {
+            if let Ok(v) = text.parse::<f32>() {
+                if (velocity.y - v).abs() > 0.001 {
+                    velocity.y = v;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Legge modifiche da EditableText e le scrive al corpo selezionato
 
 fn sync_property_input_to_body(
@@ -569,66 +635,20 @@ fn sync_property_input_to_body(
             continue;
         }
         let text_value = editable.value().to_string();
-
-        match prop.0 {
-            "name" => {
-                if body.name != text_value {
-                    body.name = text_value;
+        apply_prop_value(
+            prop.0,
+            &text_value,
+            &mut body,
+            &mut transform,
+            &mut velocity,
+            &mut mass_component,
+        );
+        if prop.0 == "color" {
+            if let Some(rgb) = parse_hex_color(&text_value) {
+                if body.color != rgb {
+                    body.color = rgb;
                 }
             }
-            "mass" => {
-                if let Ok(v) = text_value.parse::<f32>() {
-                    let clamped = v.max(0.1);
-                    if (body.mass - clamped).abs() > 0.001 {
-                        body.mass = clamped;
-                        mass_component.0 = clamped;
-                    }
-                }
-            }
-            "radius" => {
-                if let Ok(v) = text_value.parse::<f32>() {
-                    let clamped = v.max(1.0);
-                    if (body.radius - clamped).abs() > 0.001 {
-                        body.radius = clamped;
-                    }
-                }
-            }
-            "pos_x" => {
-                if let Ok(v) = text_value.parse::<f32>() {
-                    if (transform.translation.x - v).abs() > 0.001 {
-                        transform.translation.x = v;
-                    }
-                }
-            }
-            "pos_y" => {
-                if let Ok(v) = text_value.parse::<f32>() {
-                    if (transform.translation.y - v).abs() > 0.001 {
-                        transform.translation.y = v;
-                    }
-                }
-            }
-            "vel_x" => {
-                if let Ok(v) = text_value.parse::<f32>() {
-                    if (velocity.x - v).abs() > 0.001 {
-                        velocity.x = v;
-                    }
-                }
-            }
-            "vel_y" => {
-                if let Ok(v) = text_value.parse::<f32>() {
-                    if (velocity.y - v).abs() > 0.001 {
-                        velocity.y = v;
-                    }
-                }
-            }
-            "color" => {
-                if let Some(rgb) = parse_hex_color(&text_value) {
-                    if body.color != rgb {
-                        body.color = rgb;
-                    }
-                }
-            }
-            _ => {}
         }
     }
 }

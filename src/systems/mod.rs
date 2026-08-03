@@ -1,5 +1,6 @@
 pub mod camera;
 pub mod gravity;
+pub mod keypad;
 pub mod light;
 pub mod lighting;
 pub mod minimap;

@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.15</title>
+    <title>Gravity Sandbox v0.14.16</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -97,84 +97,30 @@
             border-radius: 4px;
         }
     </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 </head>
 <body>
     <canvas id="bevy-canvas" tabindex="0"></canvas>
 
-    <div id="version-badge">v0.14.15</div>
+    <div id="version-badge">v0.14.16</div>
     <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:44px monospace;z-index:99;"></div>
-    <!-- Log eventi tastiera (diagnosi iOS): mostra l'ultima sequenza di eventi -->
-    <div id="event-log" style="position:fixed;bottom:20px;left:12px;color:#ffd27f;background:rgba(0,0,0,0.6);padding:6px 12px;border-radius:8px;font:16px monospace;z-index:99;"></div>
-    <!-- Tastiera mobile: input invisibile che cattura i tasti iOS (fuori schermo,
-         NON display:none — altrimenti iOS non mostra la tastiera).
-         Parte in stato readonly: il focus sincrono non apre la tastiera finché
-         il polling non toglie readonly quando un campo Bevy è attivo. -->
-    <input id="hidden-input" type="text" readonly autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-           style="position:fixed;top:-300px;left:0;width:1px;height:1px;opacity:0;border:none;padding:0;z-index:-1;">
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox.js?v=0.14.15';
-
-        // === Tastiera mobile (iOS) ===
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        const hiddenInput = document.getElementById('hidden-input');
-        // Log eventi per la diagnosi della tastiera iOS
-        let eventLog = [];
-        function logEv(msg) {
-            eventLog.push(msg);
-            if (eventLog.length > 5) eventLog.shift();
-        }
-        // Stato "tastiera mobile aperta" (evita chiamate ripetute a Rust)
-        let mobileActive = false;
-        // Ultimo stato di focus letto (per il log delle transizioni)
-        let lastFocusOn = false;
+        import init, * as sandbox from './gravity_sandbox.js?v=0.14.16';
 
         // Focus DOM del canvas: senza questo, il browser non instrada gli
         // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
-        // Su iOS è ESCLUSO: il click che segue il tap ruberebbe il focus
-        // all'input nascosto della tastiera (campo che si disattiva dopo
-        // mezzo secondo). Su iOS i tasti arrivano via hidden-input.
+        // Vale per desktop E tastiera fisica su iPhone (niente input nascosto:
+        // il fronte tastiera virtuale mobile è stato chiuso — editing su Mac).
         const canvasEl = document.getElementById('bevy-canvas');
-        if (!isIOS) {
-            canvasEl.addEventListener('click', () => canvasEl.focus());
-            canvasEl.addEventListener('pointerdown', () => canvasEl.focus());
-        }
+        canvasEl.addEventListener('click', () => canvasEl.focus());
+        canvasEl.addEventListener('pointerdown', () => canvasEl.focus());
 
-        if (isIOS && hiddenInput) {
-            // Su iOS il canvas NON deve essere focussabile: il click nativo del
-            // browser (che segue il tap ~0.5s dopo) gli darebbe il focus a causa
-            // di tabindex, rubandolo all'input nascosto -> tastiera chiusa e
-            // campo disattivato. Il focus canvas serve solo su Mac.
-            canvasEl.removeAttribute('tabindex');
-
-            // Il testo digitato nella tastiera iOS viene inoltrato al campo Bevy
-            hiddenInput.addEventListener('input', () => {
-                logEv('input:' + hiddenInput.value);
-                if (window.__sandbox) {
-                    window.__sandbox.set_mobile_input_mode(2);
-                    window.__sandbox.set_focused_text(hiddenInput.value);
-                }
-            });
-            // Chiusura tastiera (manuale o per tap fuori): riattiva il sync
-            hiddenInput.addEventListener('blur', () => {
-                logEv('BLUR_input');
-                mobileActive = false;
-                if (window.__sandbox) window.__sandbox.set_mobile_input_active(false);
-            });
-            hiddenInput.addEventListener('focus', () => {
-                logEv('focus_input');
-            });
-
-            // touchstart: focus SINCrono dell'input (iOS lo permette solo in un
-            // handler di tocco). L'input è readonly di default: la tastiera NON
-            // esce. La decisione su campo/fuori la prende Bevy (picking per
-            // attivare, clear_focus_on_outside_press per disattivare); il
-            // polling toglie/mette readonly seguendo il focus Bevy.
-            canvasEl.addEventListener('touchstart', () => {
-                hiddenInput.focus();
-            }, { passive: true });
-        }
+        // Rilevazione dispositivo mobile: abilita il keypad numerico Bevy
+        // (l'editing valori su iPhone avviene col keypad, non con la tastiera
+        // di sistema che iOS Safari non permette di controllare)
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
         window.addEventListener('error', (e) => {
             const v = document.getElementById('version-badge');
@@ -184,11 +130,12 @@
         init().then(() => {
             // Espone le funzioni del modulo WASM (es. debug_state) per diagnostica
             window.__sandbox = sandbox;
+            if (isIOS) sandbox.set_mobile_device(true);
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.15 ✅';
+            if (v) v.textContent = 'v0.14.16 ✅';
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.15 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.16 🛑' + err.message.substring(0, 60);
         });
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio)
@@ -198,39 +145,7 @@
             try {
                 const s = JSON.parse(window.__sandbox.debug_state());
                 const toolShort = { Select: 'SEL', Add: 'ADD', Move: 'MOV', Delete: 'DEL' }[s.tool] || s.tool;
-                const focusOn = s.focus !== 4294967295;
-                el.textContent = `${toolShort} | ${s.paused ? 'PAUSA' : 'PLAY'} | drag ${s.drag_active ? (s.drag_engaged ? 'ON' : 'hold') : 'off'} | focus ${focusOn ? 'ON' : 'off'} | ${s.bodies ? s.bodies.length : 0} corpi${s.focused_text ? ' | ' + s.focused_text.substring(0, 14) : ''}`;
-
-                // Transizione del focus bevy (per la diagnosi)
-                if (focusOn !== lastFocusOn) {
-                    logEv(focusOn ? 'focus:ON' : 'focus:OFF');
-                    lastFocusOn = focusOn;
-                }
-                // Mostra il log eventi
-                const logEl = document.getElementById('event-log');
-                if (logEl) logEl.textContent = eventLog.join('  ');
-
-                // === Tastiera mobile (iOS): lo stato lo decide il focus Bevy ===
-                if (isIOS) {
-                    if (focusOn) {
-                        // Campo attivo: input editabile -> la tastiera esce
-                        // (l'input è già focussato dal touchstart sincrono)
-                        if (!mobileActive) {
-                            mobileActive = true;
-                            window.__sandbox.set_mobile_input_active(true);
-                        }
-                        if (hiddenInput.readOnly) hiddenInput.readOnly = false;
-                    } else {
-                        // Nessun campo attivo: readonly -> la tastiera non esce;
-                        // se era aperta, blur per chiuderla
-                        if (mobileActive) {
-                            mobileActive = false;
-                            window.__sandbox.set_mobile_input_active(false);
-                        }
-                        if (!hiddenInput.readOnly) hiddenInput.readOnly = true;
-                        if (document.activeElement === hiddenInput) hiddenInput.blur();
-                    }
-                }
+                el.textContent = `${toolShort} | ${s.paused ? 'PAUSA' : 'PLAY'} | drag ${s.drag_active ? (s.drag_engaged ? 'ON' : 'hold') : 'off'} | ${s.bodies ? s.bodies.length : 0} corpi${s.focused_text ? ' | ' + s.focused_text.substring(0, 14) : ''}`;
             } catch (e) { /* snapshot non ancora pronto */ }
         }, 300);
     </script>

@@ -96,6 +96,10 @@ mod js_bridge {
     pub static TEXT_INPUT_ACTIVE: Mutex<bool> = Mutex::new(false);
     /// Flag per clear del focus (tap fuori dal campo su iOS)
     pub static CLEAR_FOCUS_CMD: Mutex<bool> = Mutex::new(false);
+
+    /// true su dispositivi mobili (settato da JS via set_mobile_device):
+    /// abilita il keypad numerico Bevy per l'editing dei valori
+    pub static MOBILE_DEVICE: Mutex<bool> = Mutex::new(false);
 }
 
 /// Set trajectory configuration from JavaScript (sliders, toggle).
@@ -251,7 +255,7 @@ pub fn wasm_main() {
         ParallaxPlugin,
         PhysicsPlugins::default(),
     ))
-    .add_plugins((SandboxUIPlugin, ResetPlugin))
+    .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
     .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_on_outside_press))
@@ -302,6 +306,17 @@ pub fn clear_field_focus() {
     }
 }
 
+/// JS: segnala se siamo su un dispositivo mobile (abilita il keypad numerico)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn set_mobile_device(mobile: bool) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut m) = crate::js_bridge::MOBILE_DEVICE.lock() {
+            *m = mobile;
+        }
+    }
+}
+
 /// Applica il testo inviato da JS (tastiera mobile) al campo focussato.
 #[cfg(target_arch = "wasm32")]
 fn apply_mobile_text_input(
@@ -333,19 +348,31 @@ fn apply_mobile_text_input(
     }
 }
 
-/// Quando l'utente preme FUORI da un campo editabile, il focus Bevy viene
-/// rimosso (il campo si disattiva). Fonte di verità: la posizione del press
-/// + i rects reali dei campi. Sostituisce l'hit test JS (fragile su iOS).
+/// Quando l'utente preme FUORI da un campo editabile (e fuori dal keypad),
+/// il valore del campo attivo viene applicato al corpo e il focus Bevy viene
+/// rimosso. Fonte di verità: la posizione del press + i rects reali dei campi.
 #[cfg(target_arch = "wasm32")]
 fn clear_focus_on_outside_press(
     touches: Res<Touches>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     mut input_focus: ResMut<bevy::input_focus::InputFocus>,
+    selected: Res<crate::systems::selection::SelectedBody>,
     fields: Query<(
         &crate::systems::ui::PropInput,
+        &bevy::text::EditableText,
         &bevy::ui::ComputedNode,
         &bevy::ui::UiGlobalTransform,
+    )>,
+    keypad_btns: Query<(
+        &bevy::ui::ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+    ), With<crate::systems::keypad::KeypadAction>>,
+    mut bodies: Query<(
+        &mut crate::components::celestial::CelestialBody,
+        &mut Transform,
+        &mut LinearVelocity,
+        &mut Mass,
     )>,
 ) {
     let pressed_pos: Option<Vec2> = if mouse_buttons.just_pressed(MouseButton::Left) {
@@ -356,17 +383,38 @@ fn clear_focus_on_outside_press(
         None
     };
     let Some(pos) = pressed_pos else { return };
-    // Se il press NON è sopra un campo editabile, rimuovi il focus
-    let over_field = fields.iter().any(|(_, node, gt)| {
+    let point_in = |node: &bevy::ui::ComputedNode, gt: &bevy::ui::UiGlobalTransform| {
         let half = node.size / 2.0;
         pos.x >= gt.translation.x - half.x
             && pos.x <= gt.translation.x + half.x
             && pos.y >= gt.translation.y - half.y
             && pos.y <= gt.translation.y + half.y
-    });
-    if !over_field {
-        *input_focus = bevy::input_focus::InputFocus::default();
+    };
+    let over_field = fields.iter().any(|(_, _, node, gt)| point_in(node, gt));
+    let over_keypad = keypad_btns.iter().any(|(node, gt)| point_in(node, gt));
+    if over_field || over_keypad {
+        return;
     }
+    // Tap fuori: applica il valore del campo attivo (se c'è) prima di chiudere,
+    // così la digitazione del keypad non va persa.
+    if let Some(f) = input_focus.get() {
+        if let Ok((prop, editable, _, _)) = fields.get(f) {
+            if let Some(e) = selected.0 {
+                if let Ok((mut body, mut transform, mut velocity, mut mass)) = bodies.get_mut(e) {
+                    let text_value = editable.value().to_string();
+                    crate::systems::ui::apply_prop_value(
+                        prop.0,
+                        &text_value,
+                        &mut body,
+                        &mut transform,
+                        &mut velocity,
+                        &mut mass,
+                    );
+                }
+            }
+        }
+    }
+    *input_focus = bevy::input_focus::InputFocus::default();
 }
 /// `DEBUG_STATE` (leggibile da JS via `debug_state()`). Serve per diagnosticare
 /// il bug "il pianeta si sposta con Select attivo".
