@@ -65,6 +65,7 @@ fn keypad_visibility(
     keypad_query: Query<Entity, With<Keypad>>,
     mut commands: Commands,
 ) {
+    crate::mark_system("keypad_visibility");
     let mobile = crate::js_bridge::MOBILE_DEVICE
         .lock()
         .map(|m| *m)
@@ -214,6 +215,7 @@ fn keypad_display_sync(
     fields: Query<(&PropInput, &EditableText)>,
     mut display: Query<&mut Text, With<KeypadDisplay>>,
 ) {
+    crate::mark_system("keypad_display_sync");
     let Ok(mut t) = display.single_mut() else {
         return;
     };
@@ -242,6 +244,7 @@ fn keypad_buttons(
     )>,
     fields: Query<(&PropInput, &EditableText)>,
 ) {
+    crate::mark_system("keypad_buttons");
     for (interaction, action) in buttons.iter() {
         if *interaction != Interaction::Pressed {
             continue;

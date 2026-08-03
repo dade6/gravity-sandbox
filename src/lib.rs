@@ -100,6 +100,22 @@ mod js_bridge {
     /// true su dispositivi mobili (settato da JS via set_mobile_device):
     /// abilita il keypad numerico Bevy per l'editing dei valori
     pub static MOBILE_DEVICE: Mutex<bool> = Mutex::new(false);
+
+    /// Flight recorder: ultimo sistema eseguito + contatore frame.
+    /// Se il WASM crasha con un trap (non-panic), il polling JS legge
+    /// l'ultimo valore congelato e mostra DOVE si è fermato.
+    pub static FLIGHT: std::sync::LazyLock<Mutex<(String, u32)>> = std::sync::LazyLock::new(|| {
+        Mutex::new(("boot".to_string(), 0))
+    });
+}
+
+/// Registra il sistema in esecuzione nel flight recorder (ogni frame).
+#[cfg(target_arch = "wasm32")]
+pub fn mark_system(name: &str) {
+    if let Ok(mut f) = crate::js_bridge::FLIGHT.lock() {
+        f.0 = name.to_string();
+        f.1 = f.1.wrapping_add(1);
+    }
 }
 
 /// Set trajectory configuration from JavaScript (sliders, toggle).
@@ -339,6 +355,7 @@ fn apply_mobile_text_input(
     input_focus: Res<bevy::input_focus::InputFocus>,
     mut editable_query: Query<&mut bevy::text::EditableText>,
 ) {
+    crate::mark_system("apply_mobile_text_input");
     let Some(focused) = input_focus.get() else {
         return;
     };
@@ -391,6 +408,7 @@ fn clear_focus_on_outside_press(
         &mut Mass,
     )>,
 ) {
+    crate::mark_system("clear_focus_on_outside_press");
     let pressed_pos: Option<Vec2> = if mouse_buttons.just_pressed(MouseButton::Left) {
         windows.iter().next().and_then(|w| w.cursor_position())
     } else if touches.any_just_pressed() {
@@ -454,6 +472,7 @@ fn debug_state_snapshot(
         Option<&LinearVelocity>,
     )>,
 ) {
+    crate::mark_system("debug_state_snapshot");
     use crate::systems::tools::Tool;
     let tool = match current_tool.0 {
         Tool::Select => "Select",
@@ -493,8 +512,15 @@ fn debug_state_snapshot(
             node.size.y
         ));
     }
+    crate::mark_system("debug_state_snapshot");
+    let (last_system, frame) = crate::js_bridge::FLIGHT
+        .lock()
+        .map(|f| (f.0.clone(), f.1))
+        .unwrap_or(("none".to_string(), 0));
     let json = format!(
-        r#"{{"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"field_rects":[{}],"bodies":[{}]}}"#,
+        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"field_rects":[{}],"bodies":[{}]}}"#,
+        last_system,
+        frame,
         tool,
         sim_state.paused,
         selected_id,
