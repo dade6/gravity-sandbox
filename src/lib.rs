@@ -87,6 +87,9 @@ mod js_bridge {
 
     /// DEBUG: snapshot JSON dello stato interno (tool, drag, selezione, corpi)
     pub static DEBUG_STATE: Mutex<String> = Mutex::new(String::new());
+
+    /// Tastiera mobile: testo del campo focussato inviato da JS (iOS)
+    pub static TEXT_INPUT_CMD: Mutex<Option<String>> = Mutex::new(None);
 }
 
 /// Set trajectory configuration from JavaScript (sliders, toggle).
@@ -245,8 +248,44 @@ pub fn wasm_main() {
     .add_plugins((SandboxUIPlugin, ResetPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
-    .add_systems(Update, debug_state_snapshot)
+    .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input))
     .run();
+}
+
+/// Tastiera mobile (iOS): JS invia il testo digitato nell'input nascosto.
+/// Viene applicato all'EditableText focussato come edit completo.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn set_focused_text(value: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut cmd) = crate::js_bridge::TEXT_INPUT_CMD.lock() {
+            *cmd = Some(value.to_string());
+        }
+    }
+}
+
+/// Applica il testo inviato da JS (tastiera mobile) al campo focussato.
+#[cfg(target_arch = "wasm32")]
+fn apply_mobile_text_input(
+    input_focus: Res<bevy::input_focus::InputFocus>,
+    mut editable_query: Query<&mut bevy::text::EditableText>,
+) {
+    let Some(focused) = input_focus.get() else { return };
+    let cmd = if let Ok(mut c) = crate::js_bridge::TEXT_INPUT_CMD.lock() {
+        c.take()
+    } else {
+        return;
+    };
+    let Some(new_text) = cmd else { return };
+    if let Ok(mut editable) = editable_query.get_mut(focused) {
+        let current = editable.value().to_string();
+        if current != new_text {
+            editable.clear();
+            editable.queue_edit(bevy::text::TextEdit::Insert(smol_str::SmolStr::new(
+                &new_text,
+            )));
+        }
+    }
 }
 
 /// DEBUG (solo WASM): scrive ogni frame lo snapshot dello stato interno in
