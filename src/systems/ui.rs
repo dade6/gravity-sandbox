@@ -466,34 +466,46 @@ fn update_property_panel(
         "Pause to edit"
     };
 
-    // Update EditableText fields
-    for (prop, mut editable_text, mut text_color) in editable_inputs.iter_mut() {
-        // Gray-out fields when not paused (readonly visivo)
-        text_color.0 = if sim_state.paused {
-            TEXT_COLOR
-        } else {
-            TEXT_COLOR_READONLY
-        };
-        let current_text = editable_text.value().to_string();
-        let expected = match prop.0 {
-            "name" => body.name.clone(),
-            "mass" => format!("{:.1}", body.mass),
-            "radius" => format!("{:.1}", body.radius),
-            "pos_x" => format!("{:.1}", pos.x),
-            "pos_y" => format!("{:.1}", pos.y),
-            "vel_x" => format!("{:.1}", vel.x),
-            "vel_y" => format!("{:.1}", vel.y),
-            "color" => {
-                let r = (body.color[0] * 255.0) as u8;
-                let g = (body.color[1] * 255.0) as u8;
-                let b = (body.color[2] * 255.0) as u8;
-                format!("#{:02x}{:02x}{:02x}", r, g, b)
+    // Tastiera mobile aperta: NON sovrascrivere i campi (l'utente sta
+    // digitando; il testo arriva dal ponte JS e non dal corpo)
+    #[cfg(target_arch = "wasm32")]
+    let mobile_active = crate::js_bridge::TEXT_INPUT_ACTIVE
+        .lock()
+        .map(|a| *a)
+        .unwrap_or(false);
+    #[cfg(not(target_arch = "wasm32"))]
+    let mobile_active = false;
+
+    if !mobile_active {
+        // Update EditableText fields
+        for (prop, mut editable_text, mut text_color) in editable_inputs.iter_mut() {
+            // Gray-out fields when not paused (readonly visivo)
+            text_color.0 = if sim_state.paused {
+                TEXT_COLOR
+            } else {
+                TEXT_COLOR_READONLY
+            };
+            let current_text = editable_text.value().to_string();
+            let expected = match prop.0 {
+                "name" => body.name.clone(),
+                "mass" => format!("{:.1}", body.mass),
+                "radius" => format!("{:.1}", body.radius),
+                "pos_x" => format!("{:.1}", pos.x),
+                "pos_y" => format!("{:.1}", pos.y),
+                "vel_x" => format!("{:.1}", vel.x),
+                "vel_y" => format!("{:.1}", vel.y),
+                "color" => {
+                    let r = (body.color[0] * 255.0) as u8;
+                    let g = (body.color[1] * 255.0) as u8;
+                    let b = (body.color[2] * 255.0) as u8;
+                    format!("#{:02x}{:02x}{:02x}", r, g, b)
+                }
+                _ => continue,
+            };
+            // Only update if the text differs from expected (avoids cursor jumps while editing)
+            if current_text != expected {
+                editable_text.editor.set_text(&expected);
             }
-            _ => continue,
-        };
-        // Only update if the text differs from expected (avoids cursor jumps while editing)
-        if current_text != expected {
-            editable_text.editor.set_text(&expected);
         }
     }
 
@@ -524,6 +536,16 @@ fn sync_property_input_to_body(
 ) {
     if !sim_state.paused {
         return; // Don't apply edits while playing
+    }
+    // Tastiera mobile aperta: sospendi il sync (niente guerra di sovrascrittura
+    // tra l'input iOS, il campo e il corpo durante la digitazione)
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(active) = crate::js_bridge::TEXT_INPUT_ACTIVE.lock() {
+            if *active {
+                return;
+            }
+        }
     }
 
     let entity = match selected.0 {

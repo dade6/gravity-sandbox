@@ -90,6 +90,12 @@ mod js_bridge {
 
     /// Tastiera mobile: testo del campo focussato inviato da JS (iOS)
     pub static TEXT_INPUT_CMD: Mutex<Option<String>> = Mutex::new(None);
+    /// 0=off, 1=select-all (apertura campo), 2=replace (digitazione)
+    pub static TEXT_INPUT_MODE: Mutex<u8> = Mutex::new(0);
+    /// true mentre la tastiera mobile è aperta (sync/panel sospesi)
+    pub static TEXT_INPUT_ACTIVE: Mutex<bool> = Mutex::new(false);
+    /// Flag per clear del focus (tap fuori dal campo su iOS)
+    pub static CLEAR_FOCUS_CMD: Mutex<bool> = Mutex::new(false);
 }
 
 /// Set trajectory configuration from JavaScript (sliders, toggle).
@@ -248,12 +254,11 @@ pub fn wasm_main() {
     .add_plugins((SandboxUIPlugin, ResetPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
-    .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input))
+    .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_system))
     .run();
 }
 
 /// Tastiera mobile (iOS): JS invia il testo digitato nell'input nascosto.
-/// Viene applicato all'EditableText focussato come edit completo.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub fn set_focused_text(value: &str) {
     #[cfg(target_arch = "wasm32")]
@@ -264,31 +269,87 @@ pub fn set_focused_text(value: &str) {
     }
 }
 
+/// Tastiera mobile: modalità di applicazione (0=off, 1=select-all, 2=replace)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn set_mobile_input_mode(mode: u8) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut m) = crate::js_bridge::TEXT_INPUT_MODE.lock() {
+            *m = mode;
+        }
+    }
+}
+
+/// Tastiera mobile: true mentre è aperta (sync/panel sospesi)
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn set_mobile_input_active(active: bool) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut a) = crate::js_bridge::TEXT_INPUT_ACTIVE.lock() {
+            *a = active;
+        }
+    }
+}
+
+/// Tap fuori da un campo su iOS: rimuove il focus Bevy dal campo
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn clear_field_focus() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut c) = crate::js_bridge::CLEAR_FOCUS_CMD.lock() {
+            *c = true;
+        }
+    }
+}
+
 /// Applica il testo inviato da JS (tastiera mobile) al campo focussato.
 #[cfg(target_arch = "wasm32")]
 fn apply_mobile_text_input(
     input_focus: Res<bevy::input_focus::InputFocus>,
     mut editable_query: Query<&mut bevy::text::EditableText>,
 ) {
-    let Some(focused) = input_focus.get() else { return };
+    let Some(focused) = input_focus.get() else {
+        return;
+    };
     let cmd = if let Ok(mut c) = crate::js_bridge::TEXT_INPUT_CMD.lock() {
         c.take()
     } else {
         return;
     };
     let Some(new_text) = cmd else { return };
+    let mode = crate::js_bridge::TEXT_INPUT_MODE.lock().map(|m| *m).unwrap_or(0);
     if let Ok(mut editable) = editable_query.get_mut(focused) {
         let current = editable.value().to_string();
-        if current != new_text {
+        if current != new_text || mode == 1 {
             editable.clear();
             editable.queue_edit(bevy::text::TextEdit::Insert(smol_str::SmolStr::new(
                 &new_text,
             )));
+            if mode == 1 {
+                // Apertura campo: seleziona tutto (il primo tasto sostituisce)
+                editable.queue_edit(bevy::text::TextEdit::SelectAll);
+            }
         }
     }
 }
 
-/// DEBUG (solo WASM): scrive ogni frame lo snapshot dello stato interno in
+/// Clear del focus Bevy richiesto da JS (tap fuori da un campo su iOS)
+#[cfg(target_arch = "wasm32")]
+fn clear_focus_system(mut input_focus: ResMut<bevy::input_focus::InputFocus>) {
+    let doit = if let Ok(mut c) = crate::js_bridge::CLEAR_FOCUS_CMD.lock() {
+        if *c {
+            *c = false;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if doit {
+        *input_focus = bevy::input_focus::InputFocus::default();
+    }
+}
 /// `DEBUG_STATE` (leggibile da JS via `debug_state()`). Serve per diagnosticare
 /// il bug "il pianeta si sposta con Select attivo".
 #[cfg(target_arch = "wasm32")]
@@ -299,6 +360,11 @@ fn debug_state_snapshot(
     sim_state: Res<crate::systems::timeline::SimulationState>,
     input_focus: Res<bevy::input_focus::InputFocus>,
     prop_texts: Query<(Entity, &crate::systems::ui::PropInput, &bevy::text::EditableText)>,
+    ui_nodes: Query<(
+        &crate::systems::ui::PropInput,
+        &bevy::ui::ComputedNode,
+        &bevy::ui::UiGlobalTransform,
+    )>,
     bodies: Query<(
         Entity,
         &crate::components::celestial::CelestialBody,
@@ -335,8 +401,18 @@ fn debug_state_snapshot(
             v.y
         ));
     }
+    let mut rects = Vec::new();
+    for (_, node, gt) in ui_nodes.iter() {
+        rects.push(format!(
+            "[{:.0},{:.0},{:.0},{:.0}]",
+            gt.translation.x - node.size.x / 2.0,
+            gt.translation.y - node.size.y / 2.0,
+            node.size.x,
+            node.size.y
+        ));
+    }
     let json = format!(
-        r#"{{"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"bodies":[{}]}}"#,
+        r#"{{"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"field_rects":[{}],"bodies":[{}]}}"#,
         tool,
         sim_state.paused,
         selected_id,
@@ -344,6 +420,7 @@ fn debug_state_snapshot(
         focused_text.replace('"', "\\\""),
         drag_state.active,
         drag_state.engaged,
+        rects.join(","),
         parts.join(",")
     );
     if let Ok(mut shared) = crate::js_bridge::DEBUG_STATE.lock() {
