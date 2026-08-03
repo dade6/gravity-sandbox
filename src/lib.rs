@@ -207,6 +207,22 @@ pub fn is_load_requested() -> bool {
 /// WASM entry point
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub fn wasm_main() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Cattura i panic Rust e li mostra nel badge (diagnosi remota senza
+        // console browser: l'utente testa su iPhone Safari/Mac)
+        std::panic::set_hook(Box::new(|info| {
+            use wasm_bindgen::JsCast;
+            let msg = format!("PANIC: {}", info);
+            web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&msg));
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Some(el) = doc.get_element_by_id("version-badge") {
+                    let cur = el.text_content().unwrap_or_default();
+                    el.set_text_content(Some(&format!("{} | {}", cur, &msg[..msg.len().min(120)])));
+                }
+            }
+        }));
+    }
     let mut app = App::new();
     // Bevy 0.19: disabilita la rilevazione ambiguità (causa B0001 su WASM con molti plugin)
     app.edit_schedule(Update, |schedule: &mut bevy::ecs::schedule::Schedule| {
