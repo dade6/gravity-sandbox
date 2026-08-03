@@ -235,14 +235,19 @@ fn keypad_buttons(
     buttons: Query<(&Interaction, &KeypadAction), Changed<Interaction>>,
     mut input_focus: ResMut<InputFocus>,
     selected: Res<SelectedBody>,
-    mut editable_query: Query<&mut EditableText>,
+    // ParamSet obbligatorio: Query<&mut EditableText> e Query<&EditableText>
+    // accedono allo stesso componente -> senza ParamSet è un B0001 (panic
+    // all'avvio su WASM)
+    mut queries: ParamSet<(
+        Query<&mut EditableText>,
+        Query<(&PropInput, &EditableText)>,
+    )>,
     mut bodies: Query<(
         &mut CelestialBody,
         &mut Transform,
         &mut LinearVelocity,
         &mut Mass,
     )>,
-    fields: Query<(&PropInput, &EditableText)>,
 ) {
     crate::mark_system("keypad_buttons");
     for (interaction, action) in buttons.iter() {
@@ -252,35 +257,38 @@ fn keypad_buttons(
         let Some(f) = input_focus.get() else {
             continue;
         };
-        let Ok(mut editable) = editable_query.get_mut(f) else {
-            continue;
-        };
         match action {
             KeypadAction::Digit(c) => {
-                editable.queue_edit(bevy::text::TextEdit::Insert(
-                    smol_str::SmolStr::new(&c.to_string()),
-                ));
+                if let Ok(mut editable) = queries.p0().get_mut(f) {
+                    editable.queue_edit(bevy::text::TextEdit::Insert(smol_str::SmolStr::new(
+                        &c.to_string(),
+                    )));
+                }
             }
             KeypadAction::Backspace => {
-                editable.queue_edit(bevy::text::TextEdit::Backspace);
+                if let Ok(mut editable) = queries.p0().get_mut(f) {
+                    editable.queue_edit(bevy::text::TextEdit::Backspace);
+                }
             }
             KeypadAction::Done => {
-                // Applica il valore finale al corpo selezionato (come il sync),
-                // poi chiudi: clear del focus -> keypad_visibility despawna ->
-                // TEXT_INPUT_ACTIVE torna false (il sync desktop riprende).
+                // p0 e p1 vanno usati in momenti separati (ParamSet)
+                let text_value = queries
+                    .p0()
+                    .get(f)
+                    .map(|e| e.value().to_string())
+                    .unwrap_or_default();
+                let prop_name = queries.p1().get(f).map(|(p, _)| p.0).unwrap_or("");
                 if let Some(e) = selected.0 {
-                    if let Ok((mut body, mut transform, mut velocity, mut mass)) = bodies.get_mut(e) {
-                        if let Ok((prop, _)) = fields.get(f) {
-                            let text_value = editable.value().to_string();
-                            apply_prop_value(
-                                prop.0,
-                                &text_value,
-                                &mut body,
-                                &mut transform,
-                                &mut velocity,
-                                &mut mass,
-                            );
-                        }
+                    if let Ok((mut body, mut transform, mut velocity, mut mass)) = bodies.get_mut(e)
+                    {
+                        apply_prop_value(
+                            prop_name,
+                            &text_value,
+                            &mut body,
+                            &mut transform,
+                            &mut velocity,
+                            &mut mass,
+                        );
                     }
                 }
                 *input_focus = InputFocus::default();
