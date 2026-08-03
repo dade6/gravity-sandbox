@@ -133,6 +133,12 @@
         }
 
         if (isIOS && hiddenInput) {
+            // Su iOS il canvas NON deve essere focussabile: il click nativo del
+            // browser (che segue il tap ~0.5s dopo) gli darebbe il focus a causa
+            // di tabindex, rubandolo all'input nascosto -> tastiera chiusa e
+            // campo disattivato. Il focus canvas serve solo su Mac.
+            canvasEl.removeAttribute('tabindex');
+
             // Il testo digitato nella tastiera iOS viene inoltrato al campo Bevy
             hiddenInput.addEventListener('input', () => {
                 if (window.__sandbox) {
@@ -144,11 +150,18 @@
             hiddenInput.addEventListener('blur', () => {
                 if (window.__sandbox) window.__sandbox.set_mobile_input_active(false);
             });
+
             // Hit test SINCrono al tocco: iOS permette il focus su un input solo
             // dentro un handler di tocco. Se il dito è su un campo: focus + tastiera.
             // Se è fuori: chiudi tastiera e focus Bevy (zoom/pan non disturbati).
             canvasEl.addEventListener('touchstart', (e) => {
                 if (!window.__sandbox) return;
+                // Refresh sincrono dei rects (lo snapshot ha max ~300ms di ritardo)
+                try {
+                    const s = JSON.parse(window.__sandbox.debug_state());
+                    if (Array.isArray(s.field_rects) && s.field_rects.length > 0) fieldRects = s.field_rects;
+                    if (s.focused_text) lastFieldText = s.focused_text;
+                } catch (err) { /* snapshot non pronto */ }
                 const t = e.touches[0];
                 if (!t) return;
                 const rect = canvasEl.getBoundingClientRect();
@@ -171,8 +184,12 @@
                     window.__sandbox.set_mobile_input_active(false);
                     hiddenInput.readOnly = true;
                     hiddenInput.blur();
-                    // Il clear del focus Bevy un attimo dopo (il sync ha applicato)
-                    setTimeout(() => { if (window.__sandbox) window.__sandbox.clear_field_focus(); }, 250);
+                    // Il clear del focus Bevy un attimo dopo (il sync ha applicato).
+                    // Solo se conosciamo i rects: senza, non toccare il focus
+                    // (evita la disattivazione del campo appena aperto).
+                    if (fieldRects.length > 0) {
+                        setTimeout(() => { if (window.__sandbox) window.__sandbox.clear_field_focus(); }, 250);
+                    }
                 }
             }, { passive: true });
         }
