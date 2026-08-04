@@ -289,6 +289,10 @@ pub fn wasm_main() {
         ..default()
     }))
     .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
+    // TEMP-DIAG: il trap "Unreachable" del primo frame su Mac/iPhone è la
+    // Minimap (render-to-texture WebGL2) — CONFERMATO dalla bisettrice
+    // (v0.14.24/25 verdi con minimap OFF, texture ON ok). v0.14.26:
+    // Keypad RIATTIVATO, solo MinimapPlugin resta OFF (fix dedicato dopo).
     .add_plugins((
         GravitySandboxPlugin,
         TimelinePlugin,
@@ -298,7 +302,6 @@ pub fn wasm_main() {
         TrajectoryPlugin,
         LightingPlugin,
         LightPlugin,
-        MinimapPlugin,
         PersistencePlugin,
         rendering::TexturePlugin,
         PropertyEditorPlugin,
@@ -306,10 +309,7 @@ pub fn wasm_main() {
         ParallaxPlugin,
         PhysicsPlugins::default(),
     ))
-    // TEMP-DIAG v0.14.23: KeypadPlugin disabilitato per isolare il trap del
-    // primo frame su Mac/iPhone (bisettrice: se la sandbox parte, il keypad
-    // è il colpevole; verrà riattivato nel fix definitivo)
-    .add_plugins((SandboxUIPlugin, ResetPlugin))
+    .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
     .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_on_outside_press))
@@ -412,6 +412,68 @@ mod tests {
         let mut app = sandbox_app_with_window();
         app.update();
         app.update();
+    }
+
+    /// Compila light_material.wgsl in GLSL esattamente come fa wgpu su
+    /// WebGL2 (Safari/Chrome): se naga fallisce o panica qui, è lui il
+    /// colpevole del trap "Unreachable" del primo frame su Mac/iPhone.
+    #[test]
+    fn light_shader_compiles_to_glsl() {
+        let raw = std::fs::read_to_string("assets/shaders/light_material.wgsl").expect("shader file");
+        // Pre-process: Bevy risolve `#define_import_path` (rimosso) e
+        // `#import` (stub di VertexOutput con i soli campi usati dal shader)
+        let src = raw
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("#define_import_path"))
+            .map(|l| {
+                if l.trim_start().starts_with("#import") {
+                    "struct VertexOutput { @builtin(position) clip_position: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) world_position: vec4<f32> }".to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let module =
+            naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("WGSL PARSE FAILED: {e}"));
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("WGSL VALIDATION FAILED: {e:#?}"));
+        for (name, version) in [
+            ("desktop440", naga::back::glsl::Version::Desktop(440)),
+            (
+                "es310_webgl2",
+                naga::back::glsl::Version::Embedded {
+                    version: 310,
+                    is_webgl: true,
+                },
+            ),
+        ] {
+            let options = naga::back::glsl::Options {
+                version,
+                writer_flags: naga::back::glsl::WriterFlags::all(),
+                ..Default::default()
+            };
+            let pipeline_options = naga::back::glsl::PipelineOptions {
+                shader_stage: naga::ShaderStage::Fragment,
+                entry_point: "fragment".into(),
+                multiview: None,
+            };
+            let mut out = String::new();
+            let writer_result =
+                naga::back::glsl::Writer::new(&mut out, &module, &info, &options, &pipeline_options, Default::default());
+            let mut writer = match writer_result {
+                Ok(w) => w,
+                Err(e) => panic!("GLSL WRITER FAILED ({name}): {e}"),
+            };
+            match writer.write() {
+                Ok(_) => println!("{name}: OK ({} bytes)", out.len()),
+                Err(e) => panic!("GLSL COMPILATION FAILED ({name}): {e}"),
+            }
+        }
     }
 }
 

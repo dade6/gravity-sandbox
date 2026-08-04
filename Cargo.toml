@@ -46,6 +46,9 @@ web-sys = { version = "0.3", features = ["console", "Window", "Document"] }
 getrandom = { version = "0.2", features = ["js"] }
 
 # Enable optimization for dependencies only (keep own code unoptimized for fast compile)
+[dev-dependencies]
+naga = { version = "29", features = ["wgsl-in", "glsl-out"] }
+
 [profile.dev]
 opt-level = 0
 debug = "line-tables-only"
