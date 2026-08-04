@@ -600,7 +600,11 @@ pub(crate) fn apply_prop_value(
 /// Legge modifiche da EditableText e le scrive al corpo selezionato
 
 fn sync_property_input_to_body(
-    input_query: Query<(Entity, &PropInput, &EditableText)>,
+    // Changed<EditableText>: applica SOLO quando il testo del campo cambia
+    // (digitazione). Senza questo, il testo del campo focussato veniva
+    // riapplicato al corpo OGNI FRAME -> il reset veniva subito sovrascritto
+    // con l'ultimo valore digitato.
+    input_query: Query<(Entity, &PropInput, &EditableText), Changed<EditableText>>,
     input_focus: Res<InputFocus>,
     selected: Res<SelectedBody>,
     sim_state: Res<SimulationState>,

@@ -93,8 +93,13 @@ fn repause_after_step(
 fn handle_speed_change(
     keys: Res<ButtonInput<KeyCode>>,
     mut sim_state: ResMut<SimulationState>,
+    input_focus: Res<bevy::input_focus::InputFocus>,
 ) {
     crate::mark_system("handle_speed_change");
+    // Campo attivo: i tasti vanno al campo, non alle shortcut (5-8, +/-)
+    if input_focus.get().is_some() {
+        return;
+    }
 
     if keys.just_pressed(KeyCode::Equal) || keys.just_pressed(KeyCode::NumpadAdd) {
         sim_state.speed = (sim_state.speed * 2.0).min(10.0);

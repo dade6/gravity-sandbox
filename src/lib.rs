@@ -567,6 +567,8 @@ fn apply_mobile_text_input(
 /// Quando l'utente preme FUORI da un campo editabile (e fuori dal keypad),
 /// il valore del campo attivo viene applicato al corpo e il focus Bevy viene
 /// rimosso. Fonte di verità: la posizione del press + i rects reali dei campi.
+/// SOLO mobile: su desktop il focus è gestito nativamente da bevy_input_focus
+/// (il clear qui rubava il focus subito dopo il click sul campo su Mac).
 #[cfg(target_arch = "wasm32")]
 fn clear_focus_on_outside_press(
     touches: Res<Touches>,
@@ -590,8 +592,31 @@ fn clear_focus_on_outside_press(
         &mut LinearVelocity,
         &mut Mass,
     )>,
+    mut prev_focus: Local<Option<Entity>>,
 ) {
     crate::mark_system("clear_focus_on_outside_press");
+    let mobile = crate::js_bridge::MOBILE_DEVICE
+        .lock()
+        .map(|m| *m)
+        .unwrap_or(false);
+    if !mobile {
+        return;
+    }
+    // Se il focus è CAMBIATO in questo frame (il tap ha appena attivato un
+    // campo, es. il keypad su iPhone), NON chiuderlo subito: la classificazione
+    // dei rects potrebbe fallire e uccidere il focus appena impostato.
+    if *prev_focus != input_focus.get() {
+        *prev_focus = input_focus.get();
+        return;
+    }
+    // Se il keypad è APERTO, il clear NON agisce mai: la classificazione dei
+    // rects è inaffidabile su iPhone (mismatch di coordinate) e chiuderebbe
+    // il keypad al primo tocco sui bottoni. Si chiude solo con OK
+    // (KeypadAction::Done) o toccando un altro campo (focus cambia).
+    let keypad_open = keypad_btns.iter().next().is_some();
+    if keypad_open {
+        return;
+    }
     let pressed_pos: Option<Vec2> = if mouse_buttons.just_pressed(MouseButton::Left) {
         windows.iter().next().and_then(|w| w.cursor_position())
     } else if touches.any_just_pressed() {

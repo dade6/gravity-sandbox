@@ -73,8 +73,14 @@ fn handle_tool_shortcuts(
     keys: Res<ButtonInput<KeyCode>>,
     mut current: ResMut<CurrentTool>,
     sim_state: Res<SimulationState>,
+    input_focus: Res<bevy::input_focus::InputFocus>,
 ) {
     crate::mark_system("handle_tool_shortcuts");
+    // Un campo di testo è attivo: i tasti digitati vanno al campo, NON alle
+    // shortcut (es. digitare "2" in Mass non deve attivare lo strumento Add)
+    if input_focus.get().is_some() {
+        return;
+    }
 
     let new_tool = if keys.just_pressed(KeyCode::Digit1) { Some(Tool::Select) }
     else if keys.just_pressed(KeyCode::Digit2) { Some(Tool::Add) }
