@@ -15,7 +15,11 @@ RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
 # Asset serviti via HTTP (modificabili senza ricompilare il WASM)
 mkdir -p wasm-dist/assets
 cp -r assets/shaders wasm-dist/assets/
-cp assets/preset.json wasm-dist/assets/preset.json
+# preset.json: usa un symlink invece di una copia, così il server serve SEMPRE
+# il file sorgente assets/preset.json (modifiche visibili senza rebuild).
+# -f sovrascrive un eventuale file/copia precedente; se esiste già un symlink
+# lo aggiorna senza romperlo.
+ln -sf ../../assets/preset.json wasm-dist/assets/preset.json
 # index.html contiene il glue JS (fetch preset, badge versione): copiarlo
 # esplicitamente per non dipendere dal comportamento di wasm-pack
 cp index.html wasm-dist/index.html
