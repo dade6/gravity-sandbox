@@ -199,6 +199,28 @@ fn spawn_toolbar(commands: &mut Commands) {
                 TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
                 TextColor(TEXT_COLOR),
             ));
+            // Bottone Salva: sovrascrive assets/preset.json sul server con il
+            // livello corrente (via POST /save-preset gestito da JS).
+            bar.spawn((
+                Button,
+                TimelinBtn("save"),
+                Node {
+                    height: Val::Px(36.0),
+                    padding: UiRect::horizontal(Val::Px(14.0)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::px(8.0, 8.0, 8.0, 8.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                BorderColor::all(BORDER_COLOR),
+            ))
+            .with_child((
+                Text::new("Salva"),
+                TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
+                TextColor(TEXT_COLOR),
+            ));
             bar.spawn((Node { flex_grow: 1.0, ..default() }));
             bar.spawn((
                 Text::new(format!("Sandbox v{}", crate::version::VERSION)),
@@ -951,6 +973,16 @@ fn handle_ui_buttons(
                 // Ripristina lo stato iniziale (play o pausa),
                 // senza cambiare il CurrentTool né lo stato di pausa.
                 reset_writer.write(ResetMessage);
+            }
+            "save" => {
+                // Salva il livello corrente come preset sul server
+                // (assets/preset.json) via POST /save-preset.
+                #[cfg(target_arch = "wasm32")]
+                {
+                    if let Ok(mut flag) = crate::js_bridge::SAVE_PRESET_REQUESTED.lock() {
+                        *flag = true;
+                    }
+                }
             }
             _ => {}
         }

@@ -88,6 +88,11 @@ mod js_bridge {
     /// modifiche al file si vedono al Reset senza ricaricare la pagina.
     pub static PRESET_RELOAD_REQUESTED: Mutex<bool> = Mutex::new(false);
 
+    /// Flag settato dal bottone Salva (Rust): chiede a JS di serializzare il
+    /// livello corrente (save_level) e farlo scrivere su assets/preset.json
+    /// sul server via POST /save-preset.
+    pub static SAVE_PRESET_REQUESTED: Mutex<bool> = Mutex::new(false);
+
     /// Last error message from persistence operations (empty = no error)
     pub static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
 
@@ -270,6 +275,25 @@ pub fn is_preset_reload_requested() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         if let Ok(mut flag) = crate::js_bridge::PRESET_RELOAD_REQUESTED.lock() {
+            if *flag {
+                *flag = false;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if the Save button has requested overwriting assets/preset.json
+/// on the server with the current level. Returns true once per request,
+/// then resets. JS should poll this and, when true, call save_level()
+/// (wait a frame, call again for the fresh JSON) then POST the JSON to
+/// /save-preset, then set_preset() to refresh the in-memory copy.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn is_save_preset_requested() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut flag) = crate::js_bridge::SAVE_PRESET_REQUESTED.lock() {
             if *flag {
                 *flag = false;
                 return true;

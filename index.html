@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.32</title>
+    <title>Gravity Sandbox v0.14.33</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -106,7 +106,7 @@
     <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:44px monospace;z-index:99;"></div>
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox.js?v=0.14.32';
+        import init, * as sandbox from './gravity_sandbox.js?v=0.14.33';
 
         // Focus DOM del canvas: senza questo, il browser non instrada gli
         // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
@@ -132,7 +132,7 @@
             window.__sandbox = sandbox;
             if (isIOS) sandbox.set_mobile_device(true);
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.32 ✅';
+            if (v) v.textContent = 'v0.14.33 ✅';
 
             // Preset di livello esterno (assets/preset.json): Davide lo modifica sul
             // server e con un refresh vede il cambio, SENZA ricompilare il WASM.
@@ -172,7 +172,7 @@
                 });
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.32 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.33 🛑' + err.message.substring(0, 60);
         });
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio).
@@ -232,6 +232,63 @@
                 .catch(err => {
                     console.warn('Reset: preset.json non ricaricato (' + err.message + ')');
                 });
+        }, 300);
+
+        // Salva → sovrascrive assets/preset.json sul server con il livello
+        // corrente (bottone "Salva" in Bevy UI → flag SAVE_PRESET_REQUESTED).
+        // save_level() è one-shot: la prima chiamata richiede la serializzazione
+        // (SAVE_REQUESTED), la seconda (dopo un frame ECS) restituisce il JSON.
+        let savingPreset = false;
+        setInterval(() => {
+            if (!window.__sandbox || !window.__sandbox.is_save_preset_requested) return;
+            if (savingPreset) return; // evita doppie richieste sovrapposte
+            let requested = false;
+            try {
+                requested = window.__sandbox.is_save_preset_requested();
+            } catch (e) { return; }
+            if (!requested) return;
+            savingPreset = true;
+            try {
+                // 1) Richiedi la serializzazione (setta SAVE_REQUESTED)
+                window.__sandbox.save_level();
+                // 2) Dopo un frame ECS, leggi il JSON risultante
+                setTimeout(() => {
+                    let json = '';
+                    try { json = window.__sandbox.save_level(); } catch (e) { json = ''; }
+                    if (!json || json.length < 2) {
+                        console.warn('Salva: JSON vuoto, riprova');
+                        savingPreset = false;
+                        return;
+                    }
+                    fetch('/save-preset', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: json,
+                    })
+                        .then(r => {
+                            if (!r.ok) throw new Error('HTTP ' + r.status);
+                            return r.json();
+                        })
+                        .then(res => {
+                            // Aggiorna la copia in memoria + conferma
+                            try { window.__sandbox.set_preset(json); } catch (e) {}
+                            console.log('preset.json salvato sul server (' + json.length + ' bytes)');
+                            const v = document.getElementById('version-badge');
+                            if (v && v.textContent.indexOf('✅') >= 0) {
+                                v.textContent = v.textContent.replace(/ ✅$/, ' ✅ saved');
+                                setTimeout(() => { v.textContent = v.textContent.replace(/ saved$/, ''); }, 2000);
+                            }
+                            savingPreset = false;
+                        })
+                        .catch(err => {
+                            console.warn('Salva: POST /save-preset fallito (' + err.message + ')');
+                            savingPreset = false;
+                        });
+                }, 100);
+            } catch (e) {
+                console.warn('Salva: errore (' + e.message + ')');
+                savingPreset = false;
+            }
         }, 300);
     </script>
 </body>

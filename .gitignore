@@ -8,7 +8,6 @@ wasm-dist/
 # Python
 __pycache__/
 *.pyc
-serve_wasm.py
 
 # OS
 .DS_Store
@@ -17,3 +16,7 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Preset utente (sovrascritto dal bottone Salva della sandbox);
+# il default distribuito è assets/preset.default.json
+assets/preset.json
