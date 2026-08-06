@@ -79,6 +79,10 @@ mod js_bridge {
     /// Queue of level JSON strings pushed by JS to trigger a load
     pub static LOAD_COMMANDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+    /// Ultimo preset.json caricato da JS (via set_preset): usato dal bottone
+    /// Reset per ripristinare il livello salvato nel file senza ricompilare.
+    pub static PRESET_JSON: Mutex<Option<String>> = Mutex::new(None);
+
     /// Last error message from persistence operations (empty = no error)
     pub static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
 
@@ -204,6 +208,19 @@ pub fn load_level(json: &str) {
     {
         if let Ok(mut queue) = crate::js_bridge::LOAD_COMMANDS.lock() {
             queue.push(json.to_string());
+        }
+    }
+}
+
+/// Salva il preset di livello (assets/preset.json) lato Rust, così il bottone
+/// Reset può ricaricare lo stato salvato nel file. Chiamata da JS dopo il
+/// fetch del preset all'avvio (prima o dopo load_level, non importa).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn set_preset(json: &str) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut preset) = crate::js_bridge::PRESET_JSON.lock() {
+            *preset = Some(json.to_string());
         }
     }
 }

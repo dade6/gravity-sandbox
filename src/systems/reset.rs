@@ -74,8 +74,26 @@ fn reset_simulation(
         return;
     }
 
-    for (initial, mut transform, mut velocity, mut mass, mut body, history) in bodies.iter_mut()
+    // Se il preset esterno (assets/preset.json) è stato caricato su WASM,
+    // il Reset ricarica il livello dal file: despawn + respawn di tutti i
+    // corpi come fa load_level()/process_load_commands. Così il reset riporta
+    // ESATTAMENTE lo stato salvato nel json (inclusi i corpi cancellati),
+    // senza ricompilare. Su nativo / senza preset: comportamento attuale
+    // (ripristino da InitialBodyState dei corpi esistenti).
+    #[cfg(target_arch = "wasm32")]
     {
+        let preset = crate::js_bridge::PRESET_JSON.lock().ok().and_then(|p| p.clone());
+        if let Some(json) = preset {
+            if let Ok(mut queue) = crate::js_bridge::LOAD_COMMANDS.lock() {
+                queue.push(json);
+            }
+            pending.0 = None;
+            selected.0 = None;
+            return;
+        }
+    }
+
+    for (initial, mut transform, mut velocity, mut mass, mut body, history) in bodies.iter_mut() {
         transform.translation.x = initial.position.x;
         transform.translation.y = initial.position.y;
         velocity.0 = initial.velocity;

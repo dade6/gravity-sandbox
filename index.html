@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.30</title>
+    <title>Gravity Sandbox v0.14.31</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -132,7 +132,7 @@
             window.__sandbox = sandbox;
             if (isIOS) sandbox.set_mobile_device(true);
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.30 ✅';
+            if (v) v.textContent = 'v0.14.31 ✅';
 
             // Preset di livello esterno (assets/preset.json): Davide lo modifica sul
             // server e con un refresh vede il cambio, SENZA ricompilare il WASM.
@@ -158,6 +158,7 @@
                         return;
                     }
                     try {
+                        sandbox.set_preset(txt); // salva il preset per il Reset
                         sandbox.load_level(txt);
                     } catch (e) {
                         console.warn('preset.json load_level fallita: uso livello hardcoded (' + e.message + ')');
@@ -171,7 +172,7 @@
                 });
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.30 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.31 🛑' + err.message.substring(0, 60);
         });
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio).
