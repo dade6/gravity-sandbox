@@ -83,6 +83,11 @@ mod js_bridge {
     /// Reset per ripristinare il livello salvato nel file senza ricompilare.
     pub static PRESET_JSON: Mutex<Option<String>> = Mutex::new(None);
 
+    /// Flag settato dal bottone Reset (Rust) per chiedere a JS di RI-FETCHARE
+    /// preset.json dal server (con cache-buster) e ricaricarlo: così le
+    /// modifiche al file si vedono al Reset senza ricaricare la pagina.
+    pub static PRESET_RELOAD_REQUESTED: Mutex<bool> = Mutex::new(false);
+
     /// Last error message from persistence operations (empty = no error)
     pub static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
 
@@ -246,6 +251,25 @@ pub fn is_load_requested() -> bool {
     #[cfg(target_arch = "wasm32")]
     {
         if let Ok(mut flag) = crate::js_bridge::LOAD_REQUESTED.lock() {
+            if *flag {
+                *flag = false;
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if the Reset button has requested a fresh fetch of preset.json.
+/// Returns true once per request, then resets. JS should poll this and,
+/// when true, re-fetch assets/preset.json (cache-buster) and call
+/// load_level() with the fresh content — so edits to the file on the
+/// server are picked up on Reset WITHOUT reloading the page.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn is_preset_reload_requested() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut flag) = crate::js_bridge::PRESET_RELOAD_REQUESTED.lock() {
             if *flag {
                 *flag = false;
                 return true;

@@ -2,7 +2,7 @@
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Gravity Sandbox v0.14.31</title>
+    <title>Gravity Sandbox v0.14.32</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         html, body {
@@ -132,7 +132,7 @@
             window.__sandbox = sandbox;
             if (isIOS) sandbox.set_mobile_device(true);
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.31 ✅';
+            if (v) v.textContent = 'v0.14.32 ✅';
 
             // Preset di livello esterno (assets/preset.json): Davide lo modifica sul
             // server e con un refresh vede il cambio, SENZA ricompilare il WASM.
@@ -172,7 +172,7 @@
                 });
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.31 🛑' + err.message.substring(0, 60);
+            if (v) v.textContent = 'v0.14.32 🛑' + err.message.substring(0, 60);
         });
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio).
@@ -203,6 +203,35 @@
             const toolShort = { Select: 'SEL', Add: 'ADD', Move: 'MOV', Delete: 'DEL' }[s.tool] || s.tool;
             const focusTxt = s.focus !== 4294967295 ? 'focus ON' : 'focus off';
             el.textContent = `${toolShort} | ${s.paused ? 'PAUSA' : 'PLAY'} | drag ${s.drag_active ? (s.drag_engaged ? 'ON' : 'hold') : 'off'} | ${s.bodies ? s.bodies.length : 0} corpi | ${focusTxt}${s.focused_text ? ' | ' + s.focused_text.substring(0, 14) : ''} | sys:${s.last_system || ''} f${s.frame || 0}`;
+        }, 300);
+
+        // Reset → ri-fetch di preset.json dal server: Davide modifica il file,
+        // clicca Reset e vede le modifiche SENZA ricaricare la pagina.
+        // Il flag è settato da Rust (reset_simulation); qui lo consumiamo e
+        // facciamo un fetch fresco con cache-buster, poi ricarichiamo il livello.
+        setInterval(() => {
+            if (!window.__sandbox || !window.__sandbox.is_preset_reload_requested) return;
+            try {
+                if (!window.__sandbox.is_preset_reload_requested()) return;
+            } catch (e) { return; }
+            fetch('assets/preset.json?v=' + Date.now(), { cache: 'no-store' })
+                .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+                .then(txt => {
+                    try { JSON.parse(txt); } catch (e) {
+                        console.warn('preset.json invalido al Reset (' + e.message + ')');
+                        return;
+                    }
+                    try {
+                        window.__sandbox.set_preset(txt);
+                        window.__sandbox.load_level(txt);
+                        console.log('preset.json riletto al Reset (' + txt.length + ' bytes)');
+                    } catch (e) {
+                        console.warn('Reset: load_level fallita (' + e.message + ')');
+                    }
+                })
+                .catch(err => {
+                    console.warn('Reset: preset.json non ricaricato (' + err.message + ')');
+                });
         }, 300);
     </script>
 </body>

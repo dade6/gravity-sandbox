@@ -75,17 +75,20 @@ fn reset_simulation(
     }
 
     // Se il preset esterno (assets/preset.json) è stato caricato su WASM,
-    // il Reset ricarica il livello dal file: despawn + respawn di tutti i
-    // corpi come fa load_level()/process_load_commands. Così il reset riporta
-    // ESATTAMENTE lo stato salvato nel json (inclusi i corpi cancellati),
-    // senza ricompilare. Su nativo / senza preset: comportamento attuale
-    // (ripristino da InitialBodyState dei corpi esistenti).
+    // il Reset chiede a JS di RI-FETCHARE il file dal server (cache-buster)
+    // e ricaricarlo: così le modifiche al preset.json si vedono al Reset
+    // SENZA ricaricare la pagina. Su nativo / senza preset: comportamento
+    // attuale (ripristino da InitialBodyState dei corpi esistenti).
     #[cfg(target_arch = "wasm32")]
     {
-        let preset = crate::js_bridge::PRESET_JSON.lock().ok().and_then(|p| p.clone());
-        if let Some(json) = preset {
-            if let Ok(mut queue) = crate::js_bridge::LOAD_COMMANDS.lock() {
-                queue.push(json);
+        let has_preset = crate::js_bridge::PRESET_JSON
+            .lock()
+            .ok()
+            .map(|p| p.is_some())
+            .unwrap_or(false);
+        if has_preset {
+            if let Ok(mut flag) = crate::js_bridge::PRESET_RELOAD_REQUESTED.lock() {
+                *flag = true;
             }
             pending.0 = None;
             selected.0 = None;
