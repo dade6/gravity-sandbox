@@ -105,7 +105,7 @@ fn lerp_color(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> (f32, f32, f32) {
 }
 
 /// Build a Bevy `Image` from a flat RGBA pixel buffer.
-fn build_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
+pub(crate) fn build_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
     let size = Extent3d {
         width,
         height,

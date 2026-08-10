@@ -22,6 +22,7 @@ use systems::persistence::PersistencePlugin;
 use systems::property_editor::PropertyEditorPlugin;
 use systems::reset::ResetPlugin;
 use systems::selection::SelectionPlugin;
+use systems::shadow::ShadowPlugin;
 use systems::timeline::TimelinePlugin;
 use systems::tools::ToolPlugin;
 use systems::trajectory::TrajectoryPlugin;
@@ -372,6 +373,7 @@ pub fn wasm_main() {
         PropertyEditorPlugin,
         DebugSpawnPlugin,
         ParallaxPlugin,
+        ShadowPlugin,
         PhysicsPlugins::default(),
     ))
     .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
@@ -434,7 +436,7 @@ mod tests {
             PropertyEditorPlugin,
             DebugSpawnPlugin,
             ParallaxPlugin,
-            PhysicsPlugins::default(),
+            (ShadowPlugin, PhysicsPlugins::default()),
         ))
         .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
         .insert_resource(Gravity::ZERO)
