@@ -1,11 +1,13 @@
 //! Ticket 10 — Ombre proiettate (shadow cones)
 //!
 //! Every non-luminous body lit by a star casts a dark cone away from the star:
-//! - geometry: tangent semi-angle α = asin(r/d); the cone base is the two
-//!   tangent points on the body's far side (radius vector rotated ±α around
-//!   the axis opposite the star); the far end extends along the two diverging
-//!   tangent rays for `clamp(distance × k, min, max)` units, so the cone
-//!   widens as it moves away from the star
+//! - geometry: tangent semi-angle α = asin(r/d); the cone base is the body's
+//!   silhouette as seen from the star — the two tangent rays graze the body's
+//!   SIDES (the true tangent points sit at (±r along the perpendicular), NOT
+//!   at ±α from the axis — those would collapse to a ~1px-wide base for small
+//!   α). The far end extends along the two diverging tangent rays for
+//!   `clamp(distance × k, min, max)` units, so the cone widens as it moves
+//!   away from the star and its width always scales with the body's diameter
 //! - rendering: a black `ColorMaterial` quad at alpha ~0.3, spawned as a
 //!   child of the body at z = -1 (below every body, which live at z = 0), so
 //!   it follows the body for free; vertices are updated in place per frame
@@ -266,12 +268,15 @@ fn update_shadows(
 /// `radius` lit by a star at distance `dist`, with `light_dir` the NORMALIZED
 /// direction FROM the body TOWARD the star.
 ///
-/// Tangent semi-angle α = asin(r/d). The cone base is the two tangent points
-/// on the far side of the body (the radius vector rotated ±α around the axis
-/// opposite the star) and the far end extends along the two diverging tangent
-/// rays for `clamp(dist × SHADOW_LENGTH_FACTOR, min, max)` units, so the cone
-/// widens away from the star. Returns `None` for degenerate cases (zero
-/// radius, star inside/touching the body).
+/// Tangent semi-angle α = asin(r/d). The cone base is the body's silhouette
+/// as seen from the star: the two tangent rays graze the body's SIDES, so the
+/// base points are `±radius` along the perpendicular to the light axis (NOT
+/// the circle points at ±α from the axis, which collapse to a ~1px-wide base
+/// for small α). The far end extends along the two diverging tangent rays for
+/// `clamp(dist × SHADOW_LENGTH_FACTOR, min, max)` units, so the cone widens
+/// away from the star and its width always scales with the body's diameter.
+/// Returns `None` for degenerate cases (zero radius, star inside/touching the
+/// body).
 fn shadow_cone_vertices(radius: f32, light_dir: Vec2, dist: f32) -> Option<[Vec3; 4]> {
     if radius <= 0.0 || dist <= radius {
         return None;
@@ -284,9 +289,10 @@ fn shadow_cone_vertices(radius: f32, light_dir: Vec2, dist: f32) -> Option<[Vec3
     // Diverging tangent-ray directions (axis rotated ±α).
     let dir_plus = axis * cos_a + perp * sin_a;
     let dir_minus = axis * cos_a - perp * sin_a;
-    // Base: tangent points on the body's far side.
-    let t_plus = dir_plus * radius;
-    let t_minus = dir_minus * radius;
+    // Base: the body's silhouette — tangent rays graze the body's sides, so
+    // the base spans the full diameter perpendicular to the light axis.
+    let t_plus = perp * radius;
+    let t_minus = -perp * radius;
     // Far end: extend along the diverging rays.
     let len = (dist * SHADOW_LENGTH_FACTOR).clamp(SHADOW_MIN_LENGTH, SHADOW_MAX_LENGTH);
     let f_plus = t_plus + dir_plus * len;
@@ -400,6 +406,27 @@ mod tests {
             len_far > len_near * 1.5,
             "far {len_far} should be much longer than near {len_near}"
         );
+    }
+
+    #[test]
+    fn cone_base_spans_body_diameter_and_scales_with_radius() {
+        // Base width == 2r (the body's full diameter), regardless of distance:
+        // a 12-radius body at d=300 (α≈2.3°) must NOT collapse to a ~1px base.
+        let v = shadow_cone_vertices(12.0, Vec2::X, 300.0).unwrap();
+        let base_width = v[0].truncate().distance(v[1].truncate());
+        assert!(
+            (base_width - 24.0).abs() < 1e-3,
+            "base {base_width} should be 2r = 24"
+        );
+        // Wider body -> wider base (proportional, not constant).
+        let v_big = shadow_cone_vertices(40.0, Vec2::X, 300.0).unwrap();
+        let base_big = v_big[0].truncate().distance(v_big[1].truncate());
+        assert!((base_big - 80.0).abs() < 1e-3, "base {base_big} should be 80");
+        // Base points sit ON the body silhouette (|t| == radius) and the cone
+        // still widens away from the star.
+        assert!((v[0].truncate().length() - 12.0).abs() < 1e-4);
+        let far_width = v[2].truncate().distance(v[3].truncate());
+        assert!(far_width > base_width, "far {far_width} > base {base_width}");
     }
 
     #[test]
