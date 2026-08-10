@@ -482,63 +482,117 @@ mod tests {
     /// Compila light_material.wgsl in GLSL esattamente come fa wgpu su
     /// WebGL2 (Safari/Chrome): se naga fallisce o panica qui, è lui il
     /// colpevole del trap "Unreachable" del primo frame su Mac/iPhone.
+    ///
+    /// Verifica entrambe le varianti del preprocessore: con e senza
+    /// VERTEX_UVS (la mesh Circle ha gli UV, ma il fallback polare deve
+    /// compilare comunque).
     #[test]
     fn light_shader_compiles_to_glsl() {
         let raw = std::fs::read_to_string("assets/shaders/light_material.wgsl").expect("shader file");
-        // Pre-process: Bevy risolve `#define_import_path` (rimosso) e
-        // `#import` (stub di VertexOutput con i soli campi usati dal shader)
-        let src = raw
+        // Pre-process: Bevy risolve `#define_import_path` (rimosso),
+        // `#import` (stub di VertexOutput con la vera disposizione dei
+        // location) e il macro `MATERIAL_BIND_GROUP` (sostituito dal valore
+        // reale 2, vedi bevy_sprite_render::material::MATERIAL_2D_BIND_GROUP_INDEX).
+        let base = raw
             .lines()
             .filter(|l| !l.trim_start().starts_with("#define_import_path"))
             .map(|l| {
                 if l.trim_start().starts_with("#import") {
-                    "struct VertexOutput { @builtin(position) clip_position: vec4<f32>, @location(0) uv: vec2<f32>, @location(1) world_position: vec4<f32> }".to_string()
+                    "struct VertexOutput { @builtin(position) clip_position: vec4<f32>, @location(0) world_position: vec4<f32>, @location(1) world_normal: vec3<f32>, @location(2) uv: vec2<f32> }".to_string()
                 } else {
-                    l.to_string()
+                    l.replace("@group(#{MATERIAL_BIND_GROUP})", "@group(2)")
                 }
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let module =
-            naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("WGSL PARSE FAILED: {e}"));
-        let info = naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("WGSL VALIDATION FAILED: {e:#?}"));
-        for (name, version) in [
-            ("desktop440", naga::back::glsl::Version::Desktop(440)),
-            (
-                "es310_webgl2",
-                naga::back::glsl::Version::Embedded {
-                    version: 310,
-                    is_webgl: true,
-                },
-            ),
+
+        for (variant, src) in [
+            // Senza VERTEX_UVS: usa il fallback polare (mesh senza UV)
+            ("polar_fallback", preprocess_vertex_uvs(&base, false)),
+            // Con VERTEX_UVS: campiona in.uv (mesh Circle con UV)
+            ("uv_mesh", preprocess_vertex_uvs(&base, true)),
         ] {
-            let options = naga::back::glsl::Options {
-                version,
-                writer_flags: naga::back::glsl::WriterFlags::all(),
-                ..Default::default()
-            };
-            let pipeline_options = naga::back::glsl::PipelineOptions {
-                shader_stage: naga::ShaderStage::Fragment,
-                entry_point: "fragment".into(),
-                multiview: None,
-            };
-            let mut out = String::new();
-            let writer_result =
-                naga::back::glsl::Writer::new(&mut out, &module, &info, &options, &pipeline_options, Default::default());
-            let mut writer = match writer_result {
-                Ok(w) => w,
-                Err(e) => panic!("GLSL WRITER FAILED ({name}): {e}"),
-            };
-            match writer.write() {
-                Ok(_) => println!("{name}: OK ({} bytes)", out.len()),
-                Err(e) => panic!("GLSL COMPILATION FAILED ({name}): {e}"),
+            let module = naga::front::wgsl::parse_str(&src)
+                .unwrap_or_else(|e| panic!("WGSL PARSE FAILED ({variant}): {e}"));
+            let info = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("WGSL VALIDATION FAILED ({variant}): {e:#?}"));
+            for (name, version) in [
+                ("desktop440", naga::back::glsl::Version::Desktop(440)),
+                (
+                    "es310_webgl2",
+                    naga::back::glsl::Version::Embedded {
+                        version: 310,
+                        is_webgl: true,
+                    },
+                ),
+            ] {
+                let options = naga::back::glsl::Options {
+                    version,
+                    writer_flags: naga::back::glsl::WriterFlags::all(),
+                    ..Default::default()
+                };
+                let pipeline_options = naga::back::glsl::PipelineOptions {
+                    shader_stage: naga::ShaderStage::Fragment,
+                    entry_point: "fragment".into(),
+                    multiview: None,
+                };
+                let mut out = String::new();
+                let writer_result = naga::back::glsl::Writer::new(
+                    &mut out,
+                    &module,
+                    &info,
+                    &options,
+                    &pipeline_options,
+                    Default::default(),
+                );
+                let mut writer = match writer_result {
+                    Ok(w) => w,
+                    Err(e) => panic!("GLSL WRITER FAILED ({variant}/{name}): {e}"),
+                };
+                match writer.write() {
+                    Ok(_) => println!("{variant}/{name}: OK ({} bytes)", out.len()),
+                    Err(e) => panic!("GLSL COMPILATION FAILED ({variant}/{name}): {e}"),
+                }
             }
         }
+    }
+
+    /// Mini-preprocessore per il blocco `#ifdef VERTEX_UVS` dello shader:
+    /// naga non ha preprocessore, lo risolviamo come fa bevy_shader.
+    /// `use_uv = true` tiene il ramo `in.uv`, `false` il fallback polare.
+    fn preprocess_vertex_uvs(src: &str, use_uv: bool) -> String {
+        let mut out = Vec::new();
+        let mut in_ifdef = false;
+        let mut in_else = false;
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with("#ifdef") {
+                in_ifdef = true;
+                in_else = false;
+                continue;
+            }
+            if in_ifdef && t.starts_with("#else") {
+                in_else = true;
+                continue;
+            }
+            if in_ifdef && t.starts_with("#endif") {
+                in_ifdef = false;
+                continue;
+            }
+            if in_ifdef {
+                let take = if in_else { !use_uv } else { use_uv };
+                if take {
+                    out.push(line);
+                }
+                continue;
+            }
+            out.push(line);
+        }
+        out.join("\n")
     }
 }
 

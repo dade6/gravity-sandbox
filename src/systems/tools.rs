@@ -1,11 +1,11 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
-use bevy::sprite_render::AlphaMode2d;
 
 use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::initial_state::InitialBodyState;
-use crate::systems::camera::MainCamera;
 use crate::components::trajectory::TrajectoryHistory;
+use crate::systems::camera::MainCamera;
+use crate::systems::lighting::LightMaterial;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::SimulationState;
 
@@ -162,7 +162,7 @@ fn add_tool_system(
     sim_state: Res<SimulationState>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut light_materials: ResMut<Assets<LightMaterial>>,
     mut selected: ResMut<SelectedBody>,
 ) {
     crate::mark_system("add_tool_system");
@@ -196,9 +196,11 @@ fn add_tool_system(
             luminous: false,
         },
         Mesh2d(meshes.add(Circle::new(radius))),
-        MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgb(
-            color[0], color[1], color[2],
-        )))),
+        MeshMaterial2d(light_materials.add(LightMaterial {
+            base_color: Color::srgb(color[0], color[1], color[2]),
+            body_radius: radius,
+            ..default()
+        })),
         Transform::from_xyz(world_pos.x, world_pos.y, 0.0),
         RigidBody::Dynamic,
         Collider::circle(radius),
@@ -234,8 +236,8 @@ fn move_tool_system(
     time: Res<Time<Real>>,
     mut selected: ResMut<SelectedBody>,
     mut drag_state: ResMut<MoveDragState>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    material_query: Query<&MeshMaterial2d<ColorMaterial>>,
+    mut materials: ResMut<Assets<LightMaterial>>,
+    material_query: Query<&MeshMaterial2d<LightMaterial>>,
 ) {
     crate::mark_system("move_tool_system");
 
@@ -283,8 +285,7 @@ fn move_tool_system(
                 // ancora l'opacità: il feedback 0.5 parte solo oltre soglia.
                 if let Ok(mat_handle) = material_query.get(entity) {
                     if let Some(material) = materials.get(&mat_handle.0) {
-                        drag_state.original_alpha = 1.0; // default
-                        let srgba = material.color.to_srgba();
+                        let srgba = material.base_color.to_srgba();
                         drag_state.original_alpha = srgba.alpha;
                     }
                 }
@@ -348,8 +349,8 @@ fn move_tool_system(
 fn close_drag(
     drag_state: &mut ResMut<MoveDragState>,
     velocities: &mut Query<&mut LinearVelocity>,
-    material_query: &Query<&MeshMaterial2d<ColorMaterial>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
+    material_query: &Query<&MeshMaterial2d<LightMaterial>>,
+    materials: &mut ResMut<Assets<LightMaterial>>,
 ) {
     if let Some(entity) = drag_state.entity {
         if let Ok(mut vel) = velocities.get_mut(entity) {
@@ -364,22 +365,19 @@ fn close_drag(
     drag_state.press_start = None;
 }
 
-/// Set the alpha of a body's material. Also switches alpha_mode to Blend when alpha < 1.0.
+/// Set the alpha of a body's material (drag transparency feedback).
+/// Scrive su `base_color.a`: la pipeline passa automaticamente a blend
+/// quando l'alpha scende sotto 1 (vedi `LightMaterial::alpha_mode`).
 fn set_alpha(
     entity: Entity,
-    material_query: &Query<&MeshMaterial2d<ColorMaterial>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
+    material_query: &Query<&MeshMaterial2d<LightMaterial>>,
+    materials: &mut ResMut<Assets<LightMaterial>>,
     alpha: f32,
 ) {
     if let Ok(mat_handle) = material_query.get(entity) {
         if let Some(mut material) = materials.get_mut(&mat_handle.0) {
-            let srgba = material.color.to_srgba();
-            material.color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
-            material.alpha_mode = if alpha < 1.0 {
-                AlphaMode2d::Blend
-            } else {
-                AlphaMode2d::Opaque
-            };
+            let srgba = material.base_color.to_srgba();
+            material.base_color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
         }
     }
 }
@@ -387,8 +385,8 @@ fn set_alpha(
 /// Restore the alpha of a body's material to a previous value.
 fn restore_alpha(
     entity: Entity,
-    material_query: &Query<&MeshMaterial2d<ColorMaterial>>,
-    materials: &mut ResMut<Assets<ColorMaterial>>,
+    material_query: &Query<&MeshMaterial2d<LightMaterial>>,
+    materials: &mut ResMut<Assets<LightMaterial>>,
     original_alpha: f32,
 ) {
     set_alpha(entity, material_query, materials, original_alpha);

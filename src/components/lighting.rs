@@ -34,6 +34,16 @@ pub struct LightInfo {
     pub intensity: f32,
     /// Distance to the nearest star in world units
     pub distance_to_star: f32,
+    /// World-space position of the nearest star (fed to the LightMaterial
+    /// per-pixel shader so it can compute the light direction itself).
+    pub light_pos: Vec2,
+    /// RGB colour of the nearest star (from `CelestialBody.color` —
+    /// `LightSource` carries no colour).
+    pub light_color: Vec3,
+    /// Raw intensity of the nearest star (before distance falloff).
+    pub star_intensity: f32,
+    /// Falloff constant of the nearest star.
+    pub falloff: f32,
 }
 
 /// Global ambient light resource.

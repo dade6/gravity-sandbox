@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::celestial::{BodyType, CelestialBody};
+use crate::systems::lighting::LightMaterial;
 use crate::systems::timeline::SimulationState;
 
 // ============================================================
@@ -140,6 +141,7 @@ fn process_load_commands(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut light_materials: ResMut<Assets<LightMaterial>>,
     bodies: Query<Entity, With<CelestialBody>>,
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
@@ -190,31 +192,51 @@ fn process_load_commands(
             let radius = body_data.radius;
             let color = Color::srgb(body_data.color[0], body_data.color[1], body_data.color[2]);
 
-            commands.spawn((
-                CelestialBody {
-                    name: body_data.name.clone(),
-                    body_type: body_data.body_type,
-                    mass: body_data.mass,
-                    radius,
-                    color: body_data.color,
-                    luminous: body_data.luminous,
-                },
-                Mesh2d(meshes.add(Circle::new(radius))),
-                MeshMaterial2d(materials.add(ColorMaterial::from_color(color))),
-                Transform::from_xyz(body_data.position[0], body_data.position[1], 0.0),
-                RigidBody::Dynamic,
-                Collider::circle(radius),
-                Mass(body_data.mass),
-                LinearVelocity(Vec2::new(body_data.velocity[0], body_data.velocity[1])),
-                ConstantForce(Vec2::ZERO),
-                TrajectoryHistory::default(),
-                InitialBodyState {
-                    position: Vec2::new(body_data.position[0], body_data.position[1]),
-                    velocity: Vec2::new(body_data.velocity[0], body_data.velocity[1]),
-                    mass: body_data.mass,
-                    radius,
-                },
-            ));
+            // Stelle (luminous) restano su ColorMaterial brillante; i corpi
+            // illuminati usano LightMaterial per l'illuminazione per-pixel.
+            // I due materiali hanno tipi diversi (`MeshMaterial2d<M>`), quindi
+            // non possono stare nello stesso if/else: spawn comune + insert
+            // condizionale del materiale.
+            let entity = commands
+                .spawn((
+                    CelestialBody {
+                        name: body_data.name.clone(),
+                        body_type: body_data.body_type,
+                        mass: body_data.mass,
+                        radius,
+                        color: body_data.color,
+                        luminous: body_data.luminous,
+                    },
+                    Mesh2d(meshes.add(Circle::new(radius))),
+                    Transform::from_xyz(body_data.position[0], body_data.position[1], 0.0),
+                    RigidBody::Dynamic,
+                    Collider::circle(radius),
+                    Mass(body_data.mass),
+                    LinearVelocity(Vec2::new(body_data.velocity[0], body_data.velocity[1])),
+                    ConstantForce(Vec2::ZERO),
+                    TrajectoryHistory::default(),
+                    InitialBodyState {
+                        position: Vec2::new(body_data.position[0], body_data.position[1]),
+                        velocity: Vec2::new(body_data.velocity[0], body_data.velocity[1]),
+                        mass: body_data.mass,
+                        radius,
+                    },
+                ))
+                .id();
+
+            if body_data.luminous {
+                commands.entity(entity).insert(MeshMaterial2d(
+                    materials.add(ColorMaterial::from_color(color)),
+                ));
+            } else {
+                commands.entity(entity).insert(MeshMaterial2d(light_materials.add(
+                    LightMaterial {
+                        base_color: color,
+                        body_radius: radius,
+                        ..default()
+                    },
+                )));
+            }
         }
 
         // Clear any stale error on successful load
