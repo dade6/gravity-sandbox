@@ -213,13 +213,20 @@ fn spawn_star_glows(
 /// Recompute the cone geometry for every shadow and toggle visibility
 /// following the culling rules. Only the POSITION attribute is rewritten
 /// (normal/UV never change); visibility is touched only on actual changes.
+///
+/// The cone vertices are computed in the body's LOCAL space (the shadow mesh
+/// is a child of the body). `LightInfo.direction` is world-space, so it is
+/// first transformed into the body's local frame (`rot⁻¹ · dir`): otherwise a
+/// body rotated by a collision (Avian leaves a non-identity rotation on the
+/// transform) would drag its shadow cone with it, pointing it away from the
+/// star.
 fn update_shadows(
     mut shadows: Query<(&ChildOf, &Mesh2d, &mut Visibility), With<ShadowCone>>,
-    bodies: Query<(&CelestialBody, Option<&LightInfo>)>,
+    bodies: Query<(&CelestialBody, &Transform, Option<&LightInfo>)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     for (child_of, mesh2d, mut vis) in shadows.iter_mut() {
-        let (body, light_info) = match bodies.get(child_of.0) {
+        let (body, transform, light_info) = match bodies.get(child_of.0) {
             Ok(b) => b,
             Err(_) => continue,
         };
@@ -232,7 +239,11 @@ fn update_shadows(
                 && body.radius >= SHADOW_MIN_RADIUS
                 && li.distance_to_star > body.radius
             {
-                shadow_cone_vertices(body.radius, li.direction, li.distance_to_star)
+                // World direction -> body-local frame so the cone stays
+                // oriented away from the star regardless of the body's
+                // rotation (e.g. after a collision).
+                let local_dir = (transform.rotation.inverse() * li.direction.extend(0.0)).truncate();
+                shadow_cone_vertices(body.radius, local_dir, li.distance_to_star)
             } else {
                 None
             }
@@ -561,5 +572,79 @@ mod tests {
             }
         }
         assert!(found);
+    }
+
+    #[test]
+    fn rotated_body_cone_still_points_away_from_star_in_world() {
+        // A collision can leave the body's Transform rotated (Avian). The cone
+        // vertices live in the body's local frame (the mesh is a child), so the
+        // system must compensate: rotate the world light direction by rot⁻¹
+        // before building the cone. Star at origin, planet at +X -> the cone
+        // must point +X in WORLD space even with the body rotated 90°.
+        let rot = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let mut app = test_app();
+        let planet = {
+            let world = app.world_mut();
+            let e = world
+                .spawn((
+                    CelestialBody {
+                        name: "Planet".into(),
+                        body_type: BodyType::Planet,
+                        mass: 100.0,
+                        radius: 12.0,
+                        color: [0.3, 0.6, 1.0],
+                        luminous: false,
+                    },
+                    Transform::from_xyz(300.0, 0.0, 0.0).with_rotation(rot),
+                    LightInfo {
+                        direction: Vec2::NEG_X, // toward star at origin
+                        intensity: 0.5,
+                        distance_to_star: 300.0,
+                        light_pos: Vec2::ZERO,
+                        light_color: Vec3::new(1.0, 0.9, 0.3),
+                        star_intensity: 1.0,
+                        falloff: 0.0001,
+                    },
+                ))
+                .id();
+            spawn_star(world, Vec2::ZERO);
+            e
+        };
+
+        app.update();
+        app.update();
+
+        let mut world = app.world_mut();
+        let mut query = world.query::<(&ChildOf, &Visibility, &Mesh2d)>();
+        let mesh_handle = query
+            .iter(world)
+            .find(|(co, _, _)| co.0 == planet)
+            .map(|(_, _, m)| m.0.clone())
+            .expect("shadow child exists");
+        assert_eq!(
+            query.iter(world).find(|(co, _, _)| co.0 == planet).unwrap().1,
+            &Visibility::Visible
+        );
+
+        // Read the cone vertices (body-local), rotate them into world space.
+        let mesh = world.resource::<Assets<Mesh>>().get(&mesh_handle).unwrap();
+        let bevy::render::mesh::VertexAttributeValues::Float32x3(pos) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap()
+        else {
+            panic!("expected Float32x3 positions");
+        };
+        let verts: Vec<Vec3> = pos.iter().map(|v| rot * Vec3::from_array(*v)).collect();
+        // Cone base = verts[0..2] (two points on the body), far end = verts[2..4].
+        // The cone must extend toward +X (away from the star at origin).
+        let base_mid = (verts[0] + verts[1]) / 2.0;
+        let far_mid = (verts[2] + verts[3]) / 2.0;
+        let dir = (far_mid - base_mid).truncate().normalize();
+        assert!(
+            dir.dot(Vec2::X) > 0.99,
+            "cone must point +X in world, got dir {dir:?} (rotated body bug)"
+        );
+        // Base still spans the body diameter (2r) in world space.
+        let base_width = verts[0].truncate().distance(verts[1].truncate());
+        assert!((base_width - 24.0).abs() < 1e-3, "base {base_width}");
     }
 }
