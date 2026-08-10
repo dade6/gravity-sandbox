@@ -13,6 +13,7 @@ pub mod version;
 
 use components::debug::DebugSpawnPlugin;
 use systems::camera::{CameraControllerPlugin, MainCamera};
+use systems::firefly_bridge::FireflyBridgePlugin;
 use systems::gravity;
 use systems::light::LightPlugin;
 use systems::lighting::LightingPlugin;
@@ -376,7 +377,12 @@ pub fn wasm_main() {
         ShadowPlugin,
         PhysicsPlugins::default(),
     ))
-    .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
+    .add_plugins((
+        SandboxUIPlugin,
+        ResetPlugin,
+        systems::keypad::KeypadPlugin,
+        FireflyBridgePlugin,
+    ))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
     .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_on_outside_press))

@@ -27,12 +27,13 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_sprite",
     "bevy_render",
     "bevy_core_pipeline",
-    "webgl2",
+    "webgpu",
     "x11",
     "wayland",
 ] }
 
 avian2d = "0.7"
+bevy_firefly = "0.19"
 bevy_shader = { version = "0.19", default-features = false }
 libm = "=0.2.11"
 serde = { version = "1", features = ["derive"] }
