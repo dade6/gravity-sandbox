@@ -55,8 +55,16 @@ fn init_light_sources(
 ///
 /// Bodies beyond `MAX_LIGHT_DISTANCE` from any star receive 0 direct light
 /// (only ambient light from `AmbientLight` resource).
+///
+/// Occlusion: if another non-luminous body lies on the segment star→body
+/// (its circle intersects the segment), the body is in shadow and receives
+/// 0 direct light — only ambient. This makes a planet behind another planet
+/// actually dark (the shadow cones are decorative; the light must match).
+/// Stars never occlude (they emit light, and the ticket says they cast no
+/// shadow).
 fn compute_lighting(
     stars: Query<(&CelestialBody, &GlobalTransform, &LightSource)>,
+    occluders: Query<(Entity, &CelestialBody, &GlobalTransform), Without<LightSource>>,
     mut bodies: Query<(
         Entity,
         &CelestialBody,
@@ -76,6 +84,14 @@ fn compute_lighting(
                 Vec3::new(body.color[0], body.color[1], body.color[2]),
             )
         })
+        .collect();
+
+    // Occluders: every non-luminous body (stars have LightSource and never
+    // occlude). Collected once per frame; the segment test is O(occluders)
+    // per body, so total O(n²) with a trivial constant — fine for ~20 bodies.
+    let occluder_data: Vec<(Entity, Vec2, f32)> = occluders
+        .iter()
+        .map(|(e, body, xform)| (e, xform.translation().truncate(), body.radius))
         .collect();
 
     if star_data.is_empty() {
@@ -130,7 +146,13 @@ fn compute_lighting(
                 Vec2::ZERO
             };
 
-            let received = if dist > MAX_LIGHT_DISTANCE {
+            // Occlusion: another body between this one and the star blocks
+            // the light (the body itself is excluded by the t-range).
+            let occluded = occluder_data.iter().any(|&(oe, opos, orad)| {
+                oe != entity && segment_hits_circle(star_pos, body_pos, opos, orad)
+            });
+
+            let received = if occluded || dist > MAX_LIGHT_DISTANCE {
                 0.0
             } else {
                 intensity / (1.0 + dist * dist * falloff)
@@ -138,7 +160,11 @@ fn compute_lighting(
 
             // Beyond MAX_LIGHT_DISTANCE the shader must receive 0 too
             // (raw intensity drives the per-pixel diffuse term).
-            let raw = if dist > MAX_LIGHT_DISTANCE { 0.0 } else { intensity };
+            let raw = if occluded || dist > MAX_LIGHT_DISTANCE {
+                0.0
+            } else {
+                intensity
+            };
 
             match existing_light {
                 Some(mut li) => {
@@ -164,6 +190,24 @@ fn compute_lighting(
             }
         }
     }
+}
+
+/// True if the segment `a→b` passes through the circle centred at `c` with
+/// radius `r`, with the closest point strictly BETWEEN `a` and `b`
+/// (t ∈ (0, 1)): an occluder behind the body (t ≥ 1) or before the star
+/// (t ≤ 0) does not block the light.
+fn segment_hits_circle(a: Vec2, b: Vec2, c: Vec2, r: f32) -> bool {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq < 1e-6 {
+        return false;
+    }
+    let t = ((c - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    if t <= 0.001 || t >= 0.999 {
+        return false;
+    }
+    let closest = a + ab * t;
+    (c - closest).length_squared() < r * r
 }
 
 /// The star's `LightSource.falloff` is tuned for the CPU dimming path
@@ -476,5 +520,103 @@ mod tests {
             .get(&handle)
             .expect("material asset");
         assert_eq!(mat.light_intensity, 0.0, "oltre MAX_LIGHT_DISTANCE -> 0");
+    }
+
+    // ---- occlusione ----
+
+    #[test]
+    fn segment_hits_circle_cases() {
+        // Segment (0,0) -> (400,0), circle at (200,0) r=20: dead centre.
+        assert!(segment_hits_circle(Vec2::ZERO, Vec2::new(400.0, 0.0), Vec2::new(200.0, 0.0), 20.0));
+        // Circle off to the side, farther than its radius from the segment.
+        assert!(!segment_hits_circle(
+            Vec2::ZERO,
+            Vec2::new(400.0, 0.0),
+            Vec2::new(200.0, 50.0),
+            20.0
+        ));
+        // Circle BEYOND the body (t > 1): does not occlude.
+        assert!(!segment_hits_circle(
+            Vec2::ZERO,
+            Vec2::new(200.0, 0.0),
+            Vec2::new(400.0, 0.0),
+            20.0
+        ));
+        // Circle BEFORE the star (t < 0): does not occlude.
+        assert!(!segment_hits_circle(
+            Vec2::ZERO,
+            Vec2::new(200.0, 0.0),
+            Vec2::new(-100.0, 0.0),
+            20.0
+        ));
+        // Grazing the segment edge (distance == r): no occlusion (strict <).
+        assert!(!segment_hits_circle(
+            Vec2::ZERO,
+            Vec2::new(400.0, 0.0),
+            Vec2::new(200.0, 20.0),
+            20.0
+        ));
+        // Degenerate segment.
+        assert!(!segment_hits_circle(Vec2::ZERO, Vec2::ZERO, Vec2::new(10.0, 0.0), 5.0));
+    }
+
+    /// Un pianeta allineato dietro un altro (rispetto alla stella) è in
+    /// ombra: riceve 0 luce diretta (solo ambient), mentre quello davanti
+    /// resta illuminato.
+    #[test]
+    fn planet_behind_another_is_in_shadow() {
+        let mut app = test_app();
+        let (front, back) = {
+            let world = app.world_mut();
+            let (e_front, _) = spawn_planet(world, Vec2::new(200.0, 0.0), [0.3, 0.6, 1.0], 20.0, 1.0);
+            let (e_back, _) = spawn_planet(world, Vec2::new(400.0, 0.0), [0.8, 0.4, 0.2], 12.0, 1.0);
+            spawn_star(world, Vec2::ZERO);
+            (e_front, e_back)
+        };
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let li_front = world.get::<LightInfo>(front).unwrap();
+        let li_back = world.get::<LightInfo>(back).unwrap();
+        assert!(
+            li_front.intensity > 0.0,
+            "pianeta davanti illuminato, got {}",
+            li_front.intensity
+        );
+        assert_eq!(
+            li_back.intensity, 0.0,
+            "pianeta dietro in ombra -> 0 luce diretta"
+        );
+        assert_eq!(li_back.star_intensity, 0.0, "raw intensity azzerata pure per lo shader");
+    }
+
+    /// Corpi NON allineati (l'occluder è fuori dal segmento stella→corpo)
+    /// non oscurano: il pianeta "dietro" ma disassato resta illuminato.
+    #[test]
+    fn offset_planet_is_not_occluded() {
+        let mut app = test_app();
+        let (front, back) = {
+            let world = app.world_mut();
+            let (e_front, _) = spawn_planet(world, Vec2::new(200.0, 0.0), [0.3, 0.6, 1.0], 20.0, 1.0);
+            let (e_back, _) = spawn_planet(world, Vec2::new(400.0, 80.0), [0.8, 0.4, 0.2], 12.0, 1.0);
+            spawn_star(world, Vec2::ZERO);
+            (e_front, e_back)
+        };
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let li_back = world.get::<LightInfo>(back).unwrap();
+        assert!(
+            li_back.intensity > 0.0,
+            "pianeta disassato NON oscurato, got {}",
+            li_back.intensity
+        );
+        // Il front non deve essere occluso da quello dietro.
+        let li_front = world.get::<LightInfo>(front).unwrap();
+        assert!(li_front.intensity > 0.0, "front illuminato");
     }
 }
