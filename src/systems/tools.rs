@@ -5,7 +5,6 @@ use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::initial_state::InitialBodyState;
 use crate::components::trajectory::TrajectoryHistory;
 use crate::systems::camera::MainCamera;
-use crate::systems::lighting::LightMaterial;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::SimulationState;
 
@@ -162,7 +161,7 @@ fn add_tool_system(
     sim_state: Res<SimulationState>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut light_materials: ResMut<Assets<LightMaterial>>,
+    mut light_materials: ResMut<Assets<ColorMaterial>>,
     mut selected: ResMut<SelectedBody>,
 ) {
     crate::mark_system("add_tool_system");
@@ -196,11 +195,9 @@ fn add_tool_system(
             luminous: false,
         },
         Mesh2d(meshes.add(Circle::new(radius))),
-        MeshMaterial2d(light_materials.add(LightMaterial {
-            base_color: Color::srgb(color[0], color[1], color[2]),
-            body_radius: radius,
-            ..default()
-        })),
+        MeshMaterial2d(light_materials.add(ColorMaterial::from_color(
+            Color::srgb(color[0], color[1], color[2]),
+        ))),
         Transform::from_xyz(world_pos.x, world_pos.y, 0.0),
         RigidBody::Dynamic,
         Collider::circle(radius),
@@ -236,15 +233,15 @@ fn move_tool_system(
     time: Res<Time<Real>>,
     mut selected: ResMut<SelectedBody>,
     mut drag_state: ResMut<MoveDragState>,
-    mut materials: ResMut<Assets<LightMaterial>>,
-    material_query: Query<&MeshMaterial2d<LightMaterial>>,
+    mut light_materials: ResMut<Assets<ColorMaterial>>,
+    material_query: Query<&MeshMaterial2d<ColorMaterial>>,
 ) {
     crate::mark_system("move_tool_system");
 
     // Se non siamo in Move+pausa, cancella eventuale drag attivo
     if current_tool.0 != Tool::Move || !sim_state.paused {
         if drag_state.active {
-            close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
+            close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
         }
         return;
     }
@@ -267,7 +264,7 @@ fn move_tool_system(
         // Se un drag precedente è rimasto attivo (es. release persa su WASM),
         // chiudilo prima di iniziarne uno nuovo.
         if drag_state.active {
-            close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
+            close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
         }
         // Inizia drag: cerca corpo sotto il cursore. Non sposta ancora nulla:
         // il corpo viene agganciato solo quando il cursore supera la soglia.
@@ -284,8 +281,8 @@ fn move_tool_system(
                 // Salva l'alpha originale per il ripristino — ma NON ridurre
                 // ancora l'opacità: il feedback 0.5 parte solo oltre soglia.
                 if let Ok(mat_handle) = material_query.get(entity) {
-                    if let Some(material) = materials.get(&mat_handle.0) {
-                        let srgba = material.base_color.to_srgba();
+                    if let Some(material) = light_materials.get(&mat_handle.0) {
+                        let srgba = material.color.to_srgba();
                         drag_state.original_alpha = srgba.alpha;
                     }
                 }
@@ -301,7 +298,7 @@ fn move_tool_system(
                     selected.0 = Some(entity);
                 }
             }
-            close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
+            close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
         }
     } else if drag_state.active
         && mouse_buttons.pressed(MouseButton::Left)
@@ -322,7 +319,7 @@ fn move_tool_system(
                     drag_state.engaged = true;
                     // Feedback trasparenza solo oltre soglia
                     if let Some(entity) = drag_state.entity {
-                        set_alpha(entity, &material_query, &mut materials, 0.5);
+                        set_alpha(entity, &material_query, &mut light_materials, 0.5);
                     }
                 }
             }
@@ -341,7 +338,7 @@ fn move_tool_system(
         // successivo pressed() è già false ma active è ancora true. Chiudi il
         // drag senza spostare il corpo: se non ha superato la soglia non si è
         // mai mosso.
-        close_drag(&mut drag_state, &mut velocities, &material_query, &mut materials);
+        close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
     }
 }
 
@@ -349,14 +346,14 @@ fn move_tool_system(
 fn close_drag(
     drag_state: &mut ResMut<MoveDragState>,
     velocities: &mut Query<&mut LinearVelocity>,
-    material_query: &Query<&MeshMaterial2d<LightMaterial>>,
-    materials: &mut ResMut<Assets<LightMaterial>>,
+    material_query: &Query<&MeshMaterial2d<ColorMaterial>>,
+    light_materials: &mut ResMut<Assets<ColorMaterial>>,
 ) {
     if let Some(entity) = drag_state.entity {
         if let Ok(mut vel) = velocities.get_mut(entity) {
             vel.0 = Vec2::ZERO;
         }
-        restore_alpha(entity, material_query, materials, drag_state.original_alpha);
+        restore_alpha(entity, material_query, light_materials, drag_state.original_alpha);
     }
     drag_state.active = false;
     drag_state.entity = None;
@@ -370,14 +367,14 @@ fn close_drag(
 /// quando l'alpha scende sotto 1 (vedi `LightMaterial::alpha_mode`).
 fn set_alpha(
     entity: Entity,
-    material_query: &Query<&MeshMaterial2d<LightMaterial>>,
-    materials: &mut ResMut<Assets<LightMaterial>>,
+    material_query: &Query<&MeshMaterial2d<ColorMaterial>>,
+    light_materials: &mut ResMut<Assets<ColorMaterial>>,
     alpha: f32,
 ) {
     if let Ok(mat_handle) = material_query.get(entity) {
-        if let Some(mut material) = materials.get_mut(&mat_handle.0) {
-            let srgba = material.base_color.to_srgba();
-            material.base_color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
+        if let Some(mut material) = light_materials.get_mut(&mat_handle.0) {
+            let srgba = material.color.to_srgba();
+            material.color = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha);
         }
     }
 }
@@ -385,11 +382,11 @@ fn set_alpha(
 /// Restore the alpha of a body's material to a previous value.
 fn restore_alpha(
     entity: Entity,
-    material_query: &Query<&MeshMaterial2d<LightMaterial>>,
-    materials: &mut ResMut<Assets<LightMaterial>>,
+    material_query: &Query<&MeshMaterial2d<ColorMaterial>>,
+    light_materials: &mut ResMut<Assets<ColorMaterial>>,
     original_alpha: f32,
 ) {
-    set_alpha(entity, material_query, materials, original_alpha);
+    set_alpha(entity, material_query, light_materials, original_alpha);
 }
 
 // ============================================================

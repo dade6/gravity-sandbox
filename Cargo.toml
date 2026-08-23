@@ -49,6 +49,8 @@ getrandom = { version = "0.2", features = ["js"] }
 # Enable optimization for dependencies only (keep own code unoptimized for fast compile)
 [dev-dependencies]
 naga = { version = "29", features = ["wgsl-in", "glsl-out"] }
+# Salvataggio PNG nel test della normal map (per ispezione visiva)
+image = "0.25"
 
 [profile.dev]
 opt-level = 0
@@ -63,3 +65,10 @@ opt-level = 3
 inherits = "release"
 opt-level = "s"
 strip = "debuginfo"
+
+# PATCH spike: bevy_firefly 0.19.0 panica (unwrap su None) al primo frame su
+# WebGPU quando le PointLight2d non sono ancora "visibili" (VisibilityTimer
+# Bevy 0.19). Usiamo una copia vendored con la fix (None -> skip) in
+# vendor/bevy_firefly/src/lights.rs.
+[patch.crates-io]
+bevy_firefly = { path = "vendor/bevy_firefly" }

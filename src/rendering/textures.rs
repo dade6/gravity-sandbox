@@ -129,6 +129,45 @@ pub(crate) fn build_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
     image
 }
 
+/// Genera i pixel RGBA (non-sRGB) della normal map di una sfera: per ogni
+/// pixel dentro il disco, normale = normalize(x, y, √(1−x²−y²)) codificata
+/// come RGB = normal·0.5+0.5 (convenzione standard, luce da alto-sinistra).
+/// Fuori dal disco: alpha 0 (nessuna superficie). Non-sRGB per costruzione
+/// (Rgba8Unorm) — caricare una normal map da PNG introduceva gamma errori
+/// e crash async su WASM, quindi la generiamo in codice.
+pub(crate) fn generate_sphere_normal_map(size: usize) -> Vec<u8> {
+    let mut pixels = vec![0u8; size * size * 4];
+    let center = (size as f32 - 1.0) / 2.0;
+    let radius = size as f32 / 2.0 - 1.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 - center) / radius;
+            // dy con segno ORIGINALE (ny crescente verso il basso nel file):
+            // il test diagnostico v0.14.52 ha dimostrato che la texture arriva
+            // RIBALTATA verticalmente in GPU (con ny=+1 in alto nel PNG il
+            // ciano compare in BASSO sullo schermo). Con ny=+1 nelle righe
+            // basse, dopo il flip lo schermo mostra ny=+1 in ALTO -> il lato
+            // verso la stella (in alto) si illumina, ombra in basso.
+            let dy = (y as f32 - center) / radius;
+            let r2 = dx * dx + dy * dy;
+            let i = (y * size + x) * 4;
+            if r2 > 1.0 {
+                // Fuori dalla sfera: nessuna normale (nero, alpha 0)
+                pixels[i + 3] = 0;
+                continue;
+            }
+            let z = (1.0 - r2).sqrt();
+            let len = (dx * dx + dy * dy + z * z).sqrt();
+            let (nx, ny, nz) = (dx / len, dy / len, z / len);
+            pixels[i] = ((nx * 0.5 + 0.5) * 255.0) as u8;
+            pixels[i + 1] = ((ny * 0.5 + 0.5) * 255.0) as u8;
+            pixels[i + 2] = ((nz * 0.5 + 0.5) * 255.0) as u8;
+            pixels[i + 3] = 255;
+        }
+    }
+    pixels
+}
+
 // ============================================================================
 // Diffuse texture generators (256×256 each)
 // ============================================================================
@@ -542,5 +581,98 @@ pub struct TexturePlugin;
 impl Plugin for TexturePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, generate_texture_system);
+    }
+}
+
+// ============================================================================
+// Test generazione normal map sfera (salva il PNG per ispezione visiva)
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifica che la normal map della sfera sia matematicamente corretta:
+    /// - centro: punta verso l'osservatore (RGB ≈ (128,128,255), blu puro)
+    /// - bordo sinistro: punta a sinistra (R=0, G≈128, B≈128)
+    /// - bordo destro: punta a destra (R≈255, G≈128, B≈128)
+    /// - fuori dal disco: alpha 0 (trasparente)
+    /// - alpha 255 dentro la sfera
+    /// Salva anche `sphere_normal_generated.png` accanto al target dir
+    /// perché Davide possa ispezionarla visivamente.
+    #[test]
+    fn sphere_normal_map_is_correct_and_saves_png() {
+        let size = 256usize;
+        let pixels = generate_sphere_normal_map(size);
+
+        assert_eq!(pixels.len(), size * size * 4, "buffer RGBA completo");
+
+        // Centro: normale ≈ (0,0,1) -> RGB ≈ (128,128,255), alpha 255.
+        // Tolleranza ±2: il pixel centrale è a mezzo pixel dal centro esatto
+        // (discretizzazione), quindi nz ≈ 0.99998 -> 254.99 -> 254.
+        let c = size / 2;
+        let i = (c * size + c) * 4;
+        assert!((pixels[i] as i32 - 128).abs() <= 2, "centro R≈128 (nx=0), got {}", pixels[i]);
+        assert!((pixels[i + 1] as i32 - 128).abs() <= 2, "centro G≈128 (ny=0), got {}", pixels[i + 1]);
+        assert!((pixels[i + 2] as i32 - 255).abs() <= 2, "centro B≈255 (nz=1), got {}", pixels[i + 2]);
+        assert_eq!(pixels[i + 3], 255, "centro alpha pieno");
+
+        // Gradiente R (normale x): cresce da sinistra a destra.
+        // Non si testano valori assoluti sui bordi: il bordo esatto (dx=±1)
+        // non cade su un pixel intero, quindi un pixel "di bordo" ha già
+        // z>0 (es. B=138 invece di 128) — comportamento corretto.
+        let l = (c * size + (c - 30)) * 4;
+        let r = (c * size + (c + 30)) * 4;
+        assert!(
+            pixels[l] < pixels[r],
+            "R sinistra ({}) < R destra ({})",
+            pixels[l],
+            pixels[r]
+        );
+
+        // Gradiente G (normale y): cresce dall'alto in basso nel FILE — la texture
+        // viene ribaltata verticalmente in GPU (flip di sampling), quindi
+        // sullo schermo ny=+1 (ciano) finisce in ALTO: polo illuminato verso
+        // la stella. (Confermato dal test diagnostico v0.14.52: ciano in alto
+        // nel file -> ciano in basso sullo schermo.)
+        let t = ((c - 30) * size + c) * 4;
+        let b = ((c + 30) * size + c) * 4;
+        assert!(
+            pixels[t + 1] < pixels[b + 1],
+            "G sopra ({}) < G sotto ({})",
+            pixels[t + 1],
+            pixels[b + 1]
+        );
+
+        // B (normale z) massimo al centro, minore ai bordi.
+        let e = (c * size + (c - 30)) * 4;
+        assert!(
+            pixels[e + 2] < pixels[i + 2],
+            "B bordo ({}) < B centro ({})",
+            pixels[e + 2],
+            pixels[i + 2]
+        );
+
+        // Angolo alto-sinistra: fuori dal disco -> alpha 0
+        let corner = 0usize;
+        assert_eq!(pixels[corner + 3], 0, "angolo fuori sfera trasparente");
+
+        // Angolo dentro al disco (es. (size/4, size/4)): alpha 255
+        let q = size / 4;
+        let qi = (q * size + q) * 4;
+        assert_eq!(pixels[qi + 3], 255, "quadrante dentro sfera opaco");
+
+        // Salva il PNG per ispezione visiva (accanto al workspace spike)
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("sphere_normal_generated.png");
+        image::save_buffer(
+            &path,
+            &pixels,
+            size as u32,
+            size as u32,
+            image::ExtendedColorType::Rgba8,
+        )
+        .expect("salvataggio PNG");
+        eprintln!("NORMAL MAP SALVATA: {}", path.display());
     }
 }

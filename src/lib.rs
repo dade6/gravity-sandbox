@@ -345,7 +345,14 @@ pub fn wasm_main() {
             ..default()
         });
     });
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+    app.add_plugins(
+        DefaultPlugins
+            // Allineato all'esempio ufficiale del crate (crates.rs): sampler
+            // NEAREST per sprites. Il default lineare spalma il gradiente
+            // della normal map quando la sprite è piccola rispetto alla
+            // texture -> rilievo appiattito.
+            .set(ImagePlugin::default_nearest())
+            .set(WindowPlugin {
         primary_window: Some(Window {
             title: format!("Gravity Sandbox {}", version::VERSION),
             canvas: Some("#bevy-canvas".into()),
@@ -355,7 +362,7 @@ pub fn wasm_main() {
         }),
         ..default()
     }))
-    .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
+    .insert_resource(ClearColor(Color::srgb(0.10, 0.10, 0.13)))
     // TEMP-DIAG: il trap "Unreachable" del primo frame su Mac/iPhone è la
     // Minimap (render-to-texture WebGL2) — CONFERMATO dalla bisettrice
     // (v0.14.24/25 verdi con minimap OFF, texture ON ok). v0.14.26:
@@ -367,14 +374,13 @@ pub fn wasm_main() {
         SelectionPlugin,
         ToolPlugin,
         TrajectoryPlugin,
-        LightingPlugin,
-        LightPlugin,
         PersistencePlugin,
         rendering::TexturePlugin,
         PropertyEditorPlugin,
         DebugSpawnPlugin,
         ParallaxPlugin,
-        ShadowPlugin,
+        // SPIKE v2: sistemi luce/ombra custom DISATTIVATI (resi grafica
+        // scadente). Firefly fa tutto: luci, ombre, normal map, z-sorting.
         PhysicsPlugins::default(),
     ))
     .add_plugins((
@@ -426,7 +432,7 @@ mod tests {
                 .disable::<bevy::winit::WinitPlugin>() // event loop: main-thread only
                 .disable::<bevy::window::WindowPlugin>(),
         )
-        .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
+        .insert_resource(ClearColor(Color::srgb(0.10, 0.10, 0.13)))
         .add_plugins((
             GravitySandboxPlugin,
             TimelinePlugin,
@@ -434,15 +440,13 @@ mod tests {
             SelectionPlugin,
             ToolPlugin,
             TrajectoryPlugin,
-            LightingPlugin,
-            LightPlugin,
-            MinimapPlugin,
             PersistencePlugin,
             rendering::TexturePlugin,
             PropertyEditorPlugin,
             DebugSpawnPlugin,
             ParallaxPlugin,
-            (ShadowPlugin, PhysicsPlugins::default()),
+            // SPIKE v2: sistemi luce/ombra custom disattivati (firefly fa tutto)
+            PhysicsPlugins::default(),
         ))
         .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
         .insert_resource(Gravity::ZERO)
@@ -806,6 +810,15 @@ fn debug_state_snapshot(
         &Transform,
         Option<&LinearVelocity>,
     )>,
+    // Diagnostica firefly (spike v0.14.40): conta luci, occluder e sprite
+    // convertite per capire se la pipeline vede la scena.
+    lights: Query<(), With<bevy_firefly::lights::PointLight2d>>,
+    occluders: Query<(), With<bevy_firefly::occluders::Occluder2d>>,
+    sprites: Query<(), With<crate::systems::firefly_bridge::FireflySpriteAttached>>,
+    normal_maps: Query<(), With<bevy_firefly::sprites::NormalMap>>,
+    firefly_cam: Query<(), With<crate::systems::firefly_bridge::FireflyCamera>>,
+    firefly_cfg: Query<&bevy_firefly::data::FireflyConfig>,
+    light_heights: Query<&bevy_firefly::prelude::LightHeight>,
 ) {
     crate::mark_system("debug_state_snapshot");
     use crate::systems::tools::Tool;
@@ -852,9 +865,27 @@ fn debug_state_snapshot(
         .lock()
         .map(|f| (f.0.clone(), f.1))
         .unwrap_or(("none".to_string(), 0));
-    let json = format!(
-        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"field_rects":[{}],"bodies":[{}]}}"#,
-        last_system,
+    // Valore normal_mode della camera (0=none, 1=simple, 2=topdownY, 3=topdownZ)
+    let nmode = firefly_cfg
+        .iter()
+        .next()
+        .map(|c| match &c.normal_mode {
+            bevy_firefly::data::NormalMode::None => 0,
+            bevy_firefly::data::NormalMode::Simple => 1,
+            bevy_firefly::data::NormalMode::TopDownY => 2,
+            bevy_firefly::data::NormalMode::TopDownZ => 3,
+            _ => 9,
+        })
+        .unwrap_or(99);
+            // Altezza della luce (TopDownY): 0 = luce a terra -> pianeti piatti
+            let lh = light_heights
+                .iter()
+                .next()
+                .map(|h| h.0)
+                .unwrap_or(-1.0);
+            let json = format!(
+                            r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0}}},"field_rects":[{}],"bodies":[{}]}}"#,
+                last_system,
         frame,
         tool,
         sim_state.paused,
@@ -863,6 +894,19 @@ fn debug_state_snapshot(
         focused_text.replace('"', "\\\""),
         drag_state.active,
         drag_state.engaged,
+        firefly_cam.iter().count(),
+        lights.iter().count(),
+        occluders.iter().count(),
+        sprites.iter().count(),
+        normal_maps.iter().count(),
+        nmode,
+        bevy_firefly::extract::EXTRACTED_NORMAL_MODE.load(std::sync::atomic::Ordering::Relaxed),
+        bevy_firefly::extract::EXTRACTED_LIGHTS.load(std::sync::atomic::Ordering::Relaxed),
+        bevy_firefly::extract::EXTRACTED_OCCLUDERS.load(std::sync::atomic::Ordering::Relaxed),
+        bevy_firefly::extract::PREPARE_NORMAL_MISSING.load(std::sync::atomic::Ordering::Relaxed),
+        bevy_firefly::extract::PREPARE_SPRITES_PROCESSED.load(std::sync::atomic::Ordering::Relaxed),
+        bevy_firefly::extract::SPRITE_PHASE_ITEMS.load(std::sync::atomic::Ordering::Relaxed),
+        lh,
         rects.join(","),
         parts.join(",")
     );

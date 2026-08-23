@@ -3,7 +3,6 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::components::celestial::{BodyType, CelestialBody};
-use crate::systems::lighting::LightMaterial;
 use crate::systems::timeline::SimulationState;
 
 // ============================================================
@@ -141,7 +140,6 @@ fn process_load_commands(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut light_materials: ResMut<Assets<LightMaterial>>,
     bodies: Query<Entity, With<CelestialBody>>,
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
@@ -192,11 +190,8 @@ fn process_load_commands(
             let radius = body_data.radius;
             let color = Color::srgb(body_data.color[0], body_data.color[1], body_data.color[2]);
 
-            // Stelle (luminous) restano su ColorMaterial brillante; i corpi
-            // illuminati usano LightMaterial per l'illuminazione per-pixel.
-            // I due materiali hanno tipi diversi (`MeshMaterial2d<M>`), quindi
-            // non possono stare nello stesso if/else: spawn comune + insert
-            // condizionale del materiale.
+            // Tutti i corpi usano ColorMaterial: la luce/ombre/normal map le
+            // fa firefly (le mesh vengono convertite a Sprite dal bridge).
             let entity = commands
                 .spawn((
                     CelestialBody {
@@ -229,12 +224,8 @@ fn process_load_commands(
                     materials.add(ColorMaterial::from_color(color)),
                 ));
             } else {
-                commands.entity(entity).insert(MeshMaterial2d(light_materials.add(
-                    LightMaterial {
-                        base_color: color,
-                        body_radius: radius,
-                        ..default()
-                    },
+                commands.entity(entity).insert(MeshMaterial2d(materials.add(
+                    ColorMaterial::from_color(color),
                 )));
             }
         }

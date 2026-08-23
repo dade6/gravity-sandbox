@@ -20,3 +20,4 @@ Thumbs.db
 # Preset utente (sovrascritto dal bottone Salva della sandbox);
 # il default distribuito è assets/preset.default.json
 assets/preset.json
+sphere_normal_generated.png
