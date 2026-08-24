@@ -1,6 +1,7 @@
 pub mod camera;
 pub mod gravity;
 pub mod keypad;
+pub mod firefly_bridge;
 pub mod light;
 pub mod lighting;
 pub mod minimap;
