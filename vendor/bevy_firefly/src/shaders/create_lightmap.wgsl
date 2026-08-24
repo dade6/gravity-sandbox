@@ -180,6 +180,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             // round occluder
             if occluder_type == 0 {
                 if stencil.a > 0.1 {
+                    // TORNO AL CHECK ORIGINALE DEL CRATE (>= - margin):
+                    // con z = -y e margin default gli skip coprono
+                    // l'auto-ombra (setup v0.14.57 funzionante). Le
+                    // eclissi TRA pianeti sono gestite dal sistema CPU
+                    // eclipse_occlusion (v0.14.63) perché il confronto
+                    // esatto su stencil/occ non era affidabile nel render.
                     if config.z_sorting == 1 && round_occluders[occluder_index].z_sorting == 1 && stencil.g >= round_occluders[occluder_index].z - config.z_sorting_error_margin {
                         continue;
                     }

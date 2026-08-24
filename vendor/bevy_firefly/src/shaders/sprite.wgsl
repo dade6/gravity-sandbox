@@ -76,6 +76,7 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     var normal = textureSample(normal_texture, sprite_sampler, in.uv);
     
     if color.a >= 1.0 {
+        // stencil come da crate (alpha = 1.0: presenza sprite)
         res.stencil = vec4<f32>(in.y, in.z, in.height, 1.0);
     }
     else {

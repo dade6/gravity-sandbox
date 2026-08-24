@@ -878,12 +878,12 @@ fn debug_state_snapshot(
         })
         .unwrap_or(99);
             // Altezza della luce (TopDownY): 0 = luce a terra -> pianeti piatti
-            let lh = light_heights
-                .iter()
-                .next()
-                .map(|h| h.0)
-                .unwrap_or(-1.0);
-            let json = format!(
+                        let lh = light_heights
+                            .iter()
+                            .next()
+                            .map(|h| h.0)
+                            .unwrap_or(-1.0);
+                        let json = format!(
                             r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0}}},"field_rects":[{}],"bodies":[{}]}}"#,
                 last_system,
         frame,

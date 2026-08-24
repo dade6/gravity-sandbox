@@ -188,13 +188,14 @@ fn setup_firefly_camera(
                 ambient_color: Color::WHITE,
                 ambient_brightness: AMBIENT_BRIGHTNESS,
                 soft_shadows: true,
-                // Spike v0.14.50: z_sorting=true + z=-y sui pianeti
-                // (sync_sprite_z) -> ogni sprite ha z UNICO. Il crate salta
-                // l'auto-ombra del corpo stesso (stencil.g >= occ.z - margin,
-                // stessi z) ma applica le ombre degli ALTRI corpi (z diversi):
-                // il rilievo normal map non viene più spento dall'ombra
-                // propria. Con false e z tutti 0 (vecchio setup) il corpo si
-                // oscurava da sé -> pianeti piatti nonostante normal map ok.
+                // v0.14.59 (con patch vendored nella shader): z_sorting=true
+                // MA il check è ora l'UGUAGLIANZA esatta stencil.g == occ.z
+                // (body-id nel Transform.z, sync_sprite_z) -> skippata SOLO
+                // l'auto-ombra; le ombre tra pianeti sono sempre applicate
+                // (la geometria decide: segmento stella->pixel). Le varianti
+                // precedenti fallivano: false -> auto-ombra quasi totale
+                // (pianeti neri, v0.14.58); true+z=-y -> nessuna ombra tra
+                // pianeti allineati (v0.14.50).
                 z_sorting: true,
                 // Allineato all'esempio ufficiale crates.rs (normal map +
                 // z-sorting): normal_mode TopDownY (usa stencil.r/stencil.b
@@ -339,8 +340,12 @@ fn spawn_star_lights(
     }
 }
 
-/// Ogni corpo non-luminoso ottiene un Occluder2d::circle child (raggio =
-/// raggio del corpo; il diametro è gestito dalla mesh del corpo).
+/// Ogni corpo non-luminoso è ANCHE Occluder2d::circle (stesso entity del
+/// corpo, NON un child): così lo z letto dall'extract (GlobalTransform del
+/// corpo) è ESATTAMENTE lo stesso che sync_sprite_z scrive sulla sprite ->
+/// il confronto stencil.a == occ.z della shader skip Solo l'auto-ombra.
+/// (Con il child, il GlobalTransform del child non rifletteva la z del
+/// parent e l'uguaglianza falliva -> pianeti neri, v0.14.59-60.)
 fn spawn_planet_occluders(
     planets: Query<
         (Entity, &CelestialBody),
@@ -355,51 +360,115 @@ fn spawn_planet_occluders(
         if body.luminous {
             continue;
         }
-        commands.entity(entity).insert(FireflyOccluderAttached).with_children(
-            |parent| {
-                parent.spawn((
-                    Occluder2d::circle(body.radius),
-                    Transform::default(),
-                ));
-            },
-        );
+        // Occluder2d::circle ha gia' z_sorting: true di default (from_shape)
+        commands
+            .entity(entity)
+            .insert((FireflyOccluderAttached, Occluder2d::circle(body.radius)));
     }
 }
 
 /// Il raggio dell'occluder deve seguire il raggio del corpo (che l'utente
-/// può cambiare dal property panel). Child = segue la posizione gratis;
-/// qui sovrascriviamo solo il componente Occluder2d col raggio attuale
-/// (idempotente quando il raggio non è cambiato).
+/// può cambiare dal property panel). Ora l'occluder è sullo STESSO entity
+/// del corpo: niente Children da percorrere.
 fn sync_occluders(
-    planets: Query<(&CelestialBody, &Children), With<FireflyOccluderAttached>>,
-    mut occluders: Query<&mut Occluder2d>,
+    mut planets: Query<(&CelestialBody, &mut Occluder2d), With<FireflyOccluderAttached>>,
 ) {
-    for (body, children) in planets.iter() {
+    for (body, mut occ) in planets.iter_mut() {
         if body.luminous {
             continue;
         }
-        for child in children.iter() {
-            if let Ok(mut occ) = occluders.get_mut(child) {
-                *occ = Occluder2d::circle(body.radius);
-            }
-        }
+        *occ = Occluder2d::circle(body.radius);
     }
 }
 
-/// z-sorting alla firefly: z = -y sui corpi NON luminosi (come l'esempio
-/// ufficiale crates.rs: "transform.translation.z = -transform.translation.y").
-/// Con z unici per sprite/occluder (child con Transform di default: il global
-/// z è quello del parent), il crate salta l'AUTO-OMBRA del corpo stesso
-/// (stencil.g >= occ.z - margin: z identici) ma applica le ombre degli ALTRI
-/// corpi (z diversi): il rilievo normal map non viene più spento dall'ombra
-/// propria. La stella resta a z fisso: non riceve ombre dai pianeti.
+/// z = body-id UNICO per corpo (index): la sprite e il suo occluder child
+/// condividono lo stesso z -> lo shader (patch v0.14.59) skippa SOLO
+/// l'auto-ombra (uguaglianza stencil.g == occ.z). Con z = -y (worker) o z=0
+/// le ombre tra pianeti saltavano o l'auto-ombra oscurava tutto il disco.
+/// La stella resta a z di spawn: non riceve ombre dai pianeti.
 fn sync_sprite_z(
-    mut sprites: Query<(&CelestialBody, &mut Transform), With<Sprite>>,
+    mut queries: ParamSet<(
+        Query<(&CelestialBody, &mut Transform), With<Sprite>>,
+        // stella (leggi Transform per la distanza): ParamSet obbligatorio,
+        // le due query accedono entrambe a Transform (B0001 altrimenti)
+        Query<(&Transform, &CelestialBody)>,
+    )>,
 ) {
-    for (body, mut transform) in sprites.iter_mut() {
+    let nan = Vec2::splat(f32::NAN);
+    let star_pos = queries
+        .p1()
+        .iter()
+        .find(|(_, b)| b.luminous)
+        .map(|(t, _)| t.translation.truncate())
+        .unwrap_or(nan);
+    if star_pos == nan {
+        return;
+    }
+    for (body, mut transform) in queries.p0().iter_mut() {
         if body.luminous {
             continue;
         }
-        transform.translation.z = -transform.translation.y;
+        // z = -DISTANZA dalla stella (v0.14.67): semantica z-sort del crate
+        // ("chi ha z maggiore non riceve ombre"):
+        // - auto-ombra: sprite e occluder dello stesso corpo hanno lo
+        //   stesso z -> skip (stencil.g >= occ.z - margin) -> mai neri.
+        // - pianeta DAVANTI sul DIETRO: il dietro ha distanza maggiore ->
+        //   z piu' basso -> l'ombra geometrica per-pixel si applica:
+        //   solo la parte dentro il cono non riceve luce (PARZIALE
+        //   SPAZIALE, come richiesto).
+        let d = transform.translation.truncate().distance(star_pos);
+        transform.translation.z = -d;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spawn_body(world: &mut World, name: &str, pos: Vec2, radius: f32, luminous: bool) {
+        world.spawn((
+            CelestialBody {
+                name: name.into(),
+                body_type: crate::components::celestial::BodyType::Planet,
+                mass: 100.0,
+                radius,
+                color: [0.5, 0.5, 0.5],
+                luminous,
+            },
+            Transform::from_xyz(pos.x, pos.y, 0.0),
+            Sprite {
+                color: Color::srgba(0.5, 0.5, 0.5, 1.0),
+                ..default()
+            },
+        ));
+    }
+
+    #[test]
+    fn z_neg_dist_stella_ordina_davanti_dietro() {
+        let mut app = bevy::prelude::App::new();
+        app.add_systems(bevy::prelude::Update, sync_sprite_z);
+        {
+            let mut world = app.world_mut();
+            spawn_body(&mut world, "Star", Vec2::ZERO, 30.0, true);
+            spawn_body(&mut world, "Front", Vec2::new(150.0, 0.0), 15.0, false);
+            spawn_body(&mut world, "Back", Vec2::new(300.0, 0.0), 15.0, false);
+        }
+        app.update();
+        let mut q = app.world_mut().query::<(&CelestialBody, &Transform)>();
+        let mut z_front = 0.0f32;
+        let mut z_back = 0.0f32;
+        for (b, t) in q.iter(app.world()) {
+            if b.name == "Front" {
+                z_front = t.translation.z;
+            }
+            if b.name == "Back" {
+                z_back = t.translation.z;
+            }
+        }
+        assert!(z_front < 0.0 && z_back < 0.0, "z negativi ({z_front}, {z_back})");
+        assert!(
+            z_back < z_front - 1.0,
+            "il pianeta dietro deve avere z PIU' BASSO (riceve l'ombra): {z_front} vs {z_back}"
+        );
     }
 }

@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Gravity Sandbox v0.14.57</title>
+    <title>Gravity Sandbox v0.14.68</title>
     <script>
         // CONSOLE SU IPHONE (strumento di debug dello spike): Eruda è sempre
         // attivo -> bottone in basso a destra -> console log/errori/network.
@@ -138,7 +138,7 @@
 <body>
     <canvas id="bevy-canvas" tabindex="0"></canvas>
 
-    <div id="version-badge">v0.14.57</div>
+    <div id="version-badge">v0.14.68</div>
     <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:12px monospace;z-index:99;"></div>
     <div id="error-details" hidden>
         <button id="copy-err">📋 Copia errore</button>
@@ -146,7 +146,7 @@
     </div>
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox.js?v=0.14.53b';
+        import init, * as sandbox from './gravity_sandbox.js?v=0.14.68';
 
         // Focus DOM del canvas: senza questo, il browser non instrada gli
         // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
@@ -225,14 +225,14 @@
         // Retry automatico del WASM: su connessioni instabili (Tailscale/DERP)
         // il fetch del .wasm può interrompersi a metà ("Load failed") -> il
         // browser NON riscarica da solo: ritentiamo fino a MAX_INIT_TRIES.
-        // FIX CORS Safari (v0.14.57): il fetch INTERNO del glue wasm-bindgen
+        // FIX CORS Safari (v0.14.68): il fetch INTERNO del glue wasm-bindgen
         // fallisce con "due to access control checks" su Safari/iOS anche con
         // server CORS a posto (il preflight ora è gestito). QUESTO fetch
         // manuale usa lo stesso identico pattern del preset.json (che su
         // Safari funziona sempre) e passa la Response al glue -> il glue NON
         // esegue più alcun fetch interno (__wbg_load usa direct la Response).
         // Cache-buster sul wasm: una versione nuova = URL nuovo = mai cache.
-        const WASM_URL = new URL('gravity_sandbox_bg.wasm?v=0.14.53b', location.href).href;
+        const WASM_URL = new URL('gravity_sandbox_bg.wasm?v=0.14.68', location.href).href;
         const MAX_INIT_TRIES = 3;
         function initWithRetry(tries) {
             const n = tries || MAX_INIT_TRIES;
@@ -253,7 +253,7 @@
             window.__sandbox = sandbox;
             if (isIOS) sandbox.set_mobile_device(true);
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.57 ✅';
+            if (v) v.textContent = 'v0.14.68 ✅';
 
             // Preset di livello esterno (assets/preset.json): Davide lo modifica sul
             // server e con un refresh vede il cambio, SENZA ricompilare il WASM.
@@ -293,7 +293,7 @@
                 });
         }).catch(err => {
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.57 🛑' + err.message.substring(0, 120);
+            if (v) v.textContent = 'v0.14.68 🛑' + err.message.substring(0, 120);
             showError('ERRORE INIT', err.message || String(err), err.stack ? err.stack.substring(0, 3000) : '');
             console.error('[INIT FAIL full]', err.message, err.stack ? err.stack.substring(0, 2000) : '');
         });
@@ -304,21 +304,38 @@
         let lastSys = '';
         let lastSnap = null;
         let wasmDead = false;
-        setInterval(() => {
+        setInterval(async () => {
             const el = document.getElementById('debug-state');
             if (!el || !window.__sandbox) return;
             let s = null;
+            const vEl = document.getElementById('version-badge');
             try {
                 s = JSON.parse(window.__sandbox.debug_state());
             } catch (e) {
-                if (!wasmDead) {
-                    wasmDead = true;
-                    const v = document.getElementById('version-badge');
-                    // NOTA: il debug-state NON viene toccato qui: resta congelato
-                    // sull'ultimo sistema scritto da mark_system (DOM write sincrona)
-                    if (v) v.textContent = 'v0.14.57 🛑 WASM DEAD';
+                // Retry immediato (v0.14.68): un singolo poll fallito NON
+                // deve marcare WASM DEAD (poll transitori). Solo dopo 3
+                // tentativi consecutivi si marca, con la causa esatta.
+                let ok2 = false;
+                for (let i = 0; i < 3 && !ok2; i++) {
+                    try {
+                        s = JSON.parse(window.__sandbox.debug_state());
+                        ok2 = true;
+                    } catch (e3) { await new Promise(r => setTimeout(r, 250)); }
                 }
-                return;
+                if (!ok2) {
+                    if (!wasmDead) {
+                        wasmDead = true;
+                        let reason = '?';
+                        try {
+                            const raw = String(window.__sandbox.debug_state());
+                            reason = 'RAW(len' + raw.length + '): ' + raw.slice(0, 160);
+                        } catch (e2) {
+                            reason = 'THROW: ' + e2.message;
+                        }
+                        if (vEl) vEl.textContent = 'v0.14.68 🛑 DEAD ' + reason;
+                    }
+                    return;
+                }
             }
             wasmDead = false;
             lastSnap = s;
@@ -329,7 +346,11 @@
             // Diagnostica normal map nel badge versione (leggibile da screenshot)
             const vb = document.getElementById('version-badge');
             if (vb && s.firefly) {
-                const nm = vb.textContent.indexOf('N') >= 0 ? vb.textContent.replace(/ N\d+ m\d+ g\d+ s\d+\/\d+ q\d+$/, '') : vb.textContent;
+                // Reset del prefisso: il "🛑 DEAD" non deve sopravvivere a un
+                // poll riuscito (il badge parte sempre da "v0.14.68 ✅").
+                const nm = (vb.textContent.indexOf('N') >= 0 && vb.textContent.indexOf('DEAD') < 0)
+                    ? vb.textContent.replace(/ N\d+ m\d+ g\d+ s\d+\/\d+ q\d+$/, '')
+                    : 'v0.14.68 ✅';
                 vb.textContent = nm + ' N' + s.firefly.nmaps + ' m' + (s.firefly.nmode !== undefined ? s.firefly.nmode : '?') + ' g' + (s.firefly.gnmode !== undefined ? s.firefly.gnmode : '?') + ' s' + (s.firefly.skipN !== undefined ? s.firefly.skipN + '/' + s.firefly.procS : '?') + ' q' + (s.firefly.qItems !== undefined ? s.firefly.qItems : '?');
             }
         }, 300);
