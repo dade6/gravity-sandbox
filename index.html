@@ -132,6 +132,77 @@
             padding: 4px 10px; cursor: pointer; display: block; margin-bottom: 6px;
         }
         #copy-err:active { background: rgba(255, 80, 80, 0.45); }
+
+        /* Barra di caricamento WASM all'avvio: progresso reale del download
+           (%) -> fase "Compilazione…" (indeterminata) -> fade-out quando l'app
+           è pronta. #ui-overlay resta pointer-events:none: la barra ha
+           pointer-events:auto SOLO su se stessa e non copre la toolbar. */
+        #loading-bar {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 300px;
+            transform: translate(-50%, -50%);
+            pointer-events: auto;
+            transition: opacity 0.45s ease;
+            z-index: 1;
+        }
+        #loading-bar .lb-panel {
+            background: rgba(12, 12, 24, 0.8);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            padding: 14px 16px;
+        }
+        #loading-bar .lb-label {
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 13px;
+            line-height: 1.4;
+            margin-bottom: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            letter-spacing: 0.2px;
+        }
+        #loading-bar .lb-track {
+            position: relative;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.12);
+            overflow: hidden;
+        }
+        #loading-bar .lb-fill {
+            position: absolute;
+            top: 0; left: 0;
+            height: 100%;
+            width: 0%;
+            background: rgba(100, 120, 255, 0.85);
+            border-radius: 3px;
+            transition: width 0.1s ease-out;
+        }
+        /* Indeterminato (Compilazione… / Riprovo…): colonna che scorre nel
+           track. instantiate è un blocco sincrono senza % osservabile: fase,
+           non percentuale finta. */
+        #loading-bar.lb-indeterminate .lb-fill {
+            width: 40%;
+            animation: lb-slide 1.1s ease-in-out infinite;
+        }
+        @keyframes lb-slide {
+            0%   { transform: translateX(-100%); }
+            100% { transform: translateX(250%); }
+        }
+        /* Errore di init: barra/label rosse + pannello bordato rosso invece
+           di sparire (niente barra "sospesa" a metà). */
+        #loading-bar.lb-error .lb-panel { border-color: rgba(255, 80, 80, 0.55); }
+        #loading-bar.lb-error .lb-fill {
+            background: rgba(255, 80, 80, 0.85);
+            animation: none;
+        }
+        #loading-bar.lb-error .lb-label { color: #ffb4b4; }
+        /* App pronta: fade out prima di nascostare */
+        #loading-bar.lb-done { opacity: 0; }
+        /* Inizialmente nascosta: mostrata da JS appena parte il download */
+        #loading-bar.lb-hidden { display: none; }
     </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 </head>
@@ -143,6 +214,18 @@
     <div id="error-details" hidden>
         <button id="copy-err">📋 Copia errore</button>
         <pre id="error-text"></pre>
+    </div>
+
+    <!-- Overlay UI (z-index 100, pointer-events:none): contiene la barra di
+         caricamento WASM all'avvio. La barra ha pointer-events:auto solo per
+         sé, così non blocca né copre la toolbar (che sta sopra, separata). -->
+    <div id="ui-overlay">
+        <div id="loading-bar" class="lb-hidden" aria-live="polite">
+            <div class="lb-panel">
+                <div class="lb-label" id="lb-label">Download…</div>
+                <div class="lb-track"><div class="lb-fill" id="lb-fill"></div></div>
+            </div>
+        </div>
     </div>
 
     <script type="module">
@@ -232,14 +315,134 @@
         // Safari funziona sempre) e passa la Response al glue -> il glue NON
         // esegue più alcun fetch interno (__wbg_load usa direct la Response).
         // Cache-buster sul wasm: una versione nuova = URL nuovo = mai cache.
+        //
+        // Barra di caricamento (v0.14.68): ora il fetch legge il body a chunk
+        // con un ReadableStream, accumula i byte in un Uint8Array e riporta la
+        // % REALE di download da Content-Length (bar > 0). A fetch completato
+        // passa i BYTE ACCUMULATI a init({ module_or_path }) — un BufferSource
+        // che wasm-bindgen compila direttamente, senza alcun fetch interno
+        // (vincolo Safari preservato). Se Content-Length manca (transfer-encoding
+        // chunked) la barra resta "indeterminata" finché non si conosce il totale.
         const WASM_URL = new URL('gravity_sandbox_bg.wasm?v=0.14.68', location.href).href;
         const MAX_INIT_TRIES = 3;
+
+        // ---- Barra di caricamento: stati = download % -> compilazione -> done/errore.
+        // Utilizza i token visivi della toolbar (pannelli rgba(12,12,24,0.8), blur,
+        // raggio 6px, testo bianco/0.6, accento rgba(100,120,255,0.85)).
+        const lbEl = document.getElementById('loading-bar');
+        const lbFill = document.getElementById('lb-fill');
+        const lbLabel = document.getElementById('lb-label');
+        let lbPctKnown = false;   // Content-Length presente?
+        let lbLastPaint = 0;      // throttle ~100ms degli aggiornamenti
+        let lbFinished = false;   // app pronta o errore: barra "finalizzata"
+        function lbShow() {
+            if (lbEl) lbEl.classList.remove('lb-hidden');
+        }
+        function lbSetPct(pct) {
+            // pct in [0..100] o null -> indeterminata
+            if (!lbFill || !lbEl || lbFinished) return;
+            const now = Date.now();
+            if (pct == null) {
+                // indeterminate: nessuna % conoscibile (chunked o fase compilazione)
+                lbEl.classList.add('lb-indeterminate');
+                lbFill.style.width = '0%';
+                return;
+            }
+            if (now - lbLastPaint < 100 && pct < 99) return; // throttle
+            lbLastPaint = now;
+            lbEl.classList.remove('lb-indeterminate');
+            lbFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+        }
+        function lbSetLabel(txt) { if (lbLabel) lbLabel.textContent = txt; }
+        // done = app pronta: fade out (opacity presente nel CSS) poi display:none
+        function lbDone() {
+            lbFinished = true;
+            if (!lbEl) return;
+            lbEl.classList.remove('lb-indeterminate');
+            lbEl.style.opacity = '0';
+            setTimeout(() => { if (lbEl) lbEl.style.display = 'none'; }, 460);
+        }
+        // errore finale: stati in rosso, barra NON sparisce
+        function lbError(msg) {
+            lbFinished = true;
+            if (!lbEl) return;
+            lbEl.classList.remove('lb-indeterminate', 'lb-hidden');
+            lbEl.classList.add('lb-error');
+            // barra rossa piena: comunica chiaramente lo stato di errore
+            if (lbFill) lbFill.style.width = '100%';
+            if (lbLabel) lbLabel.textContent = 'Errore: ' + msg;
+        }
+
         function initWithRetry(tries) {
             const n = tries || MAX_INIT_TRIES;
+            lbShow();
+            if (tries) {
+                const left = tries - 1;
+                lbSetLabel(left === 1 ? 'Riprovo… (1 tentativo rimasto)' : 'Riprovo… (' + left + ' tentativi rimasti)');
+            }
+            lbSetPct(null);
+            // Fetch manuale con progresso reale: legge il body a chunk,
+            // accumula i byte, calcola la % da Content-Length.
             return fetch(WASM_URL, { cache: 'no-store' })
                 .then(r => {
                     if (!r.ok) throw new Error('wasm fetch HTTP ' + r.status);
-                    return init({ module_or_path: r });
+                    // % REALE solo se Content-Length è affidabile. Con
+                    // Content-Encoding: gzip (serve_wasm.py serve il .gz) il
+                    // Content-Length è la dimensione COMPRESSA, ma il body
+                    // letto dal reader è DECOMPRESSO: received/total sforerebbe
+                    // 100%. In quel caso NON mostriamo una % falsa -> barra
+                    // indeterminata ("Download…"), spec-compliant e non bloccante.
+                    const enc = (r.headers.get('Content-Encoding') || '').toLowerCase();
+                    const total = parseInt(r.headers.get('Content-Length') || '', 10);
+                    const gzipWasm = enc.indexOf('gzip') >= 0;
+                    lbPctKnown = isFinite(total) && total > 0 && !gzipWasm;
+                    if (!lbPctKnown) {
+                        // gzip o Content-Length mancante (chunked): nessuna % reale
+                        // conoscibile -> indeterminata (non blocchiamo MAI).
+                        lbSetLabel('Download…');
+                        lbSetPct(null);
+                    } else {
+                        lbSetLabel('Download… 0%');
+                        lbSetPct(0);
+                    }
+                    if (!r.body) {
+                        // body indisponibile: passa la Response al glue (come prima)
+                        return { bytes: null, resp: r };
+                    }
+                    const reader = r.body.getReader();
+                    const chunks = [];
+                    let received = 0;
+                    const totalBytes = gzipWasm ? -1 : total;
+                    function pump() {
+                        return reader.read().then(({ done, value }) => {
+                            if (done) {
+                                // concatena i chunk in un Uint8Array unico
+                                const bytes = new Uint8Array(received);
+                                let off = 0;
+                                for (const c of chunks) { bytes.set(c, off); off += c.byteLength; }
+                                return { bytes, resp: null };
+                            }
+                            chunks.push(value);
+                            received += value.byteLength;
+                            if (totalBytes > 0) {
+                                lbSetPct((received / totalBytes) * 100);
+                                lbSetLabel('Download… ' + Math.floor((received / totalBytes) * 100) + '%');
+                            }
+                            return pump();
+                        });
+                    }
+                    return pump();
+                })
+                .then(({ bytes, resp }) => {
+                    // Download completo -> fase COMPILAZIONE (indeterminata).
+                    // instantiate è un blocco sincrono: nessuna % reale osservabile
+                    // dal browser -> NON inventiamo percentuali fasulle.
+                    lbSetLabel('Compilazione…');
+                    lbSetPct(null);
+                    // Passa i BYTE accumulati (BufferSource) al glue. Sulla prima
+                    // fetch ok con body, bytes è il download completo; se body è
+                    // mancante passiamo la Response (stesso pattern di prima).
+                    return init({ module_or_path: bytes || resp });
                 })
                 .catch((err) => {
                     if (n <= 1) throw err;
@@ -249,6 +452,8 @@
         }
 
         initWithRetry().then(() => {
+            // App pronta (subito prima di esporre il sandbox): fade out barra.
+            lbDone();
             // Espone le funzioni del modulo WASM (es. debug_state) per diagnostica
             window.__sandbox = sandbox;
             if (isIOS) sandbox.set_mobile_device(true);
@@ -292,6 +497,9 @@
                     console.warn('preset.json non caricato: uso livello hardcoded (' + err.message + ')');
                 });
         }).catch(err => {
+            // Errore finale di init: barra in stato errore (NON sparisce né resta
+            // sospesa a metà) + showError / badge esistenti.
+            lbError(err.message || String(err));
             const v = document.getElementById('version-badge');
             if (v) v.textContent = 'v0.14.68 🛑' + err.message.substring(0, 120);
             showError('ERRORE INIT', err.message || String(err), err.stack ? err.stack.substring(0, 3000) : '');
