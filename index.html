@@ -5,10 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Gravity Sandbox v0.14.68</title>
     <script>
-        // CONSOLE SU IPHONE (strumento di debug dello spike): Eruda è sempre
-        // attivo -> bottone in basso a destra -> console log/errori/network.
-        // (Niente più flag ?debug: Davide lo dimenticava e il bottone spariva.)
+        // CONSOLE SU IPHONE: Eruda compare SOLO con ?debug nell'URL
+        // (es. https://...ts.net:10000/?debug): bottone in basso a destra
+        // -> console log/errori/network. Senza flag: nessun bottone.
         (function () {
+            if (!new URLSearchParams(location.search).has('debug')) return;
             var s = document.createElement('script');
             s.src = 'https://cdn.jsdelivr.net/npm/eruda';
             s.onload = function () { window.eruda && window.eruda.init(); };
@@ -229,21 +230,61 @@
     </div>
 
     <script type="module">
+        // WebGPU richiede un CONTESTO SICURO (HTTPS): su HTTP il browser non
+        // espone navigator.gpu e bevy panica (FailedToCreateSurfaceForAnyBackend).
+        // Avviso chiaro invece del crash + badge spiegato.
+        if (!window.isSecureContext) {
+            const v = document.getElementById('version-badge');
+            if (v) v.textContent = '⚠️ WebGPU richiede HTTPS: apri https://instance-20260607-0236.tail8514d0.ts.net:10000/';
+        }
         import init, * as sandbox from './gravity_sandbox.js?v=0.14.68';
 
         // Focus DOM del canvas: senza questo, il browser non instrada gli
         // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
         // Vale per desktop E tastiera fisica su iPhone (niente input nascosto:
         // il fronte tastiera virtuale mobile è stato chiuso — editing su Mac).
+        // Bridge tastiera Safari Mac: input nascosto (vedi sotto). Dichiarato
+        // qui perché i listener di focus devono escluderlo dal furto di focus.
+        let hiddenInput = null;
         const canvasEl = document.getElementById('bevy-canvas');
-        canvasEl.addEventListener('click', () => canvasEl.focus());
-        canvasEl.addEventListener('pointerdown', () => canvasEl.focus());
+        // Focus DOM del canvas, robusto anche su Safari Mac: Safari annulla il
+        // focus() durante pointerdown se non preceduto da preventDefault; in
+        // aggiunta, un keydown con capture sul document ri-focalizza il canvas
+        // prima che il tasto vada altrove (i campi Bevy ricevono i tasti solo
+        // se il canvas ha il focus del browser).
+        canvasEl.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            canvasEl.focus({ preventScroll: true });
+        });
+        canvasEl.addEventListener('click', () => canvasEl.focus({ preventScroll: true }));
+        document.addEventListener('keydown', () => { if (!hiddenInput || document.activeElement !== hiddenInput) canvasEl.focus({ preventScroll: true }); }, { capture: true });
+        document.addEventListener('keyup', () => { if (!hiddenInput || document.activeElement !== hiddenInput) canvasEl.focus({ preventScroll: true }); }, { capture: true });
 
         // Rilevazione dispositivo mobile: abilita il keypad numerico Bevy
         // (l'editing valori su iPhone avviene col keypad, non con la tastiera
         // di sistema che iOS Safari non permette di controllare)
         const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
             (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        // Safari Mac: Bevy/winit non riceve i tasti fisici -> bridge con
+        // input nascosto: quando un campo Bevy ha il focus, il focus del
+        // browser va su questo input e i tasti vengono inoltrati a Rust via
+        // set_text_input(mode, testo) -> apply_mobile_text_input li applica.
+        const isSafariMac = !isIOS && /Safari/.test(navigator.userAgent) && !/Chrome|CriOS/.test(navigator.userAgent);
+        function hiddenInputEnsure() {
+            if (hiddenInput) return hiddenInput;
+            hiddenInput = document.createElement('input');
+            hiddenInput.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;z-index:-1;width:1px;height:1px;border:0;padding:0;font-size:16px;';
+            hiddenInput.autocomplete = 'off';
+            hiddenInput.autocapitalize = 'off';
+            hiddenInput.spellcheck = false;
+            hiddenInput.addEventListener('input', () => {
+                if (window.__sandbox && window.__sandbox.set_text_input) {
+                    window.__sandbox.set_text_input(2, hiddenInput.value);
+                }
+            });
+            document.body.appendChild(hiddenInput);
+            return hiddenInput;
+        }
 
         // Pannello errore copiabile: mostra messaggio completo + stack in un
         // elemento selezionabile, con bottone "Copia" (clipboard API su HTTPS).
@@ -547,6 +588,21 @@
             }
             wasmDead = false;
             lastSnap = s;
+            // Bridge tastiera Safari Mac: il campo Bevy focussato riceve i
+            // tasti tramite l'input nascosto (mode 1 = apertura, 2 = digitare).
+            if (isSafariMac && s && window.__sandbox && window.__sandbox.set_text_input) {
+                const focusOn = s.focus !== 4294967295;
+                if (focusOn) {
+                    const hi = hiddenInputEnsure();
+                    if (document.activeElement !== hi) {
+                        hi.value = '';
+                        window.__sandbox.set_text_input(1, '');
+                        hi.focus({ preventScroll: true });
+                    }
+                } else if (hiddenInput && document.activeElement === hiddenInput) {
+                    hiddenInput.blur();
+                }
+            }
             if (s.last_system) lastSys = s.last_system;
             const toolShort = { Select: 'SEL', Add: 'ADD', Move: 'MOV', Delete: 'DEL' }[s.tool] || s.tool;
             const focusTxt = s.focus !== 4294967295 ? 'focus ON' : 'focus off';

@@ -663,6 +663,23 @@ pub fn set_mobile_device(mobile: bool) {
     }
 }
 
+/// JS (bridge Safari Mac / iPhone): testo del campo focussato da tastiera
+/// fisica o virtuale. mode: 1 = apertura campo (select-all, il primo tasto
+/// sostituisce), 2 = digitazione (replace). apply_mobile_text_input applica
+/// il testo al campo Bevy focussato.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn set_text_input(mode: u8, text: String) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(mut m) = crate::js_bridge::TEXT_INPUT_MODE.lock() {
+            *m = mode;
+        }
+        if let Ok(mut c) = crate::js_bridge::TEXT_INPUT_CMD.lock() {
+            *c = Some(text);
+        }
+    }
+}
+
 /// Applica il testo inviato da JS (tastiera mobile) al campo focussato.
 #[cfg(target_arch = "wasm32")]
 fn apply_mobile_text_input(
@@ -680,17 +697,24 @@ fn apply_mobile_text_input(
     };
     let Some(new_text) = cmd else { return };
     let mode = crate::js_bridge::TEXT_INPUT_MODE.lock().map(|m| *m).unwrap_or(0);
+    // Apertura campo (mode 1): il testo vuoto NON genera edit: parley
+    // panica con is_char_boundary se riceve Insert/SelectAll su edit vuoto
+    // (panic visto al semplice click sul campo su Safari Mac).
+    if new_text.is_empty() && mode == 1 {
+        return;
+    }
     if let Ok(mut editable) = editable_query.get_mut(focused) {
         let current = editable.value().to_string();
-        if current != new_text || mode == 1 {
-            editable.clear();
+        if current != new_text {
+            // Sostituzione SICURA: clear() lasciava il cursore parley con
+            // l'indice vecchio -> Insert panica con is_char_boundary.
+            // SelectAll + Delete (usa la selezione) + Insert mantengono il
+            // cursore su char boundary validi.
+            editable.queue_edit(bevy::text::TextEdit::SelectAll);
+            editable.queue_edit(bevy::text::TextEdit::Delete);
             editable.queue_edit(bevy::text::TextEdit::Insert(smol_str::SmolStr::new(
                 &new_text,
             )));
-            if mode == 1 {
-                // Apertura campo: seleziona tutto (il primo tasto sostituisce)
-                editable.queue_edit(bevy::text::TextEdit::SelectAll);
-            }
         }
     }
 }
