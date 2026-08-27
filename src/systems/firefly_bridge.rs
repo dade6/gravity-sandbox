@@ -519,20 +519,30 @@ fn apply_star_light_settings(
 
 /// Applica le impostazioni glow (inner/outer scale+alpha ai child Sprite)
 /// quando `StarGlow` cambia (edit live dal pannello). Idempotente.
+///
+/// UNA sola query `&mut Sprite` (con `Has<FireflyGlowInner/Outer>` per
+/// distinguere i due glow): due query `&mut Sprite` separate sullo stesso
+/// componente erano un B0001 all'inizializzazione (panic su WASM
+/// "Unreachable code", v0.14.70).
 fn apply_star_glow_settings(
     stars: Query<(&CelestialBody, &Children, &StarGlow), (Changed<StarGlow>, With<FireflySpriteAttached>)>,
-    mut inner: Query<&mut Sprite, With<FireflyGlowInner>>,
-    mut outer: Query<&mut Sprite, With<FireflyGlowOuter>>,
+    mut glows: Query<(&mut Sprite, Has<FireflyGlowInner>, Has<FireflyGlowOuter>)>,
 ) {
     for (body, children, g) in &stars {
         for child in children.iter() {
-            if let Ok(mut sp) = inner.get_mut(child) {
-                sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.inner_scale));
-                sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.inner_alpha);
-            }
-            if let Ok(mut sp) = outer.get_mut(child) {
-                sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.outer_scale));
-                sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.outer_alpha);
+            let Ok((mut sp, is_inner, is_outer)) = glows.get_mut(child) else {
+                continue;
+            };
+            match (is_inner, is_outer) {
+                (true, false) => {
+                    sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.inner_scale));
+                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.inner_alpha);
+                }
+                (false, true) => {
+                    sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.outer_scale));
+                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.outer_alpha);
+                }
+                _ => {}
             }
         }
     }
