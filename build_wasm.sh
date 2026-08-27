@@ -32,6 +32,12 @@ RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
 # 16.8MB invece di 112MB -> il fetch passa anche su connessioni lente.
 gzip -kf wasm-dist/gravity_sandbox_bg.wasm
 
+# Sidecar progresso caricamento: taglia DECOMPRESSA del wasm (quello che il
+# reader del browser emette anche quando il server manda il .gz). index.html
+# lo legge per mostrare la % REALE di download sotto gzip (Content-Length è la
+# taglia compressa, non confrontabile coi byte decompressi letti dal reader).
+stat -c %s wasm-dist/gravity_sandbox_bg.wasm > wasm-dist/gravity_sandbox_bg.wasm.size
+
 # Asset serviti via HTTP (modificabili senza ricompilare il WASM)
 mkdir -p wasm-dist/assets
 cp -r assets/shaders wasm-dist/assets/

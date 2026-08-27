@@ -107,6 +107,12 @@ class SandboxHandler(http.server.BaseHTTPRequestHandler):
         if serve_gz:
             self.send_header('Content-Encoding', 'gzip')
             self.send_header('Vary', 'Accept-Encoding')
+            # Taglia DECOMPRESSA del wasm (per la % reale del caricamento sotto
+            # gzip, letta da index.html): Content-Length è la taglia COMPRESSA,
+            # ma il reader del browser emette byte DECOMPRESSI -> il totale per
+            # la % è la taglia del .wasm non compresso.
+            if os.path.isfile(path):
+                self.send_header('X-Wasm-Decompressed-Length', str(os.path.getsize(path)))
         self.end_headers()
 
         if head_only:
