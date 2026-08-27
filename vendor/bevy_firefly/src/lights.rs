@@ -102,6 +102,15 @@ pub struct PointLight2d {
     ///
     /// **Default:** [Vec3::ZERO].
     pub offset: Vec3,
+
+    /// Width (world units) of the soft transition band at the very edge of the
+    /// light. When > 0 the contribution fades smoothly from full at
+    /// `radius` to 0 at `radius + fade_width`, avoiding the hard on/off cut at
+    /// `radius`. When 0 the historic hard cutoff is kept (nothing beyond
+    /// `radius`).
+    ///
+    /// **Default:** 0.
+    pub fade_width: f32,
 }
 
 impl Default for PointLight2d {
@@ -115,6 +124,7 @@ impl Default for PointLight2d {
             angle: LightAngle::FULL,
             cast_shadows: true,
             offset: Vec3::ZERO,
+            fade_width: 0.0,
         }
     }
 }
@@ -274,13 +284,16 @@ pub struct ExtractedPointLight {
     pub dir: Vec2,
     pub z: f32,
     pub height: f32,
+    pub fade_width: f32,
     pub changes: Changes,
     pub render_layers: RenderLayers,
 }
 
 impl PartialEq for ExtractedPointLight {
     fn eq(&self, other: &Self) -> bool {
-        self.pos == other.pos && self.radius == other.radius
+        self.pos == other.pos
+            && self.radius == other.radius
+            && self.fade_width == other.fade_width
     }
 }
 

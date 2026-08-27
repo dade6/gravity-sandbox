@@ -18,28 +18,23 @@ use bevy::prelude::*;
 use bevy_firefly::prelude::*;
 
 use crate::components::celestial::CelestialBody;
-use crate::rendering::textures::{build_image, generate_sphere_normal_map};
+use crate::components::lighting::{
+    AmbientLight, GlowCurve, LightFalloff, StarGlow, StarLightSettings,
+};
+use crate::rendering::textures::{build_image, generate_radial_glow_texture, generate_sphere_normal_map};
 
 /// Configurazione luce: disco circolare della dimensione della stella.
-/// ambient 0.03: il lato in ombra dei pianeti è quasi nero (solo il 3% del
-/// colore). Lo sfondo grigio scuro NON dipende dall'ambient: la luce a
-/// Falloff::NONE copre tutto il viewport -> sfondo = ClearColor (0.10).
-const AMBIENT_BRIGHTNESS: f32 = 0.03;
-const LIGHT_INTENSITY: f32 = 1.8;
-const LIGHT_RADIUS: f32 = 5000.0;
+/// I valori LIVE vengono letti dal componente `StarLightSettings` attaccato
+/// alla stella (default corretti qui sotto: intensity 1.8, radius 5000).
+/// ambient 0.03: il lato in ombra dei pianeti è quasi nero. Da Ticket 19
+/// l'ambient è pilotato dalla risorsa `AmbientLight` (preset.json).
 /// Altezza della luce sopra il piano (TopDownY): dal v0.14.56 è INATTIVA:
 /// il ramo mode 2 della shader usa il 2D puro (direzione luce nel solo
 /// piano dello schermo: dx, dy, 0). LightHeight resta nel codice solo per
 /// non rompere l'API del crate (badge lH0).
 const LIGHT_HEIGHT: f32 = 0.0;
-/// Boost del core: rende il disco centrale (dimensione stella) più brillante.
-const LIGHT_CORE_BOOST: f32 = 3.0;
 /// Altezza stella: con z_sorting, non riceve ombre dai pianeti.
 const STAR_HEIGHT: f32 = 1000.0;
-/// Dimensione dell'alone (glow) attorno alla stella, in multipli del raggio.
-const GLOW_SCALE: f32 = 4.0;
-/// Opacità dell'alone.
-const GLOW_ALPHA: f32 = 0.55;
 
 /// Marker sulla camera (ha già FireflyConfig).
 #[derive(Component)]
@@ -57,18 +52,30 @@ pub struct FireflyOccluderAttached;
 #[derive(Component)]
 pub struct FireflySpriteAttached;
 
+/// Marker sul child glow interno (Sprite, ~4× raggio stella).
+#[derive(Component)]
+pub struct FireflyGlowInner;
+
+/// Marker sul child glow esterno (Sprite, ~25× raggio stella, faint).
+#[derive(Component)]
+pub struct FireflyGlowOuter;
+
 /// Texture condivise: disco bianco (base sprite), normal map sfera, alone.
 #[derive(Resource)]
 pub struct FireflyTextures {
     pub disc: Handle<Image>,
     pub sphere_normal: Handle<Image>,
     /// Disco con gradiente radiale (bianco al centro → trasparente ai bordi),
-    /// usato come alone luminoso attorno alle stelle.
+    /// usato come alone luminoso attorno alle stelle. La curva + soft edge
+    /// sono GLOBALI (risorsa `GlowCurve`); `curve` qui serve a rigenerarla al
+    /// cambio preset (Reset) senza toccare le stelle già sparse.
     pub glow: Handle<Image>,
+    pub curve: GlowCurve,
 }
 
 impl FromWorld for FireflyTextures {
     fn from_world(world: &mut World) -> Self {
+        let curve = world.resource::<GlowCurve>().clone();
         let mut images = world.resource_mut::<Assets<Image>>();
 
         // Disco bianco 64x64 con alpha (cerchio pieno) — tinto con sprite.color.
@@ -91,27 +98,9 @@ impl FromWorld for FireflyTextures {
         }
         let disc = images.add(build_image(pixels, size as u32, size as u32));
 
-        // Alone radiale 128x128: alpha massima al centro, sfuma a 0 ai bordi
-        // (falloff quadratico) — tinto con il colore della stella.
-        let gsize = 128usize;
-        let mut gpixels = vec![0u8; gsize * gsize * 4];
-        let gcenter = (gsize as f32 - 1.0) / 2.0;
-        let gradius = gsize as f32 / 2.0 - 1.0;
-        for y in 0..gsize {
-            for x in 0..gsize {
-                let dx = x as f32 - gcenter;
-                let dy = y as f32 - gcenter;
-                let dist = (dx * dx + dy * dy).sqrt();
-                let t = (dist / gradius).clamp(0.0, 1.0);
-                let alpha = ((1.0 - t) * (1.0 - t) * 255.0) as u8;
-                let i = (y * gsize + x) * 4;
-                gpixels[i] = 255;
-                gpixels[i + 1] = 255;
-                gpixels[i + 2] = 255;
-                gpixels[i + 3] = alpha;
-            }
-        }
-        let glow = images.add(build_image(gpixels, gsize as u32, gsize as u32));
+        // Alone radiale: curva + soft edge dal GlowCurve globale (4321: niente
+        // gradino al bordo). Tinto col colore della stella.
+        let glow = images.add(generate_radial_glow_texture(128, &curve));
 
         // Normal map sfera: GENERATA proceduralmente (stessa identica immagine
         // della sfera, 256x256) invece di caricarla da file. Motivi:
@@ -129,6 +118,7 @@ impl FromWorld for FireflyTextures {
             disc,
             sphere_normal,
             glow,
+            curve,
         }
     }
 }
@@ -139,8 +129,16 @@ impl Plugin for FireflyBridgePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FireflyPlugin)
             .init_resource::<FireflyTextures>()
+            .init_resource::<GlowCurve>()
+            .init_resource::<AmbientLight>()
             // Idempotente: si attiva al primo frame in cui la camera esiste.
             .add_systems(Update, setup_firefly_camera)
+            // Ticket 19: rigenera la glow texture al cambio curva globale e
+            // sincronizza l'ambient dalla risorsa AmbientLight (preset.json).
+            .add_systems(
+                Update,
+                (ensure_glow_texture_matches_curve, apply_ambient_light),
+            )
             .add_systems(
                 Update,
                 (
@@ -151,6 +149,8 @@ impl Plugin for FireflyBridgePlugin {
                     spawn_planet_occluders,
                     sync_occluders,
                     sync_sprite_z,
+                    apply_star_light_settings,
+                    apply_star_glow_settings,
                 )
                     .chain(),
             );
@@ -175,6 +175,7 @@ fn lock_body_rotation(
 fn setup_firefly_camera(
     mut commands: Commands,
     cameras: Query<(Entity, &Camera), Without<FireflyCamera>>,
+    ambient: Res<AmbientLight>,
 ) {
     for (entity, _cam) in cameras.iter() {
         commands.entity(entity).insert((
@@ -185,8 +186,12 @@ fn setup_firefly_camera(
             bevy::core_pipeline::tonemapping::Tonemapping::Reinhard,
             bevy::camera::Hdr,
             FireflyConfig {
-                ambient_color: Color::WHITE,
-                ambient_brightness: AMBIENT_BRIGHTNESS,
+                ambient_color: Color::srgb(
+                    ambient.color[0],
+                    ambient.color[1],
+                    ambient.color[2],
+                ),
+                ambient_brightness: ambient.intensity,
                 soft_shadows: true,
                 // v0.14.59 (con patch vendored nella shader): z_sorting=true
                 // MA il check è ora l'UGUAGLIANZA esatta stencil.g == occ.z
@@ -224,11 +229,11 @@ fn convert_bodies_to_sprites(
     mut commands: Commands,
     textures: Res<FireflyTextures>,
     bodies: Query<
-        (Entity, &CelestialBody, &Transform),
+        (Entity, &CelestialBody, &Transform, Option<&StarGlow>),
         (Without<FireflySpriteAttached>, With<Mesh2d>),
     >,
 ) {
-    for (entity, body, transform) in bodies.iter() {
+    for (entity, body, _transform, glow) in bodies.iter() {
         let mut cmd = commands.entity(entity);
         cmd.remove::<Mesh2d>()
             .remove::<MeshMaterial2d<crate::systems::lighting::LightMaterial>>()
@@ -245,20 +250,30 @@ fn convert_bodies_to_sprites(
             ));
 
         if body.luminous {
-            // Stella: NIENTE normal map, ma alone luminoso radiale (glow)
-            // grande GLOW_SCALE× il raggio, tinto col colore della stella.
-            let glow_color = Color::srgba(
-                body.color[0],
-                body.color[1],
-                body.color[2],
-                GLOW_ALPHA,
-            );
+            // Stella: NIENTE normal map, ma DUE aloni radiali semi-trasparenti
+            // (inner = alino stretto, outer = alone ampio e tenue), entrambi
+            // tinti col colore della stella. Parametri (scale/alpha) dal
+            // componente StarGlow (default: inner 4×/0.55, outer 25×/0.18).
+            let g = glow.cloned().unwrap_or_default();
+            let inner_color = Color::srgba(body.color[0], body.color[1], body.color[2], g.inner_alpha);
+            let outer_color = Color::srgba(body.color[0], body.color[1], body.color[2], g.outer_alpha);
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
+                    FireflyGlowInner,
                     Sprite {
                         image: textures.glow.clone(),
-                        color: glow_color,
-                        custom_size: Some(Vec2::splat(body.radius * 2.0 * GLOW_SCALE)),
+                        color: inner_color,
+                        custom_size: Some(Vec2::splat(body.radius * 2.0 * g.inner_scale)),
+                        ..default()
+                    },
+                    Transform::default(),
+                ));
+                parent.spawn((
+                    FireflyGlowOuter,
+                    Sprite {
+                        image: textures.glow.clone(),
+                        color: outer_color,
+                        custom_size: Some(Vec2::splat(body.radius * 2.0 * g.outer_scale)),
                         ..default()
                     },
                     Transform::default(),
@@ -305,27 +320,37 @@ fn attach_normal_maps(
 }
 
 /// Ogni stella ottiene una PointLight2d child che la segue, con LightCore
-/// circolare grande 1.5× il raggio della stella (luce a disco: il centro
-/// brillante copre tutta la stella, non un puntino).
+/// circolare grande `core_radius_factor`× il raggio della stella (luce a
+/// disco: il centro brillante copre tutta la stella, non un puntino). I
+/// valori LEGGE dal componente `StarLightSettings` (intensity/radius/falloff/
+/// fade_width/core), così il Reset/load produce esattamente i valori salvati
+/// senza doverli ri-applicare in un secondo tempo.
 fn spawn_star_lights(
-    stars: Query<(Entity, &CelestialBody), (Without<FireflyLightAttached>, Without<FireflyOccluderAttached>)>,
+    stars: Query<
+        (Entity, &CelestialBody, Option<&StarLightSettings>),
+        (Without<FireflyLightAttached>, Without<FireflyOccluderAttached>),
+    >,
     mut commands: Commands,
 ) {
-    for (entity, body) in stars.iter() {
+    for (entity, body, settings) in stars.iter() {
         if !body.luminous {
             continue;
         }
-        commands.entity(entity).insert(FireflyLightAttached).with_children(
-            |parent| {
+        let s = settings.cloned().unwrap_or_default();
+        commands
+            .entity(entity)
+            .insert(FireflyLightAttached)
+            .with_children(|parent| {
                 parent.spawn((
                     PointLight2d {
                         color: Color::srgba(body.color[0], body.color[1], body.color[2], 1.0),
-                        intensity: LIGHT_INTENSITY,
-                        radius: LIGHT_RADIUS,
-                        falloff: Falloff::NONE,
+                        intensity: s.intensity,
+                        radius: s.radius,
+                        falloff: s.falloff.into_firefly(),
+                        fade_width: s.fade_width,
                         core: LightCore {
-                            radius: body.radius * 1.5,
-                            boost: LIGHT_CORE_BOOST,
+                            radius: body.radius * s.core_radius_factor,
+                            boost: s.core_boost,
                             ..default()
                         },
                         ..default()
@@ -335,8 +360,7 @@ fn spawn_star_lights(
                     LightHeight(LIGHT_HEIGHT),
                     Transform::default(),
                 ));
-            },
-        );
+            });
     }
 }
 
@@ -418,6 +442,99 @@ fn sync_sprite_z(
         //   SPAZIALE, come richiesto).
         let d = transform.translation.truncate().distance(star_pos);
         transform.translation.z = -d;
+    }
+}
+
+// ============================================================
+// Ticket 19 — star light / glow / ambient apply systems
+// ============================================================
+
+impl LightFalloff {
+    /// Map our serialisable falloff choice onto the firefly GPU falloff.
+    fn into_firefly(&self) -> Falloff {
+        match self {
+            LightFalloff::InverseSquare => Falloff::InverseSquare { intensity: 0.0 },
+            LightFalloff::Linear => Falloff::Linear { intensity: 0.0 },
+            LightFalloff::None => Falloff::None,
+        }
+    }
+}
+
+/// Rigenera la glow texture condivisa quando la curva globale (`GlowCurve`,
+/// da preset.json) cambia — tipicamente su Reset. Le nuove stelle usano il
+/// handle aggiornato a spawn; le già esistenti restano sulla vecchia texture
+/// (solo la curva cambia via Reset, che respawna tutti i corpi).
+fn ensure_glow_texture_matches_curve(
+    mut textures: ResMut<FireflyTextures>,
+    curve: Res<GlowCurve>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if curve.is_changed() || textures.curve != *curve {
+        textures.glow = images.add(generate_radial_glow_texture(128, &curve));
+        textures.curve = curve.clone();
+    }
+}
+
+/// Sincronizza l'ambient firefly dalla risorsa `AmbientLight` (preset.json)
+/// quando cambia. Il `range` (gating per distanza dalla stella più vicina)
+/// non è esprimibile nella config firefly globale, quindi viene persistito ma
+/// non applicato per-pixel (range=0 default = nessun limite, comportamento
+/// storico).
+fn apply_ambient_light(
+    ambient: Res<AmbientLight>,
+    mut cameras: Query<&mut FireflyConfig, With<FireflyCamera>>,
+) {
+    if !ambient.is_changed() {
+        return;
+    }
+    let color = Color::srgb(ambient.color[0], ambient.color[1], ambient.color[2]);
+    for mut cfg in &mut cameras {
+        cfg.ambient_brightness = ambient.intensity;
+        cfg.ambient_color = color;
+    }
+}
+
+/// Applica le impostazioni luce (intensity/radius/falloff/fade/core) dalla
+/// stella alla sua PointLight2d child quando `StarLightSettings` cambia
+/// (edit live dal pannello). Allo spawn i valori sono già corretti (li legge
+/// `spawn_star_lights`), quindi qui basta il Changed.
+fn apply_star_light_settings(
+    bodies: Query<(&CelestialBody, &Children, &StarLightSettings), (Changed<StarLightSettings>, With<FireflyLightAttached>)>,
+    mut lights: Query<&mut PointLight2d>,
+) {
+    for (body, children, s) in &bodies {
+        for child in children.iter() {
+            let Ok(mut light) = lights.get_mut(child) else {
+                continue;
+            };
+            light.intensity = s.intensity;
+            light.radius = s.radius;
+            light.falloff = s.falloff.into_firefly();
+            light.fade_width = s.fade_width;
+            light.core.radius = body.radius * s.core_radius_factor;
+            light.core.boost = s.core_boost;
+        }
+    }
+}
+
+/// Applica le impostazioni glow (inner/outer scale+alpha ai child Sprite)
+/// quando `StarGlow` cambia (edit live dal pannello). Idempotente.
+fn apply_star_glow_settings(
+    stars: Query<(&CelestialBody, &Children, &StarGlow), (Changed<StarGlow>, With<FireflySpriteAttached>)>,
+    mut inner: Query<&mut Sprite, With<FireflyGlowInner>>,
+    mut outer: Query<&mut Sprite, With<FireflyGlowOuter>>,
+) {
+    for (body, children, g) in &stars {
+        for child in children.iter() {
+            if let Ok(mut sp) = inner.get_mut(child) {
+                sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.inner_scale));
+                sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.inner_alpha);
+            }
+            if let Ok(mut sp) = outer.get_mut(child) {
+                sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.outer_scale));
+                sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.outer_alpha);
+            }
+        }
     }
 }
 

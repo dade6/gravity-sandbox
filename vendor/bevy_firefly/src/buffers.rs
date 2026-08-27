@@ -201,7 +201,17 @@ fn prepare_lights(
                 Falloff::Linear { .. } => 1,
                 Falloff::None => 2,
             },
-            falloff_intensity: light.falloff.intensity(),
+            falloff_intensity: if matches!(light.falloff, Falloff::None) && light.fade_width > 0.0
+            {
+                // TICKET 19 (vendored): con Falloff::None il campo
+                // falloff_intensity non è usato dalla shader (falloff() restituisce
+                // 1.0 costante) → lo riusa per trasportare fade_width al GPU senza
+                // cambiare il layout di UniformPointLight (evita padding → deriva
+                // NoUninit). La shader la legge come banda di dissolvenza al bordo.
+                light.fade_width
+            } else {
+                light.falloff.intensity()
+            },
             inner_angle: light.angle.inner / 180. * PI,
             outer_angle: light.angle.outer / 180. * PI,
             dir: light.dir,

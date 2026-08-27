@@ -314,6 +314,7 @@ fn extract_lights(
             cast_shadows: light.cast_shadows,
             dir: (transform.rotation() * Vec3::Y).xy(),
             height: height.0,
+            fade_width: light.fade_width,
             changes: changes.clone(),
             render_layers: render_layers.clone(),
         });

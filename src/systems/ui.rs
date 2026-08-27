@@ -37,6 +37,7 @@ use crate::systems::reset::ResetMessage;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::{SimulationState, StepMessage};
 use crate::systems::tools::{CurrentTool, PendingDelete, Tool, ToolBtn};
+use crate::components::lighting::{LightFalloff, StarGlow, StarLightSettings};
 
 /// Plugin per l'interfaccia utente Bevy (solo build native/desktop).
 ///
@@ -100,6 +101,15 @@ struct DeleteDialog;
 
 #[derive(Component)]
 struct DeleteDialogBtn(&'static str);
+
+/// Marker sugli header delle sezioni stella (Luce/Glow) del property panel.
+/// Le sezioni sono visibili SOLO quando il corpo selezionato è una stella.
+#[derive(Component)]
+struct StarSection;
+
+/// Marker sulle righe destinate solo alle stelle (campi Luce/Glow).
+#[derive(Component)]
+struct StarField;
 
 // === Colori tema (solo nativo) ===
 
@@ -406,7 +416,108 @@ fn spawn_property_panel(commands: &mut Commands) {
                     ));
                 }
             }
+
+            // === Sezioni stella (Luce / Glow): visibili solo se il corpo
+            // selezionato è una stella (update_property_panel le mostra =
+            // Display::Flex solo per corpi luminous). ===
+            const STAR_LIGHT_FIELDS: &[(&str, &str)] = &[
+                ("Intensity:", "light_intensity"),
+                ("Radius:", "light_radius"),
+                ("Falloff:", "light_falloff"),
+                ("Fade:", "light_fade"),
+                ("Core Boost:", "light_core_boost"),
+            ];
+            const STAR_GLOW_FIELDS: &[(&str, &str)] = &[
+                ("Glow Inner Scale:", "glow_inner_scale"),
+                ("Glow Inner Alpha:", "glow_inner_alpha"),
+                ("Glow Outer Scale:", "glow_outer_scale"),
+                ("Glow Outer Alpha:", "glow_outer_alpha"),
+            ];
+            spawn_star_section(panel, "LUCE", &STAR_LIGHT_FIELDS);
+            spawn_star_section(panel, "GLOW", &STAR_GLOW_FIELDS);
         });
+}
+
+/// Spawning helper per una sezione stella (header + righe campo numerico),
+/// seguendo lo stesso pattern visivo delle righe del property panel.
+fn spawn_star_section(
+    panel: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    header: &str,
+    fields: &[(&'static str, &'static str)],
+) {
+    panel.spawn((
+        StarSection,
+        Text::new(header),
+        TextFont {
+            font: FontSource::default(),
+            font_size: FontSize::Px(12.0),
+            ..default()
+        },
+        TextColor(Color::srgba(1.0, 0.85, 0.4, 0.95)),
+        Node {
+            margin: UiRect::top(Val::Px(4.0)),
+            ..default()
+        },
+    ));
+    for &(label, key) in fields {
+        let mut row = panel.spawn((
+            StarField,
+            PropField(label),
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(4.0),
+                width: Val::Percent(100.0),
+                ..default()
+            },
+        ));
+        row.with_child((
+            Text::new(label),
+            TextFont {
+                font: FontSource::default(),
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(TEXT_COLOR),
+        ));
+        row.with_children(|input_container| {
+            input_container
+                .spawn((
+                    Node {
+                        flex_grow: 1.0,
+                        height: Val::Px(22.0),
+                        padding: UiRect::horizontal(Val::Px(4.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::px(3.0, 3.0, 3.0, 3.0),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(INPUT_BG),
+                    BorderColor::all(INPUT_BORDER),
+                ))
+                .with_child((
+                    EditableText::new(""),
+                    PropInput(key),
+                    TextFont {
+                        font: FontSource::default(),
+                        font_size: FontSize::Px(11.0),
+                        ..default()
+                    },
+                    TextColor(TEXT_COLOR),
+                    TextScroll(Vec2::ZERO),
+                    TextCursorStyle {
+                        color: Color::WHITE,
+                        selection_color: Color::srgba(0.45, 0.75, 1.0, 0.6),
+                        unfocused_selection_color: Color::srgba(0.45, 0.75, 1.0, 0.2),
+                        selected_text_color: None,
+                    },
+                    Node {
+                        width: Val::Percent(100.0),
+                        ..default()
+                    },
+                ));
+        });
+    }
 }
 
 // === Timeline button sync ===
@@ -459,14 +570,20 @@ fn update_property_panel(
     bodies_query: Query<(&CelestialBody, &GlobalTransform), Without<PropertyPanel>>,
     velocity_query: Query<&LinearVelocity>,
     sim_state: Res<SimulationState>,
-    mut panel_query: Query<&mut Node, With<PropertyPanel>>,
     mut editable_inputs: Query<(&PropInput, &mut EditableText, &mut TextColor)>,
     mut text_labels: Query<(&PropField, &mut Text), (Without<PropInput>, Without<EditableText>)>,
+    stars_query: Query<(Entity, Option<&StarLightSettings>, Option<&StarGlow>)>,
+    // ParamSet: panel_query (root) e star_nodes (righe stella) accedono
+    // entrambe a &mut Node -> senza ParamSet è un B0001.
+    mut node_queries: ParamSet<(
+        Query<&mut Node, With<PropertyPanel>>,
+        Query<&mut Node, Or<(With<StarSection>, With<StarField>)>>,
+    )>,
 ) {
     crate::mark_system("update_property_panel");
 
     // Show/hide panel
-    if let Ok(mut panel_node) = panel_query.single_mut() {
+    if let Ok(mut panel_node) = node_queries.p0().single_mut() {
         if selected.0.is_some() {
             panel_node.display = Display::Flex;
         } else {
@@ -491,6 +608,20 @@ fn update_property_panel(
     };
 
     let pos = transform.translation().truncate();
+
+    // Sezioni Luce/Glow: visibili SOLO quando il corpo selezionato è una
+    // stella (luminous).
+    let is_star = body.luminous;
+    for mut node in node_queries.p1().iter_mut() {
+        node.display = if is_star { Display::Flex } else { Display::None };
+    }
+    let star_data = stars_query.get(entity).ok();
+    let light = star_data
+        .and_then(|(_, l, _)| l.cloned())
+        .unwrap_or_default();
+    let glow = star_data
+        .and_then(|(_, _, g)| g.cloned())
+        .unwrap_or_default();
 
     // Edit hint based on pause state
     let edit_hint = if sim_state.paused {
@@ -533,6 +664,19 @@ fn update_property_panel(
                     let b = (body.color[2] * 255.0) as u8;
                     format!("#{:02x}{:02x}{:02x}", r, g, b)
                 }
+                "light_intensity" => format!("{:.3}", light.intensity),
+                "light_radius" => format!("{:.0}", light.radius),
+                "light_falloff" => match light.falloff {
+                    LightFalloff::InverseSquare => "InverseSquare".to_string(),
+                    LightFalloff::Linear => "Linear".to_string(),
+                    LightFalloff::None => "None".to_string(),
+                },
+                "light_fade" => format!("{:.1}", light.fade_width),
+                "light_core_boost" => format!("{:.2}", light.core_boost),
+                "glow_inner_scale" => format!("{:.2}", glow.inner_scale),
+                "glow_inner_alpha" => format!("{:.2}", glow.inner_alpha),
+                "glow_outer_scale" => format!("{:.0}", glow.outer_scale),
+                "glow_outer_alpha" => format!("{:.2}", glow.outer_alpha),
                 _ => continue,
             };
             // Only update if the text differs from expected (avoids cursor jumps while editing)
@@ -619,6 +763,68 @@ pub(crate) fn apply_prop_value(
     }
 }
 
+/// Applica il testo di un campo stella (Luce/Glow) al componente
+/// StarLightSettings/StarGlow del corpo selezionato. Condivisa tra il sync
+/// desktop e il keypad mobile. `light_falloff` è una stringa enum
+/// ("None" / "Linear" / "InverseSquare").
+pub(crate) fn apply_star_prop_value(
+    prop: &str,
+    text: &str,
+    settings: &mut StarLightSettings,
+    glow: &mut StarGlow,
+) {
+    match prop {
+        "light_intensity" => {
+            if let Ok(v) = text.parse::<f32>() {
+                settings.intensity = v;
+            }
+        }
+        "light_radius" => {
+            if let Ok(v) = text.parse::<f32>() {
+                settings.radius = v.max(1.0);
+            }
+        }
+        "light_falloff" => {
+            settings.falloff = match text.trim() {
+                "Linear" => LightFalloff::Linear,
+                "InverseSquare" => LightFalloff::InverseSquare,
+                _ => LightFalloff::None,
+            };
+        }
+        "light_fade" => {
+            if let Ok(v) = text.parse::<f32>() {
+                settings.fade_width = v.max(0.0);
+            }
+        }
+        "light_core_boost" => {
+            if let Ok(v) = text.parse::<f32>() {
+                settings.core_boost = v;
+            }
+        }
+        "glow_inner_scale" => {
+            if let Ok(v) = text.parse::<f32>() {
+                glow.inner_scale = v.max(0.0);
+            }
+        }
+        "glow_inner_alpha" => {
+            if let Ok(v) = text.parse::<f32>() {
+                glow.inner_alpha = v.clamp(0.0, 1.0);
+            }
+        }
+        "glow_outer_scale" => {
+            if let Ok(v) = text.parse::<f32>() {
+                glow.outer_scale = v.max(0.0);
+            }
+        }
+        "glow_outer_alpha" => {
+            if let Ok(v) = text.parse::<f32>() {
+                glow.outer_alpha = v.clamp(0.0, 1.0);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Legge modifiche da EditableText e le scrive al corpo selezionato
 
 fn sync_property_input_to_body(
@@ -636,6 +842,8 @@ fn sync_property_input_to_body(
         &mut LinearVelocity,
         &mut Mass,
     )>,
+    mut settings_query: Query<&mut StarLightSettings>,
+    mut glow_query: Query<&mut StarGlow>,
 ) {
     crate::mark_system("sync_property_input_to_body");
 
@@ -686,6 +894,14 @@ fn sync_property_input_to_body(
             if let Some(rgb) = parse_hex_color(&text_value) {
                 if body.color != rgb {
                     body.color = rgb;
+                }
+            }
+        }
+        if prop.0.starts_with("light_") || prop.0.starts_with("glow_") {
+            // Campi stella (Luce/Glow): scrivono in StarLightSettings/StarGlow.
+            if let Ok(mut s) = settings_query.get_mut(entity) {
+                if let Ok(mut g) = glow_query.get_mut(entity) {
+                    apply_star_prop_value(prop.0, &text_value, &mut s, &mut g);
                 }
             }
         }

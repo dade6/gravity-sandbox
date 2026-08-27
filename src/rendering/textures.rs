@@ -6,6 +6,8 @@ use bevy::render::render_resource::{
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use crate::components::lighting::GlowCurve;
+
 // ============================================================================
 // Value Noise 2D — deterministic, seeded, octave-supporting
 // ============================================================================
@@ -127,6 +129,28 @@ pub(crate) fn build_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
         ..default()
     };
     image
+}
+
+/// Radial soft-glow texture (luminous source halo): tinted white (the sprite
+/// `color` applies the star tint), with alpha `(1 - t)^falloff_exp` where
+/// `t` is the normalised radius 0 (centre) → 1 (disc edge). The alpha ramps
+/// to exactly 0 within `curve.soft_edge` of the rim, so no hard disc edge is
+/// visible on a black background. Shared by every star (the curve is a GLOBAL
+/// preset parameter, not per-star).
+pub(crate) fn generate_radial_glow_texture(size: u32, curve: &GlowCurve) -> Image {
+    let w = size as usize;
+    let half = size as f32 / 2.0;
+    let mut pixels = Vec::with_capacity(w * w * 4);
+    for y in 0..w {
+        for x in 0..w {
+            let dx = x as f32 + 0.5 - half;
+            let dy = y as f32 + 0.5 - half;
+            let d = (dx * dx + dy * dy).sqrt() / half; // 0 centre, 1 disc edge
+            let a = (curve.alpha_at(d) * 255.0) as u8;
+            pixels.extend_from_slice(&[255u8, 255u8, 255u8, a]);
+        }
+    }
+    build_image(pixels, size, size)
 }
 
 /// Genera i pixel RGBA (non-sRGB) della normal map di una sfera: per ogni

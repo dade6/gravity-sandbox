@@ -17,8 +17,9 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 
 use crate::components::celestial::CelestialBody;
+use crate::components::lighting::{StarGlow, StarLightSettings};
 use crate::systems::selection::SelectedBody;
-use crate::systems::ui::{apply_prop_value, PropInput};
+use crate::systems::ui::{apply_prop_value, apply_star_prop_value, PropInput};
 
 /// Azione di un tasto del keypad
 #[derive(Component, Clone, Copy)]
@@ -47,9 +48,26 @@ impl Plugin for KeypadPlugin {
     }
 }
 
-/// Campi numerici editabili dal keypad (Name è testo -> escluso)
+/// Campi numerici editabili dal keypad (Name è testo -> escluso; anche i
+/// campi stella Luce/Glow tranne il falloff, che è una stringa enum).
 fn is_numeric_field(prop: &str) -> bool {
-    matches!(prop, "mass" | "radius" | "pos_x" | "pos_y" | "vel_x" | "vel_y")
+    matches!(
+        prop,
+        "mass"
+            | "radius"
+            | "pos_x"
+            | "pos_y"
+            | "vel_x"
+            | "vel_y"
+            | "light_intensity"
+            | "light_radius"
+            | "light_fade"
+            | "light_core_boost"
+            | "glow_inner_scale"
+            | "glow_inner_alpha"
+            | "glow_outer_scale"
+            | "glow_outer_alpha"
+    )
 }
 
 const KP_BG: Color = Color::srgba(0.10, 0.10, 0.20, 0.94);
@@ -253,6 +271,8 @@ fn keypad_buttons(
         &mut LinearVelocity,
         &mut Mass,
     )>,
+    mut settings_q: Query<&mut StarLightSettings>,
+    mut glow_q: Query<&mut StarGlow>,
 ) {
     crate::mark_system("keypad_buttons");
     for (interaction, action) in buttons.iter() {
@@ -294,6 +314,12 @@ fn keypad_buttons(
                             &mut velocity,
                             &mut mass,
                         );
+                    }
+                    // Campi stella (Luce/Glow): scrivono in StarLightSettings/StarGlow
+                    if let Ok(mut s) = settings_q.get_mut(e) {
+                        if let Ok(mut g) = glow_q.get_mut(e) {
+                            apply_star_prop_value(prop_name, &text_value, &mut s, &mut g);
+                        }
                     }
                 }
                 *input_focus = InputFocus::default();

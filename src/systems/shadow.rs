@@ -29,8 +29,8 @@ use bevy::render::render_resource::PrimitiveTopology;
 use bevy::sprite_render::AlphaMode2d;
 
 use crate::components::celestial::CelestialBody;
-use crate::components::lighting::LightInfo;
-use crate::rendering::textures::build_image;
+use crate::components::lighting::{GlowCurve, LightInfo};
+use crate::rendering::textures::generate_radial_glow_texture;
 
 // ============================================================
 // Tuning
@@ -125,21 +125,10 @@ fn init_shadow_assets(
 }
 
 /// Radial gradient texture: white core fading smoothly to transparent.
+/// TICKET 19: delegata al generatore condiviso (curva `(1-t)^falloff_exp` +
+/// soft_edge: niente gradino/ridge al bordo). Parametro globale `GlowCurve`.
 fn generate_glow_texture() -> Image {
-    let w = GLOW_TEX_SIZE as usize;
-    let half = GLOW_TEX_SIZE as f32 / 2.0;
-    let mut pixels = Vec::with_capacity(w * w * 4);
-    for y in 0..w {
-        for x in 0..w {
-            let dx = x as f32 + 0.5 - half;
-            let dy = y as f32 + 0.5 - half;
-            let d = (dx * dx + dy * dy).sqrt() / half; // 0 at centre, 1 at disc edge
-            let t = (d / 0.95).clamp(0.0, 1.0);
-            let a = ((1.0 - t).powf(2.0) * 255.0) as u8;
-            pixels.extend_from_slice(&[255, 255, 255, a]);
-        }
-    }
-    build_image(pixels, GLOW_TEX_SIZE, GLOW_TEX_SIZE)
+    generate_radial_glow_texture(GLOW_TEX_SIZE, &GlowCurve::default())
 }
 
 // ============================================================

@@ -11,7 +11,21 @@
       "position": [0.0, 0.0],
       "velocity": [0.0, 0.0],
       "color": [1.0, 0.9, 0.3],
-      "luminous": true
+      "luminous": true,
+      "light": {
+        "intensity": 1.8,
+        "radius": 5000.0,
+        "falloff": "None",
+        "fade_width": 500.0,
+        "core_radius_factor": 1.5,
+        "core_boost": 3.0
+      },
+      "glow": {
+        "inner_scale": 4.0,
+        "inner_alpha": 0.55,
+        "outer_scale": 25.0,
+        "outer_alpha": 0.18
+      }
     },
     {
       "id": 1,
@@ -22,7 +36,9 @@
       "position": [300.0, 0.0],
       "velocity": [0.0, 250.0],
       "color": [0.3, 0.6, 1.0],
-      "luminous": false
+      "luminous": false,
+      "light": null,
+      "glow": null
     },
     {
       "id": 2,
@@ -33,7 +49,9 @@
       "position": [400.0, 0.0],
       "velocity": [0.0, 380.0],
       "color": [0.8, 0.4, 0.2],
-      "luminous": false
+      "luminous": false,
+      "light": null,
+      "glow": null
     },
     {
       "id": 3,
@@ -44,7 +62,18 @@
       "position": [100.0, 80.0],
       "velocity": [-60.0, 100.0],
       "color": [0.6, 0.6, 0.6],
-      "luminous": false
+      "luminous": false,
+      "light": null,
+      "glow": null
     }
-  ]
+  ],
+  "ambient": {
+    "intensity": 0.03,
+    "color": [1.0, 1.0, 1.0],
+    "range": 0.0
+  },
+  "glow_curve": {
+    "falloff_exp": 2.0,
+    "soft_edge": 0.04
+  }
 }

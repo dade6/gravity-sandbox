@@ -83,7 +83,14 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
     // light_color = pow(light_color, vec4<f32>(2.2));
 
-    if (dist < light.radius && angle <= light.outer_angle / 2.) {
+    // TICKET 19 (vendored): la soglia storica era `dist < light.radius` →
+    // spegnimento netto dei pianeti appena oltre il raggio (con Falloff::NONE
+    // la luce è costante fino al bordo). Con Falloff::NONE il campo
+    // falloff_intensity trasporta `fade_width` (vedi buffers.rs): l'area arriva
+    // fino a radius + fade_width e il fade finale (sotto) sfuma a 0 in quella
+    // banda. Per gli altri falloff falloff_intensity resta l'intensità reale
+    // (fade non applicato, comportamento storico).
+    if (dist < light.radius + light.falloff_intensity && angle <= light.outer_angle / 2.) {
 
         var angle_multi = 1.0; 
 
@@ -239,6 +246,16 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
     }
 
     // return pow(res, vec4<f32>(1.0/2.2));
+    // TICKET 19 (vendored): soft edge finale. Con Falloff::NONE il campo
+    // falloff_intensity trasporta fade_width (vedi buffers.rs): la luce sfuma
+    // in modo continuo da piena (dist <= radius) a 0 (dist = radius + fade),
+    // eliminando il taglio secco. Quando vale 0 (o falloff non-None) il
+    // fattore è 1 ovunque → comportamento storico identico.
+    if (light.falloff_intensity > 0.0) {
+        let fade_t = clamp((dist - light.radius) / light.falloff_intensity, 0.0, 1.0);
+        let fade = 1.0 - fade_t * fade_t * (3.0 - 2.0 * fade_t); // smoothstep 1→0
+        res *= fade;
+    }
     return res;
 }
 
