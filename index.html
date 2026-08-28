@@ -237,7 +237,7 @@
             const v = document.getElementById('version-badge');
             if (v) v.textContent = '⚠️ WebGPU richiede HTTPS: apri https://instance-20260607-0236.tail8514d0.ts.net:10000/';
         }
-        import init, * as sandbox from './gravity_sandbox.js?v=0.14.71';
+        import init, * as sandbox from './gravity_sandbox_n71.js?v=0.14.71';
 
         // Focus DOM del canvas: senza questo, il browser non instrada gli
         // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
@@ -372,8 +372,8 @@
         // da serve_wasm.py quando serve il .gz) oppure dal file sidecar
         // gravity_sandbox_bg.wasm.size (scritto da build_wasm.sh). Se nessuna
         // taglia affidabile, barra "indeterminata" (Download…): mai % finta.
-        const WASM_URL = new URL('gravity_sandbox_bg.wasm?v=0.14.71', location.href).href;
-        const WASM_SIZE_URL = new URL('gravity_sandbox_bg.wasm.size?v=0.14.71', location.href).href;
+        const WASM_URL = new URL('gravity_sandbox_n71_bg.wasm?v=0.14.71', location.href).href;
+        const WASM_SIZE_URL = new URL('gravity_sandbox_n71_bg.wasm.size?v=0.14.71', location.href).href;
         const MAX_INIT_TRIES = 3;
 
         // ---- Barra di caricamento: stati = download % -> compilazione -> done/errore.
