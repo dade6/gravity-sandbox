@@ -570,6 +570,7 @@ fn update_property_panel(
     bodies_query: Query<(&CelestialBody, &GlobalTransform), Without<PropertyPanel>>,
     velocity_query: Query<&LinearVelocity>,
     sim_state: Res<SimulationState>,
+    input_focus: Res<InputFocus>,
     mut editable_inputs: Query<(&PropInput, &mut EditableText, &mut TextColor)>,
     mut text_labels: Query<(&PropField, &mut Text), (Without<PropInput>, Without<EditableText>)>,
     stars_query: Query<(Entity, Option<&StarLightSettings>, Option<&StarGlow>)>,
@@ -630,8 +631,14 @@ fn update_property_panel(
         "Pause to edit"
     };
 
-    // Tastiera mobile aperta: NON sovrascrivere i campi (l'utente sta
-    // digitando; il testo arriva dal ponte JS e non dal corpo)
+    // Campo focussato: NON sovrascrivere i campi mentre l'utente sta
+    // digitando. Questo vale sia per EditableText nativo sia per il bridge
+    // dell'input nascosto usato da Safari Mac; il corpo può aggiornarsi solo
+    // dopo che il testo è stato realmente applicato.
+    let field_focused = input_focus.get().is_some();
+
+    // Tastiera mobile aperta: ulteriore guardia per il keypad (il focus può
+    // essere chiuso nello stesso frame in cui resta ancora testo da applicare).
     #[cfg(target_arch = "wasm32")]
     let mobile_active = crate::js_bridge::TEXT_INPUT_ACTIVE
         .lock()
@@ -640,7 +647,7 @@ fn update_property_panel(
     #[cfg(not(target_arch = "wasm32"))]
     let mobile_active = false;
 
-    if !mobile_active {
+    if !field_focused && !mobile_active {
         // Update EditableText fields
         for (prop, mut editable_text, mut text_color) in editable_inputs.iter_mut() {
             // Gray-out fields when not paused (readonly visivo)
