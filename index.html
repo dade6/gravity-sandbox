@@ -507,24 +507,9 @@
                     return pump();
                 })
                 .then(({ bytes, resp }) => {
-                    // VERIFICA CINTOGRAFICA (v0.14.71n): identifica i byte che
-                    // il telefono ha DAVVERO eseguito. SRV_MARKER = impronta
-                    // del file sul server; la riga [LOADER] in console mostra
-                    // impronta+lunghezza dei byte ricevuti dal client.
-                    const srvMarker = 'SRV:r71:7ffb077d874f0d13';
-                    window.__srvMarker = srvMarker;
-                    let gotHash = 'no-bytes';
-                    if (bytes && bytes.length) {
-                        let h = 5381;
-                        const step = 4096;
-                        for (let i = 0; i < bytes.length; i += step) {
-                            const end = Math.min(i + step, bytes.length);
-                            for (let j = i; j < end; j++) h = ((h * 33) ^ bytes[j]) >>> 0;
-                        }
-                        gotHash = 'djb2=' + h.toString(16) + ' len=' + bytes.length;
-                    }
-                    console.log('[LOADER] ' + srvMarker + ' client:' + gotHash);
-                    console.error('[LOADER] ' + srvMarker + ' client:' + gotHash); // visibile anche nel pannello errore
+                    // Download completo -> fase COMPILAZIONE (indeterminata).
+                    // instantiate è un blocco sincrono: nessuna % reale osservabile
+                    // dal browser -> NON inventiamo percentuali fasulle.
                     lbSetLabel('Compilazione…');
                     lbSetPct(null);
                     // Passa i BYTE accumulati (BufferSource) al glue. Sulla prima
