@@ -571,7 +571,7 @@ fn update_property_panel(
     velocity_query: Query<&LinearVelocity>,
     sim_state: Res<SimulationState>,
     input_focus: Res<InputFocus>,
-    mut editable_inputs: Query<(&PropInput, &mut EditableText, &mut TextColor)>,
+    mut editable_inputs: Query<(Entity, &PropInput, &mut EditableText, &mut TextColor)>,
     mut text_labels: Query<(&PropField, &mut Text), (Without<PropInput>, Without<EditableText>)>,
     stars_query: Query<(Entity, Option<&StarLightSettings>, Option<&StarGlow>)>,
     // ParamSet: panel_query (root) e star_nodes (righe stella) accedono
@@ -631,14 +631,15 @@ fn update_property_panel(
         "Pause to edit"
     };
 
-    // Campo focussato: NON sovrascrivere i campi mentre l'utente sta
-    // digitando. Questo vale sia per EditableText nativo sia per il bridge
-    // dell'input nascosto usato da Safari Mac; il corpo può aggiornarsi solo
-    // dopo che il testo è stato realmente applicato.
-    let field_focused = input_focus.get().is_some();
+    // Campo focussato: NON sovrascrivere il campo attivo mentre l'utente sta
+    // digitando (Safari Mac bridge + editing nativo). Gli ALTRI campi devono
+    // invece aggiornarsi al corpo appena selezionato — bloccare tutto il
+    // pannello quando un campo è focussato lascia i campi vuoti al cambio di
+    // selezione (regressione v0.14.72).
+    let focused_entity = input_focus.get();
 
-    // Tastiera mobile aperta: ulteriore guardia per il keypad (il focus può
-    // essere chiuso nello stesso frame in cui resta ancora testo da applicare).
+    // Tastiera mobile aperta: sospende l'update di TUTTI i campi (il testo
+    // arriva dal keypad, non dal corpo; evita guerra di sovrascrittura).
     #[cfg(target_arch = "wasm32")]
     let mobile_active = crate::js_bridge::TEXT_INPUT_ACTIVE
         .lock()
@@ -647,15 +648,18 @@ fn update_property_panel(
     #[cfg(not(target_arch = "wasm32"))]
     let mobile_active = false;
 
-    if !field_focused && !mobile_active {
-        // Update EditableText fields
-        for (prop, mut editable_text, mut text_color) in editable_inputs.iter_mut() {
+    if !mobile_active {
+        // Update EditableText fields — salta solo il campo con il focus
+        for (entity, prop, mut editable_text, mut text_color) in editable_inputs.iter_mut() {
             // Gray-out fields when not paused (readonly visivo)
             text_color.0 = if sim_state.paused {
                 TEXT_COLOR
             } else {
                 TEXT_COLOR_READONLY
             };
+            if Some(entity) == focused_entity {
+                continue;
+            }
             let current_text = editable_text.value().to_string();
             let expected = match prop.0 {
                 "name" => body.name.clone(),
