@@ -161,12 +161,23 @@ impl Plugin for FireflyBridgePlugin {
 /// map (texture locale alla sprite) → il pattern luce/ombra sulla superficie
 /// non punta più alla stella. Blocchiamo la rotazione su tutti i corpi
 /// (idempotente: gira finché non tutti hanno LockedAxes).
+///
+/// NB: la insert è deferred (apply_deferred) e l'entity iterata può essere
+/// despawnata da un sistema precedente nello stesso frame (es. `ResetMessage`
+/// che ricrea i corpi, o Delete tool). Senza protezione Bevy panica
+/// "Entity despawned" e il panic hook crasha il WASM (bug v0.14.73, log
+/// Safari Mac: entity 1283v0 generazione 1). Usiamo `try_insert` invece di
+/// `insert`: la documentazione Bevy dice testualmente "If the entity does
+/// not exist when this command is executed, the resulting error will be
+/// ignored" — esattamente il comportamento che vogliamo. Il sistema resta
+/// idempotente: i corpi appena creati al frame successivo verranno comunque
+/// bloccati dalla prossima iterazione.
 fn lock_body_rotation(
     mut commands: Commands,
     bodies: Query<Entity, (With<CelestialBody>, Without<LockedAxes>)>,
 ) {
     for entity in bodies.iter() {
-        commands.entity(entity).insert(LockedAxes::ROTATION_LOCKED);
+        commands.entity(entity).try_insert(LockedAxes::ROTATION_LOCKED);
     }
 }
 
