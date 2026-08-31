@@ -574,7 +574,10 @@ fn update_property_panel(
     bodies_query: Query<(&CelestialBody, &GlobalTransform), Without<PropertyPanel>>,
     velocity_query: Query<&LinearVelocity>,
     sim_state: Res<SimulationState>,
-    input_focus: Res<InputFocus>,
+    // ResMut: al cambio di selezione il focus del campo va azzerato qui
+    // (bug v0.14.75: il campo focussato restava attivo passando il valore
+    // del corpo precedente a quello appena selezionato).
+    mut input_focus: ResMut<InputFocus>,
     mut editable_inputs: Query<(Entity, &PropInput, &mut EditableText, &mut TextColor)>,
     mut text_labels: Query<(&PropField, &mut Text), (Without<PropInput>, Without<EditableText>)>,
     stars_query: Query<(Entity, Option<&StarLightSettings>, Option<&StarGlow>)>,
@@ -586,6 +589,15 @@ fn update_property_panel(
     )>,
 ) {
     crate::mark_system("update_property_panel");
+
+    // Cambio di selezione (o deselezione): azzera il focus del campo
+    // attivo. Senza questo, il campo focussato resta attivo col testo del
+    // corpo PRECEDENTE e la successiva digitazione applica quel valore al
+    // corpo appena selezionato (bug v0.14.75 Safari Mac). Il clear scatta
+    // SOLO sul cambio effettivo della selezione, mai a ogni frame.
+    if selected.is_changed() && input_focus.get().is_some() {
+        *input_focus = InputFocus::default();
+    }
 
     // Show/hide panel
     if let Ok(mut panel_node) = node_queries.p0().single_mut() {
@@ -888,12 +900,18 @@ fn sync_property_input_to_body(
 
     // La resource InputFocus dice QUALE entity sta editando l'utente.
     let focused_entity = input_focus.get();
-    for (entity, prop, editable) in input_query.iter() {
+    // field_entity = entity del CAMPO UI; `entity` resta il corpo selezionato
+    // (usato dai campi stella per StarLightSettings/StarGlow). Con lo stesso
+    // nome `entity` la variabile del loop la shadowava: get_mut cercava i
+    // componenti sul campo UI (sempre Err) e i parametri stella non si
+    // applicavano MAI via tastiera (bug v0.14.75; il keypad iPhone, che usa
+    // l'entity del corpo, funzionava).
+    for (field_entity, prop, editable) in input_query.iter() {
         // Applica SOLO il campo che l'utente sta effettivamente editando
         // (quello con il focus). Senza questo check, al cambio di selezione i
         // campi contengono ancora i valori del corpo PRECEDENTE e il corpo
         // nuovo veniva teletrasportato su quello vecchio.
-        if Some(entity) != focused_entity {
+        if Some(field_entity) != focused_entity {
             continue;
         }
         let text_value = editable.value().to_string();
@@ -913,7 +931,8 @@ fn sync_property_input_to_body(
             }
         }
         if prop.0.starts_with("light_") || prop.0.starts_with("glow_") {
-            // Campi stella (Luce/Glow): scrivono in StarLightSettings/StarGlow.
+            // Campi stella (Luce/Glow): scrivono in StarLightSettings/StarGlow
+            // del CORPO selezionato (`entity`), non del campo UI.
             if let Ok(mut s) = settings_query.get_mut(entity) {
                 if let Ok(mut g) = glow_query.get_mut(entity) {
                     apply_star_prop_value(prop.0, &text_value, &mut s, &mut g);

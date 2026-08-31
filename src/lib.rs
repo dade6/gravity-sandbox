@@ -709,12 +709,17 @@ fn apply_mobile_text_input(
             // Sostituzione SICURA: clear() lasciava il cursore parley con
             // l'indice vecchio -> Insert panica con is_char_boundary.
             // SelectAll + Delete (usa la selezione) + Insert mantengono il
-            // cursore su char boundary validi.
+            // cursore su char boundary validi. Insert saltato se il nuovo
+            // testo è vuoto (cancellazione completa via DEL): Insert("")
+            // dopo Delete è il path che ha dato panic is_char_boundary su
+            // Safari Mac (v0.14.75: "DEL non cancellava").
             editable.queue_edit(bevy::text::TextEdit::SelectAll);
             editable.queue_edit(bevy::text::TextEdit::Delete);
-            editable.queue_edit(bevy::text::TextEdit::Insert(smol_str::SmolStr::new(
-                &new_text,
-            )));
+            if !new_text.is_empty() {
+                editable.queue_edit(bevy::text::TextEdit::Insert(smol_str::SmolStr::new(
+                    &new_text,
+                )));
+            }
         }
     }
 }
