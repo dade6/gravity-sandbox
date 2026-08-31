@@ -121,6 +121,13 @@ fn spawn_keypad(commands: &mut Commands) {
     commands
         .spawn((
             Keypad,
+            // GlobalZIndex esplicito: il paint order dello stack UI Bevy non è
+            // deterministico quando il pannello proprietà cambia
+            // `display = Display::Flex` nello stesso frame in cui il keypad
+            // viene spawnato (Safari iOS riorganizza lo stack e il pannello
+            // finisce SOPRA il keypad, nascondendolo). Forziamo il keypad in
+            // cima con un valore più alto di qualsiasi altra UI overlay.
+            GlobalZIndex(200),
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(48.0),

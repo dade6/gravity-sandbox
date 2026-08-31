@@ -300,6 +300,10 @@ fn spawn_property_panel(commands: &mut Commands) {
     commands
         .spawn((
             PropertyPanel,
+            // GlobalZIndex basso: il property panel deve restare SOTTO il
+            // keypad (200), il dialog di conferma delete (300) e qualunque
+            // overlay futuro. vedi keypad.rs per il contesto del fix.
+            GlobalZIndex(10),
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(60.0),
@@ -992,6 +996,9 @@ fn spawn_delete_dialog(commands: &mut Commands, window_size: Vec2, body_name: &s
     commands
         .spawn((
             DeleteDialog,
+            // GlobalZIndex alto: il dialog modale deve stare SOPRA tutto
+            // (property panel e keypad). 300 > keypad(200) > property(10).
+            GlobalZIndex(300),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),
