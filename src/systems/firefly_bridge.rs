@@ -228,20 +228,29 @@ fn setup_firefly_camera(
     }
 }
 
-/// Alpha efficace dello sprite glow dopo compensazione intensity (Ticket 20).
+/// Alpha efficace dello sprite glow: DUE manopole indipendenti (Ticket 20).
 ///
-/// La lightmap firefly (`scene_frag × light_frag`) moltiplica anche gli sprite
-/// dei glow, che quindi ricevono `∝ intensity`: con intensity=2 l'alone
-/// raddoppia di brillantezza. Scrivendo nello Sprite un'alpha PRE-DIVISA per
-/// intensity, la moltiplicazione della lightmap annulla la divisione e l'alone
-/// resta visivamente costante (opzione C: alone decorativo puro).
+/// - `brightness` (`StarGlow.brightness`): moltiplicatore dell'ALONE. È il
+///   parametro "quanto è luminoso l'alone attorno alla stella". Non tocca
+///   MAI i pianeti.
+/// - `intensity` (`StarLightSettings.intensity`): quanto la stella ILLUMINA
+///   I PIANETI (la lightmap firefly la moltiplica anche sugli sprite glow,
+///   quindi va compensata: dividendo l'alpha per intensity, la moltiplicazione
+///   della lightmap la annulla e l'alone NON cambia quando l'utente muove il
+///   parametro pianeti).
 ///
-/// intensity <= 0.0001 -> 0: stella spenta, alone invisibile (NON alpha=1 —
+/// Formula: `alpha_eff = clamp(brightness × base_alpha / max(intensity, eps))`.
+///
+/// intensity <= 0.0001 -> 0: stella spenta, alone invisibile (NON alpha pieno —
 /// la formula nuda `1.0/max(intensity, 0.0001)` darebbe comp=10000 e il clamp
 /// produrrebbe un alone PIENO, sbagliato).
-pub(crate) fn glow_alpha(base_alpha: f32, intensity: f32) -> f32 {
-    let comp = if intensity <= 0.0001 { 0.0 } else { 1.0 / intensity };
-    (base_alpha * comp).clamp(0.0, 1.0)
+pub(crate) fn glow_alpha(base_alpha: f32, brightness: f32, intensity: f32) -> f32 {
+    let comp = if intensity <= 0.0001 {
+        0.0
+    } else {
+        1.0 / intensity
+    };
+    (brightness * base_alpha * comp).clamp(0.0, 1.0)
 }
 
 /// Converte ogni corpo da Mesh2d a Sprite.
@@ -299,13 +308,13 @@ fn convert_bodies_to_sprites(
                 body.color[0],
                 body.color[1],
                 body.color[2],
-                glow_alpha(g.inner_alpha, intensity),
+                glow_alpha(g.inner_alpha, g.brightness, intensity),
             );
             let outer_color = Color::srgba(
                 body.color[0],
                 body.color[1],
                 body.color[2],
-                glow_alpha(g.outer_alpha, intensity),
+                glow_alpha(g.outer_alpha, g.brightness, intensity),
             );
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
@@ -595,8 +604,8 @@ fn apply_star_glow_settings(
     mut glows: Query<(&mut Sprite, Has<FireflyGlowInner>, Has<FireflyGlowOuter>)>,
 ) {
     for (body, children, g, light) in &stars {
-        let inner_alpha = glow_alpha(g.inner_alpha, light.intensity);
-        let outer_alpha = glow_alpha(g.outer_alpha, light.intensity);
+        let inner_alpha = glow_alpha(g.inner_alpha, g.brightness, light.intensity);
+        let outer_alpha = glow_alpha(g.outer_alpha, g.brightness, light.intensity);
         for child in children.iter() {
             let Ok((mut sp, is_inner, is_outer)) = glows.get_mut(child) else {
                 continue;
@@ -667,30 +676,52 @@ mod tests {
         );
     }
 
-    // ---- glow_alpha (Ticket 20, v0.14.77): compensazione intensity ----
+    // ---- glow_alpha (Ticket 20, v0.14.78): DUE manopole indipendenti ----
+    // brightness = alone (StarGlow.brightness), intensity = luce pianeti.
 
     #[test]
     fn glow_alpha_identity_at_intensity_one() {
-        // A intensity=1 la compensazione è l'identità.
-        assert!((glow_alpha(0.55, 1.0) - 0.55).abs() < 1e-6);
+        // brightness=1, intensity=1: identità.
+        assert!((glow_alpha(0.55, 1.0, 1.0) - 0.55).abs() < 1e-6);
     }
 
     #[test]
     fn glow_alpha_compensates_high_intensity() {
-        // intensity=4: l'alpha si pre-divide per 4 -> la lightmap (×4) annulla
-        // la divisione e l'alone resta costante.
-        assert!((glow_alpha(0.55, 4.0) - 0.1375).abs() < 1e-6);
+        // intensity=4 (pianeti 4x più illuminati): l'alpha si pre-divide per 4
+        // -> la lightmap (×4) annulla la divisione e l'alone resta costante.
+        assert!((glow_alpha(0.55, 1.0, 4.0) - 0.1375).abs() < 1e-6);
     }
 
     #[test]
     fn glow_alpha_clamps_to_one_on_low_intensity() {
         // intensity=0.5: 0.55/0.5 = 1.1 -> clamp in alto a 1.0.
-        assert_eq!(glow_alpha(0.55, 0.5), 1.0);
+        assert_eq!(glow_alpha(0.55, 1.0, 0.5), 1.0);
     }
 
     #[test]
     fn glow_alpha_zero_intensity_hides_glow() {
         // Stella spenta: alone invisibile (NON alpha=1 — pitfall del ticket).
-        assert_eq!(glow_alpha(0.55, 0.0), 0.0);
+        assert_eq!(glow_alpha(0.55, 1.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn glow_alpha_brightness_scales_halo_independently() {
+        // brightness=2 raddoppia l'alone senza toccare la luce dei pianeti:
+        // a intensity=1 (nessuna compensazione), alpha = 2 × 0.55 = 1.1 -> 1.0.
+        assert_eq!(glow_alpha(0.4, 2.0, 1.0), 0.8);
+        assert_eq!(glow_alpha(0.3, 2.0, 1.0), 0.6);
+        // brightness=0: alone spento anche con pianeti illuminati.
+        assert_eq!(glow_alpha(0.55, 0.0, 1.8), 0.0);
+    }
+
+    #[test]
+    fn glow_alpha_brightness_and_intensity_orthogonal() {
+        // La coppia (brightness, intensity) controlla l'alone in modo
+        // indipendente: brightness × base / intensity. Cambiare SOLO intensity
+        // mantiene il PRODOTTO visivo costante dopo la lightmap.
+        let a_low = glow_alpha(0.55, 1.0, 1.0); // lightmap ×1
+        let a_high = glow_alpha(0.55, 1.0, 4.0); // lightmap ×4
+        // 0.55 vs 0.1375: ×1 → 0.55, ×4 → 0.55. Identico dopo la moltiplicazione.
+        assert!((a_low - a_high * 4.0).abs() < 1e-6);
     }
 }

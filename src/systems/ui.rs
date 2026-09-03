@@ -425,20 +425,21 @@ fn spawn_property_panel(commands: &mut Commands) {
             // selezionato è una stella (update_property_panel le mostra =
             // Display::Flex solo per corpi luminous). ===
             const STAR_LIGHT_FIELDS: &[(&str, &str)] = &[
-                ("Intensity:", "light_intensity"),
+                ("Planet Light:", "light_intensity"),
                 ("Radius:", "light_radius"),
                 ("Falloff:", "light_falloff"),
                 ("Fade:", "light_fade"),
                 ("Core Boost:", "light_core_boost"),
             ];
             const STAR_GLOW_FIELDS: &[(&str, &str)] = &[
+                ("Halo Brightness:", "glow_brightness"),
                 ("Glow Inner Scale:", "glow_inner_scale"),
                 ("Glow Inner Alpha:", "glow_inner_alpha"),
                 ("Glow Outer Scale:", "glow_outer_scale"),
                 ("Glow Outer Alpha:", "glow_outer_alpha"),
             ];
-            spawn_star_section(panel, "LUCE", &STAR_LIGHT_FIELDS);
-            spawn_star_section(panel, "GLOW", &STAR_GLOW_FIELDS);
+            spawn_star_section(panel, "ILLUMINAZIONE PIANETI", &STAR_LIGHT_FIELDS);
+            spawn_star_section(panel, "ALONE STELLA", &STAR_GLOW_FIELDS);
         });
 }
 
@@ -700,6 +701,7 @@ fn update_property_panel(
                 },
                 "light_fade" => format!("{:.1}", light.fade_width),
                 "light_core_boost" => format!("{:.2}", light.core_boost),
+                "glow_brightness" => format!("{:.2}", glow.brightness),
                 "glow_inner_scale" => format!("{:.2}", glow.inner_scale),
                 "glow_inner_alpha" => format!("{:.2}", glow.inner_alpha),
                 "glow_outer_scale" => format!("{:.0}", glow.outer_scale),
@@ -826,6 +828,11 @@ pub(crate) fn apply_star_prop_value(
         "light_core_boost" => {
             if let Ok(v) = text.parse::<f32>() {
                 settings.core_boost = v;
+            }
+        }
+        "glow_brightness" => {
+            if let Ok(v) = text.parse::<f32>() {
+                glow.brightness = v.max(0.0);
             }
         }
         "glow_inner_scale" => {

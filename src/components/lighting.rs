@@ -147,6 +147,16 @@ pub struct StarGlow {
     pub outer_scale: f32,
     /// Outer glow opacity (0..1). (historic 0.18)
     pub outer_alpha: f32,
+    /// Brightness MULTIPLIER of the whole halo (inner+outer), independent of
+    /// the light the planets receive (`StarLightSettings.intensity`).
+    /// 1.0 = default. This is the "Alone luminoso" knob Davide asked for
+    /// (Ticket 20: the two effects must be separately controllable).
+    #[serde(default = "default_glow_brightness")]
+    pub brightness: f32,
+}
+
+fn default_glow_brightness() -> f32 {
+    1.0
 }
 
 impl Default for StarGlow {
@@ -156,6 +166,7 @@ impl Default for StarGlow {
             inner_alpha: 0.55,
             outer_scale: 25.0,
             outer_alpha: 0.18,
+            brightness: 1.0,
         }
     }
 }

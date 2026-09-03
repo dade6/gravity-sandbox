@@ -63,6 +63,7 @@ fn is_numeric_field(prop: &str) -> bool {
             | "light_radius"
             | "light_fade"
             | "light_core_boost"
+            | "glow_brightness"
             | "glow_inner_scale"
             | "glow_inner_alpha"
             | "glow_outer_scale"
