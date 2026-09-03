@@ -228,6 +228,22 @@ fn setup_firefly_camera(
     }
 }
 
+/// Alpha efficace dello sprite glow dopo compensazione intensity (Ticket 20).
+///
+/// La lightmap firefly (`scene_frag × light_frag`) moltiplica anche gli sprite
+/// dei glow, che quindi ricevono `∝ intensity`: con intensity=2 l'alone
+/// raddoppia di brillantezza. Scrivendo nello Sprite un'alpha PRE-DIVISA per
+/// intensity, la moltiplicazione della lightmap annulla la divisione e l'alone
+/// resta visivamente costante (opzione C: alone decorativo puro).
+///
+/// intensity <= 0.0001 -> 0: stella spenta, alone invisibile (NON alpha=1 —
+/// la formula nuda `1.0/max(intensity, 0.0001)` darebbe comp=10000 e il clamp
+/// produrrebbe un alone PIENO, sbagliato).
+pub(crate) fn glow_alpha(base_alpha: f32, intensity: f32) -> f32 {
+    let comp = if intensity <= 0.0001 { 0.0 } else { 1.0 / intensity };
+    (base_alpha * comp).clamp(0.0, 1.0)
+}
+
 /// Converte ogni corpo da Mesh2d a Sprite.
 /// - Pianeti: Sprite + NormalMap + SpriteHeight(0) → ricevono luce/ombre.
 /// - Stelle: Sprite BRILLANTE senza normal map (sono sorgenti, non superfici
@@ -240,11 +256,17 @@ fn convert_bodies_to_sprites(
     mut commands: Commands,
     textures: Res<FireflyTextures>,
     bodies: Query<
-        (Entity, &CelestialBody, &Transform, Option<&StarGlow>),
+        (
+            Entity,
+            &CelestialBody,
+            &Transform,
+            Option<&StarGlow>,
+            Option<&StarLightSettings>,
+        ),
         (Without<FireflySpriteAttached>, With<Mesh2d>),
     >,
 ) {
-    for (entity, body, _transform, glow) in bodies.iter() {
+    for (entity, body, _transform, glow, light_settings) in bodies.iter() {
         let mut cmd = commands.entity(entity);
         cmd.remove::<Mesh2d>()
             .remove::<MeshMaterial2d<crate::systems::lighting::LightMaterial>>()
@@ -265,9 +287,26 @@ fn convert_bodies_to_sprites(
             // (inner = alino stretto, outer = alone ampio e tenue), entrambi
             // tinti col colore della stella. Parametri (scale/alpha) dal
             // componente StarGlow (default: inner 4×/0.55, outer 25×/0.18).
+            // v0.14.77 (Ticket 20): l'alpha è compensata per intensity con lo
+            // STESSO helper `glow_alpha` usato da `apply_star_glow_settings`
+            // (live edit) → sprite identici nei due path. Se StarLightSettings
+            // manca, default 1.8 (come `spawn_star_lights`).
             let g = glow.cloned().unwrap_or_default();
-            let inner_color = Color::srgba(body.color[0], body.color[1], body.color[2], g.inner_alpha);
-            let outer_color = Color::srgba(body.color[0], body.color[1], body.color[2], g.outer_alpha);
+            let intensity = light_settings
+                .map(|s| s.intensity)
+                .unwrap_or(StarLightSettings::default().intensity);
+            let inner_color = Color::srgba(
+                body.color[0],
+                body.color[1],
+                body.color[2],
+                glow_alpha(g.inner_alpha, intensity),
+            );
+            let outer_color = Color::srgba(
+                body.color[0],
+                body.color[1],
+                body.color[2],
+                glow_alpha(g.outer_alpha, intensity),
+            );
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
                     FireflyGlowInner,
@@ -535,11 +574,29 @@ fn apply_star_light_settings(
 /// distinguere i due glow): due query `&mut Sprite` separate sullo stesso
 /// componente erano un B0001 all'inizializzazione (panic su WASM
 /// "Unreachable code", v0.14.70).
+///
+/// v0.14.77 (Ticket 20, opzione C — alone decorativo puro): la mappa di luce
+/// firefly moltiplica anche gli sprite glow (light_frag ∝ intensity), quindi
+/// con intensity=2 l'alone raddoppia di brillantezza. L'alpha scritta nello
+/// Sprite è PRE-DIVISA per intensity (helper `glow_alpha`): la moltiplicazione
+/// della lightmap annulla la divisione e l'alone resta visivamente costante.
+/// Con intensity=0 (stella spenta) l'alpha è 0: alone invisibile.
+///
+/// La query reagisce anche a `Changed<StarLightSettings>`: se l'utente cambia
+/// SOLO intensity (senza toccare il glow), l'alpha compensata va ricalcolata.
 fn apply_star_glow_settings(
-    stars: Query<(&CelestialBody, &Children, &StarGlow), (Changed<StarGlow>, With<FireflySpriteAttached>)>,
+    stars: Query<
+        (&CelestialBody, &Children, &StarGlow, &StarLightSettings),
+        (
+            Or<(Changed<StarGlow>, Changed<StarLightSettings>)>,
+            With<FireflySpriteAttached>,
+        ),
+    >,
     mut glows: Query<(&mut Sprite, Has<FireflyGlowInner>, Has<FireflyGlowOuter>)>,
 ) {
-    for (body, children, g) in &stars {
+    for (body, children, g, light) in &stars {
+        let inner_alpha = glow_alpha(g.inner_alpha, light.intensity);
+        let outer_alpha = glow_alpha(g.outer_alpha, light.intensity);
         for child in children.iter() {
             let Ok((mut sp, is_inner, is_outer)) = glows.get_mut(child) else {
                 continue;
@@ -547,11 +604,11 @@ fn apply_star_glow_settings(
             match (is_inner, is_outer) {
                 (true, false) => {
                     sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.inner_scale));
-                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.inner_alpha);
+                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], inner_alpha);
                 }
                 (false, true) => {
                     sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.outer_scale));
-                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], g.outer_alpha);
+                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], outer_alpha);
                 }
                 _ => {}
             }
@@ -608,5 +665,32 @@ mod tests {
             z_back < z_front - 1.0,
             "il pianeta dietro deve avere z PIU' BASSO (riceve l'ombra): {z_front} vs {z_back}"
         );
+    }
+
+    // ---- glow_alpha (Ticket 20, v0.14.77): compensazione intensity ----
+
+    #[test]
+    fn glow_alpha_identity_at_intensity_one() {
+        // A intensity=1 la compensazione è l'identità.
+        assert!((glow_alpha(0.55, 1.0) - 0.55).abs() < 1e-6);
+    }
+
+    #[test]
+    fn glow_alpha_compensates_high_intensity() {
+        // intensity=4: l'alpha si pre-divide per 4 -> la lightmap (×4) annulla
+        // la divisione e l'alone resta costante.
+        assert!((glow_alpha(0.55, 4.0) - 0.1375).abs() < 1e-6);
+    }
+
+    #[test]
+    fn glow_alpha_clamps_to_one_on_low_intensity() {
+        // intensity=0.5: 0.55/0.5 = 1.1 -> clamp in alto a 1.0.
+        assert_eq!(glow_alpha(0.55, 0.5), 1.0);
+    }
+
+    #[test]
+    fn glow_alpha_zero_intensity_hides_glow() {
+        // Stella spenta: alone invisibile (NON alpha=1 — pitfall del ticket).
+        assert_eq!(glow_alpha(0.55, 0.0), 0.0);
     }
 }

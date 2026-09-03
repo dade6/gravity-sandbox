@@ -137,7 +137,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
         }
 
         if dist <= light.core_radius {
-            res = vec4f(light_color.xyz, 0) * angle_multi * normal_multi * (light.intensity + light.core_boost * falloff(dist / light.core_radius, light.core_falloff, light.core_falloff_intensity));
+            // Patch v0.14.77 (Ticket 20): disco stella separato da intensity.
+            // Solo core_boost contribuisce al disco: intensity pilota SOLO
+            // la luce sui pianeti (path else, * light.intensity).
+            res = vec4f(light_color.xyz, 0) * angle_multi * normal_multi * (light.core_boost * falloff(dist / light.core_radius, light.core_falloff, light.core_falloff_intensity));
         }
         else {
             let x = (dist - light.core_radius) / (light.radius - light.core_radius);
