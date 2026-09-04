@@ -76,6 +76,13 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
     let angle = acos(dot_a_b);
 
     var light_color = light.color;
+    // Patch v0.14.79 (Ticket 20): il canale ALPHA del colore della luce
+    // trasporta `Halo Brightness` (StarGlow.brightness). I pixel SENZA
+    // normal map (sfondo/starfield, glow semi-trasparenti) ricevono questo
+    // valore invece di `intensity`, così l'alone sullo sfondo è controllato
+    // da Halo Brightness e Planet Light tocca SOLO i pianeti.
+    // Estratto PRIMA del tonemapping (che opererebbe anche sull'alpha).
+    let halo = light.color.a;
 
 #ifdef TONEMAP_IN_SHADER
     light_color = tonemapping::tone_mapping(light_color, view.color_grading);
@@ -144,7 +151,16 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
         }
         else {
             let x = (dist - light.core_radius) / (light.radius - light.core_radius);
-            res = vec4f(light_color.xyz, 0) * light.intensity * angle_multi * normal_multi * falloff(x, light.falloff, light.falloff_intensity);
+            // Patch v0.14.79 (Ticket 20): SEPARAZIONE alone/luce pianeti.
+            // - Pixel CON normal map (pianeti, normal.a > 0) -> light.intensity
+            //   (Planet Light dal pannello).
+            // - Pixel SENZA normal map (normal.a == 0: sfondo/starfield, glow
+            //   semi-trasparenti, coni d'ombra) -> `halo` (Halo Brightness,
+            //   trasportato dall'alpha del colore della luce).
+            // Così il disco di luce attorno alla stella risponde a Halo
+            // Brightness e MAI a Planet Light.
+            let surface = select(light.intensity, halo, normal.a == 0.0);
+            res = vec4f(light_color.xyz, 0) * surface * angle_multi * normal_multi * falloff(x, light.falloff, light.falloff_intensity);
         }
 
         // TEST 5 RIMOSSO (v0.14.50): shader pulita, il problema era

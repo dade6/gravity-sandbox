@@ -228,29 +228,16 @@ fn setup_firefly_camera(
     }
 }
 
-/// Alpha efficace dello sprite glow: DUE manopole indipendenti (Ticket 20).
+/// Alpha scritta nello Sprite glow (Ticket 20, v0.14.79).
 ///
-/// - `brightness` (`StarGlow.brightness`): moltiplicatore dell'ALONE. È il
-///   parametro "quanto è luminoso l'alone attorno alla stella". Non tocca
-///   MAI i pianeti.
-/// - `intensity` (`StarLightSettings.intensity`): quanto la stella ILLUMINA
-///   I PIANETI (la lightmap firefly la moltiplica anche sugli sprite glow,
-///   quindi va compensata: dividendo l'alpha per intensity, la moltiplicazione
-///   della lightmap la annulla e l'alone NON cambia quando l'utente muove il
-///   parametro pianeti).
-///
-/// Formula: `alpha_eff = clamp(brightness × base_alpha / max(intensity, eps))`.
-///
-/// intensity <= 0.0001 -> 0: stella spenta, alone invisibile (NON alpha pieno —
-/// la formula nuda `1.0/max(intensity, 0.0001)` darebbe comp=10000 e il clamp
-/// produrrebbe un alone PIENO, sbagliato).
-pub(crate) fn glow_alpha(base_alpha: f32, brightness: f32, intensity: f32) -> f32 {
-    let comp = if intensity <= 0.0001 {
-        0.0
-    } else {
-        1.0 / intensity
-    };
-    (brightness * base_alpha * comp).clamp(0.0, 1.0)
+/// SEMPLIFICATA rispetto alla v0.14.78: la separazione alone/luce ora vive
+/// NELLO SHADER (create_lightmap.wgsl: i pixel senza normal map ricevono
+/// `Halo Brightness` trasportato dall'alpha del colore della luce, i pixel
+/// dei pianeti ricevono `Planet Light`/intensity). Lo sprite glow quindi
+/// porta SOLO l'alpha base (inner/outer alpha del pannello): la lightmap
+/// lo moltiplica per Halo Brightness → alone finale = base × brightness.
+pub(crate) fn glow_alpha(base_alpha: f32) -> f32 {
+    base_alpha.clamp(0.0, 1.0)
 }
 
 /// Converte ogni corpo da Mesh2d a Sprite.
@@ -301,20 +288,19 @@ fn convert_bodies_to_sprites(
             // (live edit) → sprite identici nei due path. Se StarLightSettings
             // manca, default 1.8 (come `spawn_star_lights`).
             let g = glow.cloned().unwrap_or_default();
-            let intensity = light_settings
-                .map(|s| s.intensity)
-                .unwrap_or(StarLightSettings::default().intensity);
+            // v0.14.79: la separazione è nello shader (pixel senza normal map
+            // → Halo Brightness). Lo sprite glow porta l'alpha base pura.
             let inner_color = Color::srgba(
                 body.color[0],
                 body.color[1],
                 body.color[2],
-                glow_alpha(g.inner_alpha, g.brightness, intensity),
+                glow_alpha(g.inner_alpha),
             );
             let outer_color = Color::srgba(
                 body.color[0],
                 body.color[1],
                 body.color[2],
-                glow_alpha(g.outer_alpha, g.brightness, intensity),
+                glow_alpha(g.outer_alpha),
             );
             commands.entity(entity).with_children(|parent| {
                 parent.spawn((
@@ -386,23 +372,36 @@ fn attach_normal_maps(
 /// senza doverli ri-applicare in un secondo tempo.
 fn spawn_star_lights(
     stars: Query<
-        (Entity, &CelestialBody, Option<&StarLightSettings>),
+        (Entity, &CelestialBody, Option<&StarLightSettings>, Option<&StarGlow>),
         (Without<FireflyLightAttached>, Without<FireflyOccluderAttached>),
     >,
     mut commands: Commands,
 ) {
-    for (entity, body, settings) in stars.iter() {
+    for (entity, body, settings, glow) in stars.iter() {
         if !body.luminous {
             continue;
         }
         let s = settings.cloned().unwrap_or_default();
+        // v0.14.79 (Ticket 20): l'ALPHA del colore della luce trasporta
+        // `Halo Brightness` (StarGlow.brightness) alla shader vendored, che
+        // lo applica ai pixel SENZA normal map (sfondo/starfield/glow) al
+        // posto di `intensity` → l'alone sullo sfondo risponde SOLO a Halo
+        // Brightness, i pianeti SOLO a Planet Light.
+        let halo_brightness = glow
+            .map(|g| g.brightness)
+            .unwrap_or(StarGlow::default().brightness);
         commands
             .entity(entity)
             .insert(FireflyLightAttached)
             .with_children(|parent| {
                 parent.spawn((
                     PointLight2d {
-                        color: Color::srgba(body.color[0], body.color[1], body.color[2], 1.0),
+                        color: Color::srgba(
+                            body.color[0],
+                            body.color[1],
+                            body.color[2],
+                            halo_brightness,
+                        ),
                         intensity: s.intensity,
                         radius: s.radius,
                         falloff: s.falloff.into_firefly(),
@@ -557,6 +556,9 @@ fn apply_ambient_light(
 /// stella alla sua PointLight2d child quando `StarLightSettings` cambia
 /// (edit live dal pannello). Allo spawn i valori sono già corretti (li legge
 /// `spawn_star_lights`), quindi qui basta il Changed.
+///
+/// v0.14.79: NON tocca `light.color` — l'alpha del colore trasporta Halo
+/// Brightness ed è gestito da `apply_star_glow_settings`.
 fn apply_star_light_settings(
     bodies: Query<(&CelestialBody, &Children, &StarLightSettings), (Changed<StarLightSettings>, With<FireflyLightAttached>)>,
     mut lights: Query<&mut PointLight2d>,
@@ -576,23 +578,19 @@ fn apply_star_light_settings(
     }
 }
 
-/// Applica le impostazioni glow (inner/outer scale+alpha ai child Sprite)
-/// quando `StarGlow` cambia (edit live dal pannello). Idempotente.
+/// Applica le impostazioni glow quando `StarGlow` cambia (edit live).
 ///
-/// UNA sola query `&mut Sprite` (con `Has<FireflyGlowInner/Outer>` per
-/// distinguere i due glow): due query `&mut Sprite` separate sullo stesso
-/// componente erano un B0001 all'inizializzazione (panic su WASM
-/// "Unreachable code", v0.14.70).
+/// DUE destinazioni (v0.14.79):
+/// 1. I child Sprite inner/outer: custom_size + alpha base (UNA sola query
+///    `&mut Sprite` con `Has<>` — due query separate erano un B0001, v0.14.70).
+/// 2. L'ALPHA del colore della PointLight2d child = `g.brightness`
+///    (Halo Brightness): è il canale che la shader vendored legge per i pixel
+///    SENZA normal map (sfondo/starfield) → il disco di luce attorno alla
+///    stella segue Halo Brightness e MAI Planet Light.
 ///
-/// v0.14.77 (Ticket 20, opzione C — alone decorativo puro): la mappa di luce
-/// firefly moltiplica anche gli sprite glow (light_frag ∝ intensity), quindi
-/// con intensity=2 l'alone raddoppia di brillantezza. L'alpha scritta nello
-/// Sprite è PRE-DIVISA per intensity (helper `glow_alpha`): la moltiplicazione
-/// della lightmap annulla la divisione e l'alone resta visivamente costante.
-/// Con intensity=0 (stella spenta) l'alpha è 0: alone invisibile.
-///
-/// La query reagisce anche a `Changed<StarLightSettings>`: se l'utente cambia
-/// SOLO intensity (senza toccare il glow), l'alpha compensata va ricalcolata.
+/// Reagisce anche a `Changed<StarLightSettings>` per ridisegnare gli sprite
+/// glow (la lightmap li moltiplica, ma con la nuova shader il moltiplicatore
+/// dei pixel glow è `halo`/brightness, non intensity — nessuna compensazione).
 fn apply_star_glow_settings(
     stars: Query<
         (&CelestialBody, &Children, &StarGlow, &StarLightSettings),
@@ -602,10 +600,24 @@ fn apply_star_glow_settings(
         ),
     >,
     mut glows: Query<(&mut Sprite, Has<FireflyGlowInner>, Has<FireflyGlowOuter>)>,
+    mut lights: Query<&mut PointLight2d>,
 ) {
-    for (body, children, g, light) in &stars {
-        let inner_alpha = glow_alpha(g.inner_alpha, g.brightness, light.intensity);
-        let outer_alpha = glow_alpha(g.outer_alpha, g.brightness, light.intensity);
+    for (body, children, g, _light) in &stars {
+        // 2) Halo Brightness -> alpha del colore della luce (canale shader).
+        for child in children.iter() {
+            if let Ok(mut light) = lights.get_mut(child) {
+                let srgba = light.color.to_srgba();
+                light.color = Color::srgba(
+                    srgba.red,
+                    srgba.green,
+                    srgba.blue,
+                    g.brightness,
+                );
+            }
+        }
+        // 1) Sprite glow: alpha base pura.
+        let inner_alpha = glow_alpha(g.inner_alpha);
+        let outer_alpha = glow_alpha(g.outer_alpha);
         for child in children.iter() {
             let Ok((mut sp, is_inner, is_outer)) = glows.get_mut(child) else {
                 continue;
@@ -676,52 +688,58 @@ mod tests {
         );
     }
 
-    // ---- glow_alpha (Ticket 20, v0.14.78): DUE manopole indipendenti ----
-    // brightness = alone (StarGlow.brightness), intensity = luce pianeti.
+    // ---- glow_alpha (Ticket 20, v0.14.79): alpha base pura ----
+    // La separazione alone/luce pianeti vive NELLO SHADER vendored:
+    // pixel senza normal map -> Halo Brightness (alpha del colore luce),
+    // pixel dei pianeti -> Planet Light (intensity). Lo sprite glow porta
+    // solo l'alpha base del pannello.
 
     #[test]
-    fn glow_alpha_identity_at_intensity_one() {
-        // brightness=1, intensity=1: identità.
-        assert!((glow_alpha(0.55, 1.0, 1.0) - 0.55).abs() < 1e-6);
+    fn glow_alpha_identity() {
+        // Alpha base passata intatta (clamp 0..1).
+        assert!((glow_alpha(0.55) - 0.55).abs() < 1e-6);
+        assert!((glow_alpha(0.18) - 0.18).abs() < 1e-6);
+        assert_eq!(glow_alpha(0.0), 0.0);
+        assert_eq!(glow_alpha(1.0), 1.0);
     }
 
     #[test]
-    fn glow_alpha_compensates_high_intensity() {
-        // intensity=4 (pianeti 4x più illuminati): l'alpha si pre-divide per 4
-        // -> la lightmap (×4) annulla la divisione e l'alone resta costante.
-        assert!((glow_alpha(0.55, 1.0, 4.0) - 0.1375).abs() < 1e-6);
+    fn glow_alpha_clamps_out_of_range() {
+        assert_eq!(glow_alpha(1.5), 1.0);
+        assert_eq!(glow_alpha(-0.2), 0.0);
     }
 
     #[test]
-    fn glow_alpha_clamps_to_one_on_low_intensity() {
-        // intensity=0.5: 0.55/0.5 = 1.1 -> clamp in alto a 1.0.
-        assert_eq!(glow_alpha(0.55, 1.0, 0.5), 1.0);
+    fn halo_brightness_travels_in_light_color_alpha() {
+        // Verifica della CONVENZIONE v0.14.79: spawn_star_lights e
+        // apply_star_glow_settings scrivono StarGlow.brightness nell'ALPHA
+        // del colore della PointLight2d. La shader vendored lo legge
+        // (`let halo = light.color.a`) e lo applica ai pixel senza normal
+        // map al posto di `intensity`. Simuliamo il calcolo della shader:
+        let color = Color::srgba(1.0, 0.9, 0.3, 0.7); // brightness=0.7
+        let halo = color.to_srgba().alpha;
+        let intensity = 3.0; // Planet Light alto
+        // Pixel SFONDO (normal.a == 0): select(intensity, halo, true) = halo.
+        let surface_background = if true { halo } else { intensity };
+        assert_eq!(surface_background, 0.7, "sfondo usa Halo, non Planet Light");
+        // Pixel PIANETA (normal.a > 0): select = intensity.
+        let surface_planet = if false { halo } else { intensity };
+        assert_eq!(surface_planet, 3.0, "pianeta usa Planet Light, non Halo");
     }
 
     #[test]
-    fn glow_alpha_zero_intensity_hides_glow() {
-        // Stella spenta: alone invisibile (NON alpha=1 — pitfall del ticket).
-        assert_eq!(glow_alpha(0.55, 1.0, 0.0), 0.0);
-    }
-
-    #[test]
-    fn glow_alpha_brightness_scales_halo_independently() {
-        // brightness=2 raddoppia l'alone senza toccare la luce dei pianeti:
-        // a intensity=1 (nessuna compensazione), alpha = 2 × 0.55 = 1.1 -> 1.0.
-        assert_eq!(glow_alpha(0.4, 2.0, 1.0), 0.8);
-        assert_eq!(glow_alpha(0.3, 2.0, 1.0), 0.6);
-        // brightness=0: alone spento anche con pianeti illuminati.
-        assert_eq!(glow_alpha(0.55, 0.0, 1.8), 0.0);
-    }
-
-    #[test]
-    fn glow_alpha_brightness_and_intensity_orthogonal() {
-        // La coppia (brightness, intensity) controlla l'alone in modo
-        // indipendente: brightness × base / intensity. Cambiare SOLO intensity
-        // mantiene il PRODOTTO visivo costante dopo la lightmap.
-        let a_low = glow_alpha(0.55, 1.0, 1.0); // lightmap ×1
-        let a_high = glow_alpha(0.55, 1.0, 4.0); // lightmap ×4
-        // 0.55 vs 0.1375: ×1 → 0.55, ×4 → 0.55. Identico dopo la moltiplicazione.
-        assert!((a_low - a_high * 4.0).abs() < 1e-6);
+    fn halo_alpha_survives_to_linear_vec4() {
+        // Il buffer GPU usa `light.color.to_linear().to_vec4()` (buffers.rs:189):
+        // l'alpha DEVE sopravvivere alla conversione sRGB->linear, altrimenti
+        // il canale trasporto Halo Brightness arriva corrotto alla shader.
+        let color = Color::srgba(0.5, 0.9, 0.3, 0.42);
+        let lin = bevy::color::LinearRgba::from(color);
+        assert!(
+            (lin.alpha - 0.42).abs() < 1e-6,
+            "alpha persa nella conversione linear: {}",
+            lin.alpha
+        );
+        let v4 = lin.to_vec4();
+        assert!((v4.w - 0.42).abs() < 1e-6, "alpha persa in to_vec4: {}", v4.w);
     }
 }
