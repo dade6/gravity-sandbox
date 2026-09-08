@@ -48,5 +48,9 @@ ln -sf ../../assets/preset.json wasm-dist/assets/preset.json
 # index.html contiene il glue JS (fetch preset, badge versione): copiarlo
 # esplicitamente per non dipendere dal comportamento di wasm-pack
 cp index.html wasm-dist/index.html
+# wasm_download.js: loader streaming del .wasm con progresso {loaded,
+# total, fraction} per la barra di caricamento (usato dal bootstrap di
+# index.html; vedi webtests/ per i test dei criteri di accettazione)
+cp wasm_download.js wasm-dist/wasm_download.js
 
 echo "Build OK: wasm-dist aggiornato (gravity_sandbox + assets + index.html)"

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>wasm_download webtests</title></head>
+<body>
+    <h3 style="font-family: monospace">wasm_download.js — harness criteri di accettazione</h3>
+    <pre id="log" style="font: 12px monospace; white-space: pre-wrap"></pre>
+    <!-- Il driver playwright esegue downloadWasm() in questa pagina via
+         page.evaluate(); il modulo è importato qui e esposto su window.
+         127.0.0.1 è secure context -> crypto.subtle disponibile per gli
+         sha256 di verifica byte. -->
+    <script type="module">
+        import { downloadWasm, DEFAULT_THROTTLE_MS } from '/wasm_download.js';
+        window.downloadWasm = downloadWasm;
+        window.DEFAULT_THROTTLE_MS = DEFAULT_THROTTLE_MS;
+        document.getElementById('log').textContent = 'modulo caricato, throttle=' + DEFAULT_THROTTLE_MS + 'ms';
+    </script>
+</body>
+</html>
