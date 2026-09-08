@@ -206,11 +206,15 @@ impl GlowCurve {
 /// Edge-fade multiplier mirroring the vendored firefly shader soft edge
 /// (`create_lightmap.wgsl`): full (1.0) at `dist <= radius`, ramping smoothly
 /// (smoothstep) to 0.0 at `dist = radius + fade_width`. `fade_width <= 0`
-/// keeps the historic hard cutoff (factor always 1.0).
+/// keeps the historic HARD cutoff at `radius` (1.0 inside, 0.0 outside),
+/// exactly like the GPU gate `dist < radius + fade` in the shader.
 #[inline]
 pub fn light_edge_fade(dist: f32, radius: f32, fade_width: f32) -> f32 {
-    if fade_width <= 0.0 || dist <= radius {
+    if dist <= radius {
         return 1.0;
+    }
+    if fade_width <= 0.0 {
+        return 0.0;
     }
     let t = ((dist - radius) / fade_width).clamp(0.0, 1.0);
     1.0 - t * t * (3.0 - 2.0 * t)
@@ -222,10 +226,13 @@ mod tests {
 
     #[test]
     fn light_edge_fade_legacy_zero_width() {
-        // fade_width == 0 -> always 1.0 (historic hard cutoff).
-        for d in [0.0f32, 4999.0, 5000.0, 99999.0] {
-            assert_eq!(light_edge_fade(d, 5000.0, 0.0), 1.0);
-        }
+        // fade_width == 0 -> historic HARD cutoff AT radius (like the GPU):
+        // 1.0 inside (incl. exactly at radius), 0.0 outside.
+        assert_eq!(light_edge_fade(0.0, 5000.0, 0.0), 1.0);
+        assert_eq!(light_edge_fade(4999.0, 5000.0, 0.0), 1.0);
+        assert_eq!(light_edge_fade(5000.0, 5000.0, 0.0), 1.0);
+        assert_eq!(light_edge_fade(5000.1, 5000.0, 0.0), 0.0);
+        assert_eq!(light_edge_fade(99999.0, 5000.0, 0.0), 0.0);
     }
 
     #[test]

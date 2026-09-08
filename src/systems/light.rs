@@ -2,12 +2,11 @@ use bevy::color::Srgba;
 use bevy::prelude::*;
 
 use crate::components::celestial::{BodyType, CelestialBody};
-use crate::components::lighting::{AmbientLight, LightInfo, LightSource};
+use crate::components::lighting::{
+    light_edge_fade, AmbientLight, LightInfo, LightSource, StarLightSettings,
+};
 use crate::rendering::TextureAssets;
 use crate::systems::lighting::LightMaterial;
-
-/// Maximum distance beyond which a body receives only ambient light (no direct light).
-const MAX_LIGHT_DISTANCE: f32 = 3000.0;
 
 /// Plugin for the lighting system.
 ///
@@ -53,8 +52,9 @@ fn init_light_sources(
 /// - world position / colour / raw intensity / falloff of the nearest star
 ///   (consumed by `update_light_materials` for the per-pixel shader)
 ///
-/// Bodies beyond `MAX_LIGHT_DISTANCE` from any star receive 0 direct light
-/// (only ambient light from `AmbientLight` resource).
+/// The direct-light cutoff follows the star's OWN `StarLightSettings`
+/// (panel Radius + Fade): same band the GPU shader uses. Bodies beyond
+/// `radius + fade_width` receive only ambient light.
 ///
 /// Occlusion: if another non-luminous body lies on the segment star→body
 /// (its circle intersects the segment), the body is in shadow and receives
@@ -62,8 +62,32 @@ fn init_light_sources(
 /// actually dark (the shadow cones are decorative; the light must match).
 /// Stars never occlude (they emit light, and the ticket says they cast no
 /// shadow).
+/// Per-star data collected once per frame: panel settings (Planet Light,
+/// Radius, Fade) with historic `LightSource` fallbacks.
+#[derive(Clone, Copy)]
+struct StarData {
+    pos: Vec2,
+    /// Effective intensity: `StarLightSettings.intensity` (panel "Planet
+    /// Light") when the star has it, else the historic `LightSource.intensity`.
+    intensity: f32,
+    /// CPU distance-attenuation constant (historic `LightSource.falloff`).
+    falloff: f32,
+    color: Vec3,
+    /// Light outer radius (`StarLightSettings.radius`, panel "Radius").
+    radius: f32,
+    /// Soft-edge band width (`StarLightSettings.fade_width`, panel "Fade").
+    fade_width: f32,
+}
+
 fn compute_lighting(
-    stars: Query<(&CelestialBody, &GlobalTransform, &LightSource)>,
+    stars: Query<
+        (
+            &CelestialBody,
+            &GlobalTransform,
+            &LightSource,
+            Option<&StarLightSettings>,
+        ),
+    >,
     occluders: Query<(Entity, &CelestialBody, &GlobalTransform), Without<LightSource>>,
     mut bodies: Query<(
         Entity,
@@ -73,16 +97,19 @@ fn compute_lighting(
     )>,
     mut commands: Commands,
 ) {
-    // Collect star positions, intensities, falloffs and colours
-    let star_data: Vec<(Vec2, f32, f32, Vec3)> = stars
+    // Collect star positions, intensities, falloffs, colours and light-edge
+    // parameters. `StarLightSettings` (panel) wins when present; the
+    // radius/fade defaults mirror `StarLightSettings::default()`.
+    let defaults = StarLightSettings::default();
+    let star_data: Vec<StarData> = stars
         .iter()
-        .map(|(body, xform, ls)| {
-            (
-                xform.translation().truncate(),
-                ls.intensity,
-                ls.falloff,
-                Vec3::new(body.color[0], body.color[1], body.color[2]),
-            )
+        .map(|(body, xform, ls, settings)| StarData {
+            pos: xform.translation().truncate(),
+            intensity: settings.map(|s| s.intensity).unwrap_or(ls.intensity),
+            falloff: ls.falloff,
+            color: Vec3::new(body.color[0], body.color[1], body.color[2]),
+            radius: settings.map(|s| s.radius).unwrap_or(defaults.radius),
+            fade_width: settings.map(|s| s.fade_width).unwrap_or(defaults.fade_width),
         })
         .collect();
 
@@ -127,18 +154,26 @@ fn compute_lighting(
         let body_pos = xform.translation().truncate();
 
         // Find nearest star
-        let mut nearest: Option<(Vec2, f32, f32, Vec3)> = None;
+        let mut nearest: Option<StarData> = None;
         let mut nearest_dsq = f32::MAX;
 
-        for &(sp, si, sf, sc) in &star_data {
-            let dsq = body_pos.distance_squared(sp);
+        for sd in &star_data {
+            let dsq = body_pos.distance_squared(sd.pos);
             if dsq < nearest_dsq {
                 nearest_dsq = dsq;
-                nearest = Some((sp, si, sf, sc));
+                nearest = Some(*sd);
             }
         }
 
-        if let Some((star_pos, intensity, falloff, star_color)) = nearest {
+        if let Some(StarData {
+            pos: star_pos,
+            intensity,
+            falloff,
+            color: star_color,
+            radius,
+            fade_width,
+        }) = nearest
+        {
             let dist = nearest_dsq.sqrt();
             let direction = if dist > 0.001 {
                 (star_pos - body_pos).normalize()
@@ -152,19 +187,24 @@ fn compute_lighting(
                 oe != entity && segment_hits_circle(star_pos, body_pos, opos, orad)
             });
 
-            let received = if occluded || dist > MAX_LIGHT_DISTANCE {
+            // v0.14.80: the direct-light cutoff follows the star's OWN panel
+            // radius + fade (same band the GPU shader uses, see
+            // create_lightmap.wgsl `dist < light.radius + fade`). The historic
+            // fixed `MAX_LIGHT_DISTANCE` (3000) cut planets black BEFORE the
+            // light edge when radius > 3000 and kept cones past the edge when
+            // radius < 3000.
+            let edge = if occluded {
                 0.0
             } else {
-                intensity / (1.0 + dist * dist * falloff)
+                light_edge_fade(dist, radius, fade_width)
             };
 
-            // Beyond MAX_LIGHT_DISTANCE the shader must receive 0 too
-            // (raw intensity drives the per-pixel diffuse term).
-            let raw = if occluded || dist > MAX_LIGHT_DISTANCE {
-                0.0
-            } else {
-                intensity
-            };
+            let received = intensity / (1.0 + dist * dist * falloff) * edge;
+
+            // The shader must receive the faded raw intensity too (it drives
+            // the per-pixel diffuse term), or planets would stay lit past the
+            // CPU cutoff.
+            let raw = intensity * edge;
 
             match existing_light {
                 Some(mut li) => {
@@ -499,7 +539,7 @@ mod tests {
         assert!(mat.normal_map.is_some(), "handle normal map collegato");
     }
 
-    /// Un corpo lontano da ogni stella (oltre MAX_LIGHT_DISTANCE) riceve
+    /// Un corpo lontano da ogni stella (oltre radius+fade della stella) riceve
     /// intensità 0: nel materiale star_intensity = 0 -> solo ambient.
     #[test]
     fn update_light_materials_zeroes_light_beyond_max_distance() {
@@ -519,7 +559,85 @@ mod tests {
             .resource::<Assets<LightMaterial>>()
             .get(&handle)
             .expect("material asset");
-        assert_eq!(mat.light_intensity, 0.0, "oltre MAX_LIGHT_DISTANCE -> 0");
+        // Star without StarLightSettings -> defaults radius 5000 + fade 500:
+        // at exactly 5000 the edge factor is still 1.0, but past
+        // radius+fade (5500) it is 0.
+        assert_eq!(mat.light_intensity, 1.0, "dentro radius -> piena");
+    }
+
+    /// v0.14.80: cutoff CPU segue radius+fade della STRELLA (StarLightSettings),
+    /// non più la costante fissa 3000. Il cono d'ombra vive nella stessa banda
+    /// di luce della GPU.
+    #[test]
+    fn light_cutoff_follows_star_radius_plus_fade() {
+        let mut app = test_app();
+        let (_far, handle_far) = {
+            let world = app.world_mut();
+            // Star with panel settings: radius 4000, fade 500 -> edge at 4500.
+            // Far planet on the Y axis, near planet on the X axis: they must
+            // NOT occlude each other (the segment star→far is the Y axis).
+            let star = spawn_star(world, Vec2::ZERO);
+            world.entity_mut(star).insert(StarLightSettings {
+                intensity: 2.0,
+                radius: 4000.0,
+                fade_width: 500.0,
+                ..default()
+            });
+            let (e, h) = spawn_planet(world, Vec2::new(0.0, 4200.0), [0.3, 0.6, 1.0], 12.0, 1.0);
+            (e, h)
+        };
+        let (_near, handle_near) = {
+            let world = app.world_mut();
+            let (e, h) = spawn_planet(world, Vec2::new(1000.0, 0.0), [0.3, 0.6, 1.0], 12.0, 1.0);
+            (e, h)
+        };
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let mat_far = world
+            .resource::<Assets<LightMaterial>>()
+            .get(&handle_far)
+            .expect("material asset far");
+        let mat_near = world
+            .resource::<Assets<LightMaterial>>()
+            .get(&handle_near)
+            .expect("material asset near");
+        // Inside radius: full intensity (2.0 from StarLightSettings, not the
+        // historic LightSource 1.0).
+        assert_eq!(mat_near.light_intensity, 2.0, "Planet Light del pannello");
+        // At 4200 (radius 4000 + fade 500): PARTIAL light, not a snap-off.
+        // smoothstep((4200-4000)/500) = 0.352 -> raw = 2.0 * (1-0.352) ≈ 1.296.
+        assert!(
+            (mat_far.light_intensity - (2.0 * (1.0 - 0.352))).abs() < 0.01,
+            "nel fade band: sfumato, non a scatti; got {}",
+            mat_far.light_intensity
+        );
+    }
+
+    /// v0.14.80: oltre radius+fade l'intensità è 0 anche con la stella
+    /// vicina luminosa (fallback ai default quando manca StarLightSettings).
+    #[test]
+    fn light_zero_beyond_radius_plus_fade_defaults() {
+        let mut app = test_app();
+        let (_entity, handle) = {
+            let world = app.world_mut();
+            let (e, h) = spawn_planet(world, Vec2::new(6000.0, 0.0), [0.3, 0.6, 1.0], 12.0, 1.0);
+            spawn_star(world, Vec2::ZERO);
+            (e, h)
+        };
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let mat = world
+            .resource::<Assets<LightMaterial>>()
+            .get(&handle)
+            .expect("material asset");
+        // Defaults: radius 5000 + fade 500 = edge at 5500; at 6000 -> 0.
+        assert_eq!(mat.light_intensity, 0.0, "oltre radius+fade -> 0");
     }
 
     // ---- occlusione ----
