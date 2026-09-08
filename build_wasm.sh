@@ -52,5 +52,10 @@ cp index.html wasm-dist/index.html
 # total, fraction} per la barra di caricamento (usato dal bootstrap di
 # index.html; vedi webtests/ per i test dei criteri di accettazione)
 cp wasm_download.js wasm-dist/wasm_download.js
+# wasm_runtime.js: eventi del ciclo di vita del caricamento WASM
+# (download-start/progress/end, compile-start/end, ready, error) attorno
+# alla compilazione REALE — API documentata nell'header del modulo;
+# test: webtests/run_compile_tests.mjs + webtests/real_check_compile.mjs
+cp wasm_runtime.js wasm-dist/wasm_runtime.js
 
 echo "Build OK: wasm-dist aggiornato (gravity_sandbox + assets + index.html)"

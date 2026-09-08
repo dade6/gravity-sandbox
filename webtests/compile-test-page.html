@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>wasm_runtime webtests</title></head>
+<body>
+    <h3 style="font-family: monospace">wasm_runtime.js — harness test eventi compilazione</h3>
+    <pre id="log" style="font: 12px monospace; white-space: pre-wrap"></pre>
+    <!-- Il driver playwright esegue wasm_runtime nel contesto di questa
+         pagina via page.evaluate(); i moduli sono importati qui ed
+         esposti su window. 127.0.0.1 è secure context. -->
+    <script type="module">
+        import { createLoaderEvents, compileWasm, initWasmApp, loadWasmLifecycle, LOADER_EVENTS } from '/wasm_runtime.js';
+        window.createLoaderEvents = createLoaderEvents;
+        window.compileWasm = compileWasm;
+        window.initWasmApp = initWasmApp;
+        window.loadWasmLifecycle = loadWasmLifecycle;
+        window.LOADER_EVENTS = LOADER_EVENTS;
+        document.getElementById('log').textContent =
+            'wasm_runtime caricato: eventi=' + LOADER_EVENTS.join(', ');
+    </script>
+</body>
+</html>
