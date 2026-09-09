@@ -640,6 +640,70 @@ mod tests {
         assert_eq!(mat.light_intensity, 0.0, "oltre radius+fade -> 0");
     }
 
+    /// v0.14.80 regression (feedback Davide, screenshot v0.14.78): stella con
+    /// radius=100, fade=5000. Il pianeta a 0,100 aveva il cono, quello a
+    /// 0,150 NO — il cono si creava solo entro `radius`. Ora il gate è
+    /// dist < radius+fade: a 150 (e fino a 5100) il cono DEVE esserci.
+    #[test]
+    fn cone_gate_extends_to_radius_plus_fade_regression() {
+        let mut app = test_app();
+        let planet = {
+            let world = app.world_mut();
+            let star = spawn_star(world, Vec2::ZERO);
+            world.entity_mut(star).insert(StarLightSettings {
+                intensity: 3.0,
+                radius: 100.0,
+                fade_width: 5000.0,
+                ..default()
+            });
+            // Planet at 0,150 — the exact position from the user's screenshot
+            // where the cone was MISSING pre-fix.
+            let (e, _) = spawn_planet(world, Vec2::new(0.0, 150.0), [0.3, 0.6, 1.0], 12.0, 1.0);
+            e
+        };
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let li = world.get::<LightInfo>(planet).unwrap();
+        assert!(
+            li.intensity > 0.0,
+            "pianeta a dist 150 con radius=100/fade=5000: cono visibile (150 < 100+5000), got {}",
+            li.intensity
+        );
+    }
+
+    /// Stessa stella (radius=100, fade=5000): oltre 5100 il cono NON deve
+    /// esserci — il gate è radius+fade, non infinito.
+    #[test]
+    fn cone_gate_zero_beyond_radius_plus_fade_regression() {
+        let mut app = test_app();
+        let planet = {
+            let world = app.world_mut();
+            let star = spawn_star(world, Vec2::ZERO);
+            world.entity_mut(star).insert(StarLightSettings {
+                intensity: 3.0,
+                radius: 100.0,
+                fade_width: 5000.0,
+                ..default()
+            });
+            let (e, _) = spawn_planet(world, Vec2::new(0.0, 5200.0), [0.3, 0.6, 1.0], 12.0, 1.0);
+            e
+        };
+
+        app.update();
+        app.update();
+
+        let world = app.world();
+        let li = world.get::<LightInfo>(planet).unwrap();
+        assert_eq!(
+            li.intensity, 0.0,
+            "pianeta a dist 5200 (> 100+5000): niente cono, got {}",
+            li.intensity
+        );
+    }
+
     // ---- occlusione ----
 
     #[test]
