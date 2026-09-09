@@ -9,7 +9,7 @@ use crate::{
     data::{
         CombinationMode, ExtractedCombinedLightmaps, ExtractedWorldData, LightmapSize, NormalMode,
     },
-    lights::{LightBatch, LightBatches, LightBindGroups, LightIndex, LightLut, LightPointer},
+    lights::{Falloff, LightBatch, LightBatches, LightBindGroups, LightIndex, LightLut, LightPointer},
     occluders::{PolyOccluderIndex, RoundOccluderIndex, point_inside_poly, translate_vertices},
     phases::SpritePhase,
     pipelines::{
@@ -381,9 +381,25 @@ pub(crate) fn prepare_data(
                             max: projection.area.max + camera.2.camera_pos,
                         };
 
+                        // v0.14.81 (Ticket: coni d'ombra oltre radius): il
+                        // broadphase storico usava SOLO `light.radius`, ma la
+                        // shader illumina (e proietta ombre) fino a
+                        // `radius + fade_width` con Falloff::None (il campo
+                        // falloff_intensity trasporta fade_width, vedi
+                        // buffers.rs) — gli occluder nella banda fade venivano
+                        // cullati e i pianeti rimanevano SENZA cono d'ombra.
+                        // L'AABB del broadphase deve coprire l'intera area
+                        // illuminata, come il gate `dist < radius +
+                        // falloff_intensity` della shader create_lightmap.
+                        let light_extent = light.radius
+                            + if matches!(light.falloff, Falloff::None) {
+                                light.fade_width
+                            } else {
+                                0.0
+                            };
                         let light_rect = camera_rect.union_point(light.pos).intersect(Rect {
-                            min: light.pos - light.radius,
-                            max: light.pos + light.radius,
+                            min: light.pos - light_extent,
+                            max: light.pos + light_extent,
                         });
 
                         if light_rect.is_empty() {

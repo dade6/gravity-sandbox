@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Gravity Sandbox v0.14.80</title>
+    <title>Gravity Sandbox v0.14.81</title>
     <script>
         // CONSOLE SU IPHONE: Eruda compare SOLO con ?debug nell'URL
         // (es. https://...ts.net:10000/?debug): bottone in basso a destra
@@ -146,7 +146,7 @@
 <body>
     <canvas id="bevy-canvas" tabindex="0"></canvas>
 
-    <div id="version-badge">v0.14.80</div>
+    <div id="version-badge">v0.14.81</div>
     <div id="debug-state" style="position:fixed;bottom:80px;left:12px;color:#ffffff;background:rgba(0,0,0,0.75);padding:10px 18px;border-radius:10px;font:12px monospace;z-index:99;"></div>
     <div id="error-details" hidden>
         <button id="copy-err">📋 Copia errore</button>
@@ -261,7 +261,7 @@
     </script>
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox_p80.js?v=0.14.80';
+        import init, * as sandbox from './gravity_sandbox_p81.js?v=0.14.81';
         import { loadWasmLifecycle, createLoaderEvents } from './wasm_runtime.js';
         import { createLoadingBar } from './loading_bar.js';
 
@@ -315,8 +315,8 @@
         // glue — il pattern Safari/CORS resta preservato).
         // La UI è loading_bar.js (createLoadingBar) montata su #ui-overlay:
         // gli eventi del bus vengono mappati 1:1 sulle fasi della barra.
-        const WASM_URL = new URL('gravity_sandbox_p80_bg.wasm?v=0.14.80', location.href).href;
-        const WASM_SIZE_URL = new URL('gravity_sandbox_p80_bg.wasm.size?v=0.14.80', location.href).href;
+        const WASM_URL = new URL('gravity_sandbox_p81_bg.wasm?v=0.14.81', location.href).href;
+        const WASM_SIZE_URL = new URL('gravity_sandbox_p81_bg.wasm.size?v=0.14.81', location.href).href;
         const MAX_INIT_TRIES = 3;
 
         // ---- Barra di caricamento: componente loading_bar.js ---------------
@@ -410,7 +410,7 @@
             window.__sandbox = sandbox;
             if (isIOS) sandbox.set_mobile_device(true);
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.80 ✅';
+            if (v) v.textContent = 'v0.14.81 ✅';
 
             // Preset di livello esterno (assets/preset.json): Davide lo modifica sul
             // server e con un refresh vede il cambio, SENZA ricompilare il WASM.
@@ -456,7 +456,7 @@
             // errori/badge esistenti per la diagnosi remota.
             bar.error(err.message || String(err));
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.80 🛑' + (err.message || '').substring(0, 120);
+            if (v) v.textContent = 'v0.14.81 🛑' + (err.message || '').substring(0, 120);
             showError('ERRORE INIT', err.message || String(err), err.stack ? err.stack.substring(0, 3000) : '');
             console.error('[INIT FAIL full]', err.message, err.stack ? err.stack.substring(0, 2000) : '');
         });
@@ -500,7 +500,7 @@
                         } catch (e2) {
                             reason = 'THROW: ' + e2.message;
                         }
-                        if (vEl) vEl.textContent = 'v0.14.80 🛑 DEAD ' + reason;
+                        if (vEl) vEl.textContent = 'v0.14.81 🛑 DEAD ' + reason;
                     }
                     return;
                 }
@@ -513,7 +513,7 @@
             // campo) si inizializza col valore corrente e selezione totale.
             // PRIMA partiva vuoto -> il DEL su input vuoto NON generava
             // eventi 'input' e la cancellazione non arrivava mai al campo
-            // (bug v0.14.80: "DEL non cancella, devo selezionare e ridigitare").
+            // (bug v0.14.81: "DEL non cancella, devo selezionare e ridigitare").
             if (isSafariMac && s && window.__sandbox && window.__sandbox.set_text_input) {
                 const focusOn = s.focus !== 4294967295;
                 if (focusOn) {
@@ -548,7 +548,7 @@
                 // poll riuscito (il badge parte sempre da "v0.14.68 ✅").
                 const nm = (vb.textContent.indexOf('N') >= 0 && vb.textContent.indexOf('DEAD') < 0)
                     ? vb.textContent.replace(/ N\d+ m\d+ g\d+ s\d+\/\d+ q\d+$/, '')
-                    : 'v0.14.80 ✅';
+                    : 'v0.14.81 ✅';
                 vb.textContent = nm + ' N' + s.firefly.nmaps + ' m' + (s.firefly.nmode !== undefined ? s.firefly.nmode : '?') + ' g' + (s.firefly.gnmode !== undefined ? s.firefly.gnmode : '?') + ' s' + (s.firefly.skipN !== undefined ? s.firefly.skipN + '/' + s.firefly.procS : '?') + ' q' + (s.firefly.qItems !== undefined ? s.firefly.qItems : '?');
             }
         }, 300);
