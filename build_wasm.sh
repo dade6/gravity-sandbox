@@ -57,5 +57,11 @@ cp wasm_download.js wasm-dist/wasm_download.js
 # alla compilazione REALE — API documentata nell'header del modulo;
 # test: webtests/run_compile_tests.mjs + webtests/real_check_compile.mjs
 cp wasm_runtime.js wasm-dist/wasm_runtime.js
+# loading_bar.js: componente UI barra caricamento a due fasi (download %
+# + compilazione indeterminata, errore+retry, fade-out senza layout shift,
+# ARIA) — NON ancora collegato al loader reale (card integrazione
+# t_8553586d); test: webtests/run_loading_bar_tests.mjs + demo
+# loading-bar-demo.html (server: webtests/loading_bar_server.mjs)
+cp loading_bar.js wasm-dist/loading_bar.js
 
 echo "Build OK: wasm-dist aggiornato (gravity_sandbox + assets + index.html)"

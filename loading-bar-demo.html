@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<!-- loading-bar-demo.html — DEMO interattiva del componente loading_bar.js
+     (card t_63406e55), guidata da eventi SIMULATI (nessun download reale).
+     Server: webtests/loading_bar_server.mjs, poi apri /loading-bar-demo.html.
+
+     Pulsanti (uno scenario per volta):
+       1. Happy path    — download determinato (12 step % + byte crescenti,
+                           tipo payload wasm_runtime.js) → fase compile
+                           indeterminata animata → ready: fade-out SENZA
+                           layout shift (un marker sotto la barra resta
+                           fermo: il box resta nel layout, visibility:hidden).
+       2. Indeterminato — download senza taglia: colonna animata, NESSUNA %,
+                           MAI 'NaN' o valori falsi.
+       3. Errore+retry  — errore a metà download → messaggio + 'Riprova' →
+                           click riparte lo scenario happy path.
+       4. Pronto veloce — ready immediato: anche senza mai vedere la barra
+                           il flusso resta corretto.
+       5. Reset         — torna allo stato iniziale.
+     La console della pagina logga OGNI update() (phase, fraction, label)
+     così la sequenza è verificabile dai log senza screenshot. -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>loading_bar demo</title>
+    <style>
+        html, body { width: 100%; height: 100%; margin: 0; background: #000;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        #ui-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
+        #demo-controls {
+            position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+            pointer-events: auto;
+        }
+        #demo-controls button {
+            height: 30px; padding: 0 12px; border: none; border-radius: 6px;
+            background: rgba(60, 65, 90, 0.9); color: #aaa; font-size: 13px;
+            cursor: pointer; transition: background 0.15s, color 0.15s;
+        }
+        #demo-controls button:hover { background: rgba(80, 85, 120, 0.95); color: #fff; }
+        /* marker di layout-shift: strettamente sotto la barra (centrata al
+           50% dell'overlay). Se la sparizione della barra muove QUESTO, c'è
+           un layout shift. */
+        #shift-marker {
+            position: absolute; top: calc(50% + 60px); left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255,255,255,0.35); font-size: 11px; font-family: monospace;
+            pointer-events: none;
+        }
+        #log {
+            position: absolute; bottom: 12px; left: 12px; max-width: 60%;
+            color: rgba(255,255,255,0.5); font: 11px/1.5 monospace;
+            white-space: pre-wrap; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-overlay">
+        <div id="demo-controls">
+            <button id="btn-happy">1. Happy path</button>
+            <button id="btn-indet">2. Indeterminato</button>
+            <button id="btn-error">3. Errore+retry</button>
+            <button id="btn-fast">4. Pronto veloce</button>
+            <button id="btn-reset">5. Reset</button>
+        </div>
+        <!-- mount del componente: stesso pattern dell'index.html reale -->
+        <div id="bar-mount"></div>
+        <div id="shift-marker">— marker layout (deve restare FERMO quando la barra scompare) —</div>
+        <div id="log"></div>
+    </div>
+    <script type="module">
+        import { createLoadingBar } from './loading_bar.js';
+
+        const TOTAL = 51_358_364; // come il wasm di produzione (51.3 MB)
+        const logEl = document.getElementById('log');
+        let logLines = [];
+        function log(s) {
+            const t = new Date().toISOString().substring(11, 23);
+            logLines.push(t + '  ' + s);
+            if (logLines.length > 40) logLines.shift();
+            logEl.textContent = logLines.join('\n');
+            console.log('[demo]', s);
+        }
+
+        let retryCount = 0;
+        const bar = createLoadingBar({
+            mount: '#bar-mount',
+            ariaLabel: 'Caricamento del sandbox',
+        });
+
+        // Scenario guidato da eventi SIMULATI di wasm_runtime.js.
+        function playHappy({ indeterminate = false, failAt = null } = {}) {
+            bar.reset();
+            bar.update('download', indeterminate ? { loaded: 0, total: null, fraction: null } : { loaded: 0, total: TOTAL, fraction: 0 });
+            log('download-start  fraction=' + (indeterminate ? 'null' : '0'));
+            const STEPS = 12;
+            let i = 0;
+            const iv = setInterval(() => {
+                i++;
+                if (indeterminate) {
+                    log('download-progress (senza %: solo start/end in reale)');
+                    clearInterval(iv);
+                    // il reale emette solo end
+                    bar.update('download', { loaded: TOTAL, total: null, fraction: null });
+                    log('download-end    loaded=' + TOTAL + ' (indeterminato)');
+                    startCompile();
+                    return;
+                }
+                const frac = i / STEPS;
+                const loaded = Math.round(TOTAL * frac);
+                bar.update('download', { loaded, total: TOTAL, fraction: frac });
+                log('download-progress fraction=' + frac.toFixed(2) + '  loaded=' + loaded);
+                if (failAt != null && i >= failAt) {
+                    clearInterval(iv);
+                    bar.error('wasm fetch HTTP 404 (simulato)', () => {
+                        retryCount++;
+                        log('retry #' + retryCount + ' → riparte lo scenario happy');
+                        playHappy();
+                    });
+                    log('error  stage=download  message="wasm fetch HTTP 404 (simulato)"');
+                    return;
+                }
+                if (i >= STEPS) {
+                    clearInterval(iv);
+                    bar.update('download', { loaded: TOTAL, total: TOTAL, fraction: 1 });
+                    log('download-end    loaded=' + TOTAL + ' fraction=1');
+                    startCompile();
+                }
+            }, 180);
+        }
+        function startCompile() {
+            bar.update('compile');
+            log('compile-start   (indeterminato: fase, non %)');
+            setTimeout(() => {
+                bar.update('ready');
+                log('ready           → fade-out (nessun layout shift: marker fermo)');
+            }, 2200);
+        }
+
+        document.getElementById('btn-happy').onclick = () => { log('--- happy path ---'); playHappy(); };
+        document.getElementById('btn-indet').onclick = () => { log('--- indeterminato ---'); playHappy({ indeterminate: true }); };
+        document.getElementById('btn-error').onclick = () => { log('--- errore+retry ---'); playHappy({ failAt: 5 }); };
+        document.getElementById('btn-fast').onclick = () => {
+            log('--- pronto veloce ---');
+            bar.reset();
+            bar.update('download', { loaded: 0, total: TOTAL, fraction: 0 });
+            bar.update('download', { loaded: TOTAL, total: TOTAL, fraction: 1 });
+            bar.update('compile');
+            bar.update('ready');
+        };
+        document.getElementById('btn-reset').onclick = () => { log('--- reset ---'); bar.reset(); };
+
+        // avvio automatico dello scenario 1 alla pagina aperta
+        playHappy();
+    </script>
+</body>
+</html>
