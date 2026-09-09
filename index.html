@@ -134,76 +134,12 @@
         }
         #copy-err:active { background: rgba(255, 80, 80, 0.45); }
 
-        /* Barra di caricamento WASM all'avvio: progresso reale del download
-           (%) -> fase "Compilazione…" (indeterminata) -> fade-out quando l'app
-           è pronta. #ui-overlay resta pointer-events:none: la barra ha
-           pointer-events:auto SOLO su se stessa e non copre la toolbar. */
-        #loading-bar {
-            position: absolute;
-            top: 50%; left: 50%;
-            width: 300px;
-            transform: translate(-50%, -50%);
-            pointer-events: auto;
-            transition: opacity 0.45s ease;
-            z-index: 1;
-        }
-        #loading-bar .lb-panel {
-            background: rgba(12, 12, 24, 0.8);
-            backdrop-filter: blur(6px);
-            -webkit-backdrop-filter: blur(6px);
-            border-radius: 6px;
-            border: 1px solid rgba(255, 255, 255, 0.10);
-            padding: 14px 16px;
-        }
-        #loading-bar .lb-label {
-            color: rgba(255, 255, 255, 0.6);
-            font-size: 13px;
-            line-height: 1.4;
-            margin-bottom: 10px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            letter-spacing: 0.2px;
-        }
-        #loading-bar .lb-track {
-            position: relative;
-            height: 6px;
-            border-radius: 3px;
-            background: rgba(255, 255, 255, 0.12);
-            overflow: hidden;
-        }
-        #loading-bar .lb-fill {
-            position: absolute;
-            top: 0; left: 0;
-            height: 100%;
-            width: 0%;
-            background: rgba(100, 120, 255, 0.85);
-            border-radius: 3px;
-            transition: width 0.1s ease-out;
-        }
-        /* Indeterminato (Compilazione… / Riprovo…): colonna che scorre nel
-           track. instantiate è un blocco sincrono senza % osservabile: fase,
-           non percentuale finta. */
-        #loading-bar.lb-indeterminate .lb-fill {
-            width: 40%;
-            animation: lb-slide 1.1s ease-in-out infinite;
-        }
-        @keyframes lb-slide {
-            0%   { transform: translateX(-100%); }
-            100% { transform: translateX(250%); }
-        }
-        /* Errore di init: barra/label rosse + pannello bordato rosso invece
-           di sparire (niente barra "sospesa" a metà). */
-        #loading-bar.lb-error .lb-panel { border-color: rgba(255, 80, 80, 0.55); }
-        #loading-bar.lb-error .lb-fill {
-            background: rgba(255, 80, 80, 0.85);
-            animation: none;
-        }
-        #loading-bar.lb-error .lb-label { color: #ffb4b4; }
-        /* App pronta: fade out prima di nascostare */
-        #loading-bar.lb-done { opacity: 0; }
-        /* Inizialmente nascosta: mostrata da JS appena parte il download */
-        #loading-bar.lb-hidden { display: none; }
+        /* La barra di caricamento all'avvio NON è più markup/CSS inline: è
+           il componente loading_bar.js (ES module, CSS autoiniettato con gli
+           STESSI token) montato da createLoadingBar({mount:'#ui-overlay'})
+           dentro lo script module del boot. #ui-overlay resta
+           pointer-events:none: la barra ha pointer-events:auto SOLO su se
+           stessa (bottone 'Riprova' cliccabile) e non copre la toolbar. */
     </style>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 </head>
@@ -217,19 +153,13 @@
         <pre id="error-text"></pre>
     </div>
 
-    <!-- Overlay UI (z-index 100, pointer-events:none): contiene la barra di
-         caricamento WASM all'avvio. La barra ha pointer-events:auto solo per
-         sé, così non blocca né copre la toolbar (che sta sopra, separata). -->
-    <div id="ui-overlay">
-        <div id="loading-bar" class="lb-hidden" aria-live="polite">
-            <div class="lb-panel">
-                <div class="lb-label" id="lb-label">Download…</div>
-                <div class="lb-track"><div class="lb-fill" id="lb-fill"></div></div>
-            </div>
-        </div>
-    </div>
+    <!-- Overlay UI (z-index 100, pointer-events:none): la barra di
+         caricamento WASM all'avvio è montata QUI dentro dal modulo
+         loading_bar.js (createLoadingBar): il componente inietta il proprio
+         markup/CSS con gli stessi token del progetto. -->
+    <div id="ui-overlay"></div>
 
-    <script type="module">
+    <script>
         // WebGPU richiede un CONTESTO SICURO (HTTPS): su HTTP il browser non
         // espone navigator.gpu e bevy panica (FailedToCreateSurfaceForAnyBackend).
         // Avviso chiaro invece del crash + badge spiegato.
@@ -237,54 +167,14 @@
             const v = document.getElementById('version-badge');
             if (v) v.textContent = '⚠️ WebGPU richiede HTTPS: apri https://instance-20260607-0236.tail8514d0.ts.net:10000/';
         }
-        import init, * as sandbox from './gravity_sandbox_p80.js?v=0.14.80';
 
-        // Focus DOM del canvas: senza questo, il browser non instrada gli
-        // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
-        // Vale per desktop E tastiera fisica su iPhone (niente input nascosto:
-        // il fronte tastiera virtuale mobile è stato chiuso — editing su Mac).
-        // Bridge tastiera Safari Mac: input nascosto (vedi sotto). Dichiarato
-        // qui perché i listener di focus devono escluderlo dal furto di focus.
-        let hiddenInput = null;
-        const canvasEl = document.getElementById('bevy-canvas');
-        // Focus DOM del canvas, robusto anche su Safari Mac: Safari annulla il
-        // focus() durante pointerdown se non preceduto da preventDefault; in
-        // aggiunta, un keydown con capture sul document ri-focalizza il canvas
-        // prima che il tasto vada altrove (i campi Bevy ricevono i tasti solo
-        // se il canvas ha il focus del browser).
-        canvasEl.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            canvasEl.focus({ preventScroll: true });
-        });
-        canvasEl.addEventListener('click', () => canvasEl.focus({ preventScroll: true }));
-        document.addEventListener('keydown', () => { if (!hiddenInput || document.activeElement !== hiddenInput) canvasEl.focus({ preventScroll: true }); }, { capture: true });
-        document.addEventListener('keyup', () => { if (!hiddenInput || document.activeElement !== hiddenInput) canvasEl.focus({ preventScroll: true }); }, { capture: true });
-
-        // Rilevazione dispositivo mobile: abilita il keypad numerico Bevy
-        // (l'editing valori su iPhone avviene col keypad, non con la tastiera
-        // di sistema che iOS Safari non permette di controllare)
-        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-        // Safari Mac: Bevy/winit non riceve i tasti fisici -> bridge con
-        // input nascosto: quando un campo Bevy ha il focus, il focus del
-        // browser va su questo input e i tasti vengono inoltrati a Rust via
-        // set_text_input(mode, testo) -> apply_mobile_text_input li applica.
-        const isSafariMac = !isIOS && /Safari/.test(navigator.userAgent) && !/Chrome|CriOS/.test(navigator.userAgent);
-        function hiddenInputEnsure() {
-            if (hiddenInput) return hiddenInput;
-            hiddenInput = document.createElement('input');
-            hiddenInput.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;z-index:-1;width:1px;height:1px;border:0;padding:0;font-size:16px;';
-            hiddenInput.autocomplete = 'off';
-            hiddenInput.autocapitalize = 'off';
-            hiddenInput.spellcheck = false;
-            hiddenInput.addEventListener('input', () => {
-                if (window.__sandbox && window.__sandbox.set_text_input) {
-                    window.__sandbox.set_text_input(2, hiddenInput.value);
-                }
-            });
-            document.body.appendChild(hiddenInput);
-            return hiddenInput;
-        }
+        // ---- Boot pre-moduli: qui perché è ROBUSTO ai 404 degli import ES ----
+        // Il bootstrap vero (init del WASM) è nello <script type="module">
+        // sotto: un fetch fallito di un import statico (rete che muore a
+        // metà) NON esegue NESSUN codice del modulo — nemmeno gli handler
+        // degli errori. Queste funzioni vivono in uno script CLASSIC che
+        // parte sempre: il pannello errori esiste anche se i moduli non
+        // arrivano, e il badge mostra il motivo.
 
         // Pannello errore copiabile: mostra messaggio completo + stack in un
         // elemento selezionabile, con bottone "Copia" (clipboard API su HTTPS).
@@ -346,187 +236,176 @@
             console.error('[PAGEERROR full]', e.message, stack);
         });
 
+        // Focus DOM del canvas: senza questo, il browser non instrada gli
+        // eventi tastiera a winit/Bevy su WASM (i tasti vanno al body).
+        // Vale per desktop E tastiera fisica su iPhone (niente input nascosto:
+        // il fronte tastiera virtuale mobile è stato chiuso — editing su Mac).
+        // Bridge tastiera Safari Mac: input nascosto (vedi sotto). Dichiarato
+        // qui perché i listener di focus devono escluderlo dal furto di focus.
+        window.__canvasFocusInit = function (hiddenInputRef) {
+            const canvasEl = document.getElementById('bevy-canvas');
+            const hiddenInput = hiddenInputRef; // { current: input|null } condiviso col modulo
+            // Focus DOM del canvas, robusto anche su Safari Mac: Safari annulla il
+            // focus() durante pointerdown se non preceduto da preventDefault; in
+            // aggiunta, un keydown con capture sul document ri-focalizza il canvas
+            // prima che il tasto vada altrove (i campi Bevy ricevono i tasti solo
+            // se il canvas ha il focus del browser).
+            canvasEl.addEventListener('pointerdown', (e) => {
+                e.preventDefault();
+                canvasEl.focus({ preventScroll: true });
+            });
+            canvasEl.addEventListener('click', () => canvasEl.focus({ preventScroll: true }));
+            document.addEventListener('keydown', () => { if (!hiddenInput.current || document.activeElement !== hiddenInput.current) canvasEl.focus({ preventScroll: true }); }, { capture: true });
+            document.addEventListener('keyup', () => { if (!hiddenInput.current || document.activeElement !== hiddenInput.current) canvasEl.focus({ preventScroll: true }); }, { capture: true });
+        };
+    </script>
+
+    <script type="module">
+        import init, * as sandbox from './gravity_sandbox_p80.js?v=0.14.80';
+        import { loadWasmLifecycle, createLoaderEvents } from './wasm_runtime.js';
+        import { createLoadingBar } from './loading_bar.js';
+
+        // Focus del canvas + bridge tastiera Safari Mac: stato condiviso in un
+        // oggetto ref (un modulo ES non può esportare let mutabili).
+        const hiddenInputRef = { current: null };
+        window.__canvasFocusInit(hiddenInputRef);
+
+        // Rilevazione dispositivo mobile: abilita il keypad numerico Bevy
+        // (l'editing valori su iPhone avviene col keypad, non con la tastiera
+        // di sistema che iOS Safari non permette di controllare)
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+            (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        // Safari Mac: Bevy/winit non riceve i tasti fisici -> bridge con
+        // input nascosto: quando un campo Bevy ha il focus, il focus del
+        // browser va su questo input e i tasti vengono inoltrati a Rust via
+        // set_text_input(mode, testo) -> apply_mobile_text_input li applica.
+        const isSafariMac = !isIOS && /Safari/.test(navigator.userAgent) && !/Chrome|CriOS/.test(navigator.userAgent);
+        function hiddenInputEnsure() {
+            if (hiddenInputRef.current) return hiddenInputRef.current;
+            const hi = document.createElement('input');
+            hi.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;z-index:-1;width:1px;height:1px;border:0;padding:0;font-size:16px;';
+            hi.autocomplete = 'off';
+            hi.autocapitalize = 'off';
+            hi.spellcheck = false;
+            hi.addEventListener('input', () => {
+                if (window.__sandbox && window.__sandbox.set_text_input) {
+                    window.__sandbox.set_text_input(2, hi.value);
+                }
+            });
+            document.body.appendChild(hi);
+            hiddenInputRef.current = hi;
+            return hi;
+        }
+
+        // Pannello errori/showError/console.error/window 'error': vivono
+        // nello script CLASSIC sopra (devono esistere anche se gli import
+        // ES di questo modulo non arrivano: un 404 su un import statico
+        // non esegue NULLA di questo codice, gli handler invece servono).
+
         // Retry automatico del WASM: su connessioni instabili (Tailscale/DERP)
         // il fetch del .wasm può interrompersi a metà ("Load failed") -> il
-        // browser NON riscarica da solo: ritentiamo fino a MAX_INIT_TRIES.
-        // FIX CORS Safari (v0.14.68): il fetch INTERNO del glue wasm-bindgen
-        // fallisce con "due to access control checks" su Safari/iOS anche con
-        // server CORS a posto (il preflight ora è gestito). QUESTO fetch
-        // manuale usa lo stesso identico pattern del preset.json (che su
-        // Safari funziona sempre) e passa la Response al glue -> il glue NON
-        // esegue più alcun fetch interno (__wbg_load usa direct la Response).
-        // Cache-buster sul wasm: una versione nuova = URL nuovo = mai cache.
+        // browser NON riscarica da solo: bootFlow() ritenta fino a
+        // MAX_INIT_TRIES (pattern invariato rispetto a prima).
         //
-        // Barra di caricamento (v0.14.80): il fetch legge il body a chunk con
-        // un ReadableStream, accumula i byte in un Uint8Array e riporta la
-        // % REALE di download (bar > 0), poi la fase "Compilazione…". A fetch
-        // completato passa i BYTE ACCUMULATI a init({ module_or_path }) — un
-        // BufferSource che wasm-bindgen compila direttamente, senza alcun
-        // fetch interno (vincolo Safari preservato).
-        //
-        // GZIP: serve_wasm.py serve il .gz precompresso con Content-Encoding:
-        // gzip, quindi Content-Length è la taglia COMPRESSA ma il body letto
-        // dal reader è DECOMPRESSO (il browser elimina da solo la codifica).
-        // Usare Content-Length come totale sforerebbe oltre 100%. Il totale
-        // DECOMPRESSO arriva dall'header X-Wasm-Decompressed-Length (aggiunto
-        // da serve_wasm.py quando serve il .gz) oppure dal file sidecar
-        // gravity_sandbox_bg.wasm.size (scritto da build_wasm.sh). Se nessuna
-        // taglia affidabile, barra "indeterminata" (Download…): mai % finta.
+        // INTEGRAZIONE (t_8553586d): il fetch manuale inline è sostituito da
+        // loadWasmLifecycle() (wasm_runtime.js) che compone downloadWasm
+        // (streaming + % reale gzip-aware) -> compileWasm (compilazione REALE
+        // con eventi attorno) -> init del glue (Module precompilato passato a
+        // init({module_or_path}): nessun fetch né ricompilazione dentro il
+        // glue — il pattern Safari/CORS resta preservato).
+        // La UI è loading_bar.js (createLoadingBar) montata su #ui-overlay:
+        // gli eventi del bus vengono mappati 1:1 sulle fasi della barra.
         const WASM_URL = new URL('gravity_sandbox_p80_bg.wasm?v=0.14.80', location.href).href;
         const WASM_SIZE_URL = new URL('gravity_sandbox_p80_bg.wasm.size?v=0.14.80', location.href).href;
         const MAX_INIT_TRIES = 3;
 
-        // ---- Barra di caricamento: stati = download % -> compilazione -> done/errore.
-        // Utilizza i token visivi della toolbar (pannelli rgba(12,12,24,0.8), blur,
-        // raggio 6px, testo bianco/0.6, accento rgba(100,120,255,0.85)).
-        const lbEl = document.getElementById('loading-bar');
-        const lbFill = document.getElementById('lb-fill');
-        const lbLabel = document.getElementById('lb-label');
-        let lbPctKnown = false;   // taglia totale affidabile per la %?
-        let lbLastPaint = 0;      // throttle ~100ms degli aggiornamenti
-        let lbFinished = false;   // app pronta o errore: barra "finalizzata"
-        let lbTotal = null;       // taglia DECOMPRESSA del wasm (sidecar), o null
-        function lbShow() {
-            if (lbEl) lbEl.classList.remove('lb-hidden');
-        }
-        function lbSetPct(pct) {
-            // pct in [0..100] o null -> indeterminata
-            if (!lbFill || !lbEl || lbFinished) return;
-            const now = Date.now();
-            if (pct == null) {
-                // indeterminate: nessuna % conoscibile (chunked o fase compilazione)
-                lbEl.classList.add('lb-indeterminate');
-                lbFill.style.width = '0%';
-                return;
-            }
-            if (now - lbLastPaint < 100 && pct < 99) return; // throttle
-            lbLastPaint = now;
-            lbEl.classList.remove('lb-indeterminate');
-            lbFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
-        }
-        function lbSetLabel(txt) { if (lbLabel) lbLabel.textContent = txt; }
-        // done = app pronta: fade out (opacity presente nel CSS) poi display:none
-        function lbDone() {
-            lbFinished = true;
-            if (!lbEl) return;
-            lbEl.classList.remove('lb-indeterminate');
-            lbEl.style.opacity = '0';
-            setTimeout(() => { if (lbEl) lbEl.style.display = 'none'; }, 460);
-        }
-        // errore finale: stati in rosso, barra NON sparisce
-        function lbError(msg) {
-            lbFinished = true;
-            if (!lbEl) return;
-            lbEl.classList.remove('lb-indeterminate', 'lb-hidden');
-            lbEl.classList.add('lb-error');
-            // barra rossa piena: comunica chiaramente lo stato di errore
-            if (lbFill) lbFill.style.width = '100%';
-            if (lbLabel) lbLabel.textContent = 'Errore: ' + msg;
-        }
+        // ---- Barra di caricamento: componente loading_bar.js ---------------
+        // createLoadingBar inietta il proprio markup/CSS (token identici al
+        // vecchio #loading-bar) dentro #ui-overlay. onRetry di default:
+        // rilancia il boot da CAPO (budget completo) — il bottone 'Riprova'
+        // è visibile solo quando la barra è in stato errore.
+        const bar = createLoadingBar({
+            mount: '#ui-overlay',
+            // Il bottone 'Riprova' rilancia un ciclo COMPLETO (budget pieno):
+            // startBoot() gestisce anche l'esito del secondo giro — la
+            // Promise di bootFlow non resta mai non-gestita (un secondo
+            // fallimento deve rimettere la barra in errore, non generare un
+            // unhandledrejection nel pannello errori).
+            onRetry: () => startBoot(),
+        });
 
-        function initWithRetry(tries) {
+        // Diagnostica del flusso di caricamento (visibile col ?debug/eruda e
+        // nei webtest via window.__bootEvents): sequenza completa degli eventi
+        // del loader — l'ordine è il contratto verificato dai test.
+        const bootEvents = [];
+        function logBoot(name, payload) {
+            bootEvents.push({ name, payload });
+            try { console.log('[boot:' + name + ']', payload); } catch (e) {}
+        }
+        window.__bootEvents = bootEvents;
+
+        // ---- Mappatura eventi loader (wasm_runtime.js) -> barra (loading_bar.js)
+        // Il bus riceve TUTTI gli eventi del ciclo di vita; la barra mostra:
+        //   download-start/progress -> fase download con % e byte
+        //     ('Download… 42% · 21.6 MB / 51.4 MB'; senza totale: indeterminata)
+        //   download-end NON mappato -> la barra resta al 100% finché
+        //     compile-start (contratto t_63406e55)
+        //   compile-start -> fase 'Compilazione…' animata indeterminata
+        //   ready -> done(): fill 100%, fade-out senza layout shift
+        //   error -> stato errore rosso (gestito in bootFlow, non qui)
+        const bus = createLoaderEvents();
+        bus.on('download-start',   (p) => { logBoot('download-start', p); bar.update('download', p); });
+        bus.on('download-progress',(p) => { logBoot('download-progress', p); bar.update('download', p); });
+        bus.on('download-end',     (p) => { logBoot('download-end', p); });
+        bus.on('compile-start',    (p) => { logBoot('compile-start', p); bar.update('compile'); });
+        bus.on('compile-end',      (p) => { logBoot('compile-end', p); });
+        bus.on('ready',            (p) => { logBoot('ready', p); bar.update('ready'); });
+
+        // bootFlow(tries): UN ciclo di caricamento con retry automatico.
+        // - loadWasmLifecycle NON ritenta da solo (contratto wasm_runtime.js):
+        //   il retry resta qui (MAX_INIT_TRIES, pausa 1.5s, label 'Riprovo…'
+        //   indeterminata — la barra NON resta a metà congelata tra i
+        //   tentativi).
+        // - n = tentativi ANCORA disponibili in QUESTO ciclo, incluso quello
+        //   in corso. 'Riprovo…' appare SOLO nei tentativi di recupero
+        //   interni (n < MAX): al primo giro — e al rilancio dal bottone
+        //   'Riprova', il cui click handler ha già messo la label — la
+        //   prima update del download (~100ms) prende il posto.
+        // - La % di download parte SUBITO (sidecar pre-fetchato dentro
+        //   downloadWasm: zero wait visibile prima della prima update).
+        async function bootFlow(tries) {
             const n = tries || MAX_INIT_TRIES;
-            lbShow();
-            if (tries) {
-                const left = tries - 1;
-                lbSetLabel(left === 1 ? 'Riprovo… (1 tentativo rimasto)' : 'Riprovo… (' + left + ' tentativi rimasti)');
+            if (n >= MAX_INIT_TRIES) {
+                bar.show();
+            } else {
+                bar.update('retrying', null,
+                    n === 1 ? 'Riprovo… (ultimo tentativo)' : 'Riprovo… (ancora ' + n + ' tentativi)');
             }
-            lbSetPct(null);
-            // Totale DECOMPRESSO del wasm per la % reale: pre-fetch del file
-            // sidecar gravity_sandbox_bg.wasm.size (pochi byte), scritto da
-            // build_wasm.sh. Serve SOLO quando il server manda il .gz
-            // (Content-Encoding: gzip): il Content-Length è la taglia compressa
-            // ma il reader emette byte decompressi. Se il sidecar manca
-            // (server vecchio), lbTotal resta null -> barra indeterminata.
-            // L'header X-Wasm-Decompressed-Length (serve_wasm.py) vince sul
-            // sidecar quando è presente (0 round-trip extra).
-            return fetch(WASM_SIZE_URL, { cache: 'no-store' })
-                .then(r => (r.ok ? r.text().then(t => { const v = parseInt(t, 10); return isFinite(v) && v > 0 ? v : null; }) : null))
-                .catch(() => null)
-                .then((sideSize) => {
-                    lbTotal = sideSize;
-                    // Fetch manuale con progresso reale: legge il body a chunk,
-                    // accumula i byte, calcola la % dal totale decompresso.
-                    return fetch(WASM_URL, { cache: 'no-store' });
-                })
-                .then(r => {
-                    if (!r.ok) throw new Error('wasm fetch HTTP ' + r.status);
-                    const enc = (r.headers.get('Content-Encoding') || '').toLowerCase();
-                    const gzipWasm = enc.indexOf('gzip') >= 0;
-                    // Totale per la %:
-                    //  - gzip attivo -> il reader emette byte DECOMPRESSI: il
-                    //    totale reale è la taglia decompressa (header o sidecar),
-                    //    NON il Content-Length (che è la taglia compressa).
-                    //  - non gzip    -> il reader emette i byte grezzi, identici
-                    //    a Content-Length: totale affidabile da lì.
-                    let total = null;
-                    if (gzipWasm) {
-                        const hDec = parseInt(r.headers.get('X-Wasm-Decompressed-Length') || '', 10);
-                        total = (isFinite(hDec) && hDec > 0) ? hDec : lbTotal;
-                    } else {
-                        const cl = parseInt(r.headers.get('Content-Length') || '', 10);
-                        total = (isFinite(cl) && cl > 0) ? cl : null;
-                    }
-                    lbPctKnown = total != null && total > 0;
-                    if (!lbPctKnown) {
-                        // nessuna taglia affidabile (sidecar mancante + gzip,
-                        // o chunked): indeterminata (non blocchiamo MAI).
-                        lbSetLabel('Download…');
-                        lbSetPct(null);
-                    } else {
-                        lbSetLabel('Download… 0%');
-                        lbSetPct(0);
-                    }
-                    if (!r.body) {
-                        // body indisponibile: passa la Response al glue (come prima)
-                        return { bytes: null, resp: r };
-                    }
-                    const reader = r.body.getReader();
-                    const chunks = [];
-                    let received = 0;
-                    const totalBytes = lbPctKnown ? total : -1;
-                    function pump() {
-                        return reader.read().then(({ done, value }) => {
-                            if (done) {
-                                // concatena i chunk in un Uint8Array unico
-                                const bytes = new Uint8Array(received);
-                                let off = 0;
-                                for (const c of chunks) { bytes.set(c, off); off += c.byteLength; }
-                                return { bytes, resp: null };
-                            }
-                            chunks.push(value);
-                            received += value.byteLength;
-                            if (totalBytes > 0) {
-                                const pct = Math.min(100, (received / totalBytes) * 100);
-                                lbSetPct(pct);
-                                lbSetLabel('Download… ' + Math.floor(pct) + '%');
-                            }
-                            return pump();
-                        });
-                    }
-                    return pump();
-                })
-                .then(({ bytes, resp }) => {
-                    // Download completo -> fase COMPILAZIONE (indeterminata).
-                    // instantiate è un blocco sincrono: nessuna % reale osservabile
-                    // dal browser -> NON inventiamo percentuali fasulle.
-                    lbSetLabel('Compilazione…');
-                    lbSetPct(null);
-                    // Passa i BYTE accumulati (BufferSource) al glue. Sulla prima
-                    // fetch ok con body, bytes è il download completo; se body è
-                    // mancante passiamo la Response (stesso pattern di prima).
-                    return init({ module_or_path: bytes || resp });
-                })
-                .catch((err) => {
-                    if (n <= 1) throw err;
-                    console.warn('[INIT retry]', n - 1, 'tentativi rimasti:', err.message);
-                    return new Promise((r) => setTimeout(r, 1500)).then(() => initWithRetry(n - 1));
+            try {
+                const wasm = await loadWasmLifecycle(WASM_URL, {
+                    init,           // glue wasm-bindgen: istanzia il Module
+                    events: bus,    // -> bar.update(...) sopra
+                    sizeUrl: WASM_SIZE_URL,
                 });
+                return wasm;
+            } catch (err) {
+                if (n <= 1) throw err;
+                console.warn('[INIT retry]', n - 1, 'tentativi rimasti:', err.message);
+                await new Promise((r) => setTimeout(r, 1500));
+                return bootFlow(n - 1);
+            }
         }
 
-        initWithRetry().then(() => {
-            // App pronta (subito prima di esporre il sandbox): fade out barra.
-            lbDone();
+        // startBoot(): UN ciclo completo (budget MAX_INIT_TRIES) con esito
+        // GESTITO. Ogni avvio — il primo e OGNI click sul bottone 'Riprova' —
+        // passa da qui: nessuna Promise non-gestita, e un fallimento del
+        // secondo giro rimette la barra in errore (non un unhandledrejection
+        // muto nel pannello).
+        function startBoot() {
+            bootFlow(MAX_INIT_TRIES).then(() => {
+            // App pronta: l'evento 'ready' del bus ha GIA' chiamato
+            // bar.update('ready') = done() (fade-out senza layout shift)
+            // dentro loadWasmLifecycle — qui restiamo solo l'avvio post-boot.
             // Espone le funzioni del modulo WASM (es. debug_state) per diagnostica
             window.__sandbox = sandbox;
             if (isIOS) sandbox.set_mobile_device(true);
@@ -569,15 +448,22 @@
                     // preset mancante -> livello hardcoded attuale (nessun crash)
                     console.warn('preset.json non caricato: uso livello hardcoded (' + err.message + ')');
                 });
-        }).catch(err => {
-            // Errore finale di init: barra in stato errore (NON sparisce né resta
-            // sospesa a metà) + showError / badge esistenti.
-            lbError(err.message || String(err));
+            }).catch(err => {
+            // Errore finale di init (dopo tutti i retry): la barra passa in
+            // stato errore ROSSO con bottone 'Riprova' (bar.error usa il
+            // baseRetryFn = l'onRetry delle opzioni -> startBoot, budget
+            // pieno) — NON sparisce né resta sospesa a metà. Più il pannello
+            // errori/badge esistenti per la diagnosi remota.
+            bar.error(err.message || String(err));
             const v = document.getElementById('version-badge');
-            if (v) v.textContent = 'v0.14.80 🛑' + err.message.substring(0, 120);
+            if (v) v.textContent = 'v0.14.80 🛑' + (err.message || '').substring(0, 120);
             showError('ERRORE INIT', err.message || String(err), err.stack ? err.stack.substring(0, 3000) : '');
             console.error('[INIT FAIL full]', err.message, err.stack ? err.stack.substring(0, 2000) : '');
         });
+        }
+
+        // AVVIO: primo ciclo di boot (budget completo).
+        startBoot();
 
         // Diagnostica: mostra tool/drag/selezione in tempo reale (leggibile a colpo d'occhio).
         // Se il WASM crasha (trap non-panic), debug_state() lancia -> mostriamo
@@ -632,7 +518,7 @@
                 const focusOn = s.focus !== 4294967295;
                 if (focusOn) {
                     const focusChanged = s.focus !== lastFocusEnt;
-                    if (focusChanged || !hiddenInput || document.activeElement !== hiddenInput) {
+                    if (focusChanged || !hiddenInputRef.current || document.activeElement !== hiddenInputRef.current) {
                         const hi = hiddenInputEnsure();
                         let cur = '';
                         if (typeof s.focused_text === 'string') {
@@ -646,8 +532,8 @@
                     lastFocusEnt = s.focus;
                 } else {
                     lastFocusEnt = -1;
-                    if (hiddenInput && document.activeElement === hiddenInput) {
-                        hiddenInput.blur();
+                    if (hiddenInputRef.current && document.activeElement === hiddenInputRef.current) {
+                        hiddenInputRef.current.blur();
                     }
                 }
             }

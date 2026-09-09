@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<!-- webtests/integration_test_page.html — pagina host per il driver di
+     integrazione (t_8553586d). NON tocca index.html: carica gli stessi moduli
+     (glue reale + wasm_runtime.js + loading_bar.js) con URL iniettabili via
+     query (?glue=…&wasm=…&size=…&failFirst=N&slow=1) e registra TUTTE le
+     timeline:
+       window.__bootEvents — eventi del ciclo di vita (download-start/progress/
+                             end, compile-start/end, ready) + 'retry' interni
+                             + 'synthetic-net-death' (inietti failFirst)
+       window.__barLog     — OGNI chiamata del componente (update/error/done)
+                             con lo stato risultante {op, phase, label,
+                             fraction, hidden} — deterministico, zero sampling
+       window.__classLog   — timeline delle CLASSI visive del .lb-root e delle
+                             width del fill (MutationObserver: prova REALE del
+                             DOM che la fase compile è stata vista
+                             lb-indeterminate e che il fill è cresciuto)
+     Il driver valuta: badge 'boot OK' / 'boot ERR …' + barra .lb-root in #host. -->
+<html>
+<head><meta charset="utf-8"><title>integration test</title>
+<style>
+    body { margin: 0; }
+    #bevy-canvas { display: block; width: 100%; height: 600px; position: relative; background: #000; }
+    #host { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
+    #version-badge { position: fixed; top: 0; right: 0; font: 12px monospace; color: #fff; z-index: 200; }
+</style>
+</head>
+<body>
+<canvas id="bevy-canvas" tabindex="0"></canvas>
+<div id="version-badge">test</div>
+<div id="host"></div>
+<script type="module">
+    const q = new URLSearchParams(location.search);
+    const glueUrl = q.get('glue') || '/gravity_sandbox_p80.js';
+    const wasmUrl = q.get('wasm') || new URL('gravity_sandbox_p80_bg.wasm?v=0.14.80', location.href).href;
+    const sizeUrl = q.get('size') || new URL('gravity_sandbox_p80_bg.wasm.size?v=0.14.80', location.href).href;
+    const MAX_TRIES = 3;
+    // il glue esporta init come DEFAULT (wasm-bindgen): lo stesso legame che
+    // index.html fa con `import init, * as sandbox from '...'`.
+    const glue = await import(glueUrl);
+    const init = glue.default;
+
+    // ESATTAMENTE il wiring di index.html (contratto d'integrazione):
+    const { loadWasmLifecycle, createLoaderEvents } = await import('/wasm_runtime.js');
+    const { createLoadingBar } = await import('/loading_bar.js');
+
+    const bar = createLoadingBar({ mount: '#host', onRetry: () => startBoot() });
+
+    // ---- registrazioni deterministiche per il driver ----------------------
+    const bootEvents = [];
+    window.__bootEvents = bootEvents;
+    const barLog = [];
+    window.__barLog = barLog;
+    const classLog = [];
+    window.__classLog = classLog;
+
+    // ogni chiamata del componente -> snapshot dello stato risultante
+    // (dopo l'esecuzione: phase/label/fraction sono quelli VISTI dalla UI)
+    for (const op of ['update', 'error', 'done']) {
+        const orig = bar[op].bind(bar);
+        bar[op] = (...args) => {
+            let threw = null;
+            try { orig(...args); } catch (e) { threw = e; }
+            const s = bar.state;
+            barLog.push({
+                op,
+                phase: s.phase, label: s.label, fraction: s.fraction,
+                hidden: s.hidden, done: s.done, error: s.error,
+            });
+            if (threw) throw threw;
+        };
+    }
+    // timeline classi visive del .lb-root: il driver prova che compile è
+    // stato VISTO indeterminato sul DOM reale, non solo richiesto via API.
+    // Secondo observer sul fill (style.width): la prova che la larghezza è
+    // cresciuta DAVVERO nel DOM (fase download determinata).
+    {
+        const root = bar.refs.root;
+        const label = bar.refs.label;
+        new MutationObserver(() => {
+            classLog.push({ src: 'root', cls: root.className, label: label.textContent });
+        }).observe(root, { attributes: true, attributeFilter: ['class'] });
+        const fill = bar.refs.fill;
+        new MutationObserver(() => {
+            classLog.push({ src: 'fill', fill: fill.style.width });
+        }).observe(fill, { attributes: true, attributeFilter: ['style'] });
+    }
+
+    const bus = createLoaderEvents();
+    bus.on('download-start',   (p) => { bootEvents.push({ name: 'download-start', payload: p }); bar.update('download', p); });
+    bus.on('download-progress',(p) => { bootEvents.push({ name: 'download-progress', payload: p }); bar.update('download', p); });
+    bus.on('download-end',     (p) => { bootEvents.push({ name: 'download-end', payload: p }); });
+    bus.on('compile-start',    (p) => { bootEvents.push({ name: 'compile-start', payload: p }); bar.update('compile'); });
+    bus.on('compile-end',      (p) => { bootEvents.push({ name: 'compile-end', payload: p }); });
+    bus.on('ready',            (p) => { bootEvents.push({ name: 'ready', payload: p }); bar.update('ready'); });
+
+    // ?failFirst=N: i primi N fetch del .wasm muoiono a METÀ STREAM (errore
+    // di rete dopo ~12MB decompressi) — il caso Tailscale/DERP del task.
+    // Iniettato via fetchImpl (lo stesso punto in cui agisce la rete reale:
+    // il body reader) -> deterministico, senza CDP offline flaky.
+    // NB: il matcher esclude '.size': il sidecar condivide il suffisso
+    // '_bg.wasm' e NON deve consumare il budget delle morti sintetiche.
+    // ?slow=1: rete ~3MB/s SIMULATA in pagina (Firefox non ha CDP): il body
+    // viene riemesso a chunk ritardati — la % cresce nel tempo come col
+    // throttle CDP del driver Chromium, cross-browser e deterministico.
+    const q0 = new URLSearchParams(location.search);
+    const failFirst = parseInt(q0.get('failFirst') || '0', 10) || 0;
+    const slowMode = q0.get('slow') === '1';
+    let dyingFetch = null;
+    if (failFirst > 0 || slowMode) {
+        let died = 0;
+        dyingFetch = (url, opts) => {
+            const isWasm = typeof url === 'string' && url.includes('_bg.wasm') && !url.includes('.size');
+            if (isWasm && slowMode && !(failFirst > 0 && died < failFirst)) {
+                // slow: stream completo ma a ~3MB/s (chunk 300KB ogni 25ms)
+                return fetch(url, Object.assign({}, opts, { cache: 'no-store' })).then((r) => {
+                    if (!r.ok || !r.body) return r;
+                    const reader0 = r.body.getReader();
+                    const stream = new ReadableStream({
+                        async start(controller) {
+                            try {
+                                for (;;) {
+                                    const { done, value } = await reader0.read();
+                                    if (done) break;
+                                    for (let off = 0; off < value.byteLength; off += 300000) {
+                                        controller.enqueue(value.slice(off, off + 300000));
+                                        await new Promise((res) => setTimeout(res, 25));
+                                    }
+                                }
+                                controller.close();
+                            } catch (e) { controller.error(e); }
+                        },
+                    });
+                    return new Response(stream, { status: r.status, headers: r.headers });
+                });
+            }
+            if (isWasm && died < failFirst) {
+                died++;
+                bootEvents.push({ name: 'synthetic-net-death', payload: { attempt: died } });
+                return fetch(url, Object.assign({}, opts, { cache: 'no-store' })).then((r) => {
+                    if (!r.ok || !r.body) return r;
+                    const reader0 = r.body.getReader();
+                    const stream = new ReadableStream({
+                        async start(controller) {
+                            let got = 0;
+                            try {
+                                while (got < 12000000) { // ~23% del wasm poi muore
+                                    const { done, value } = await reader0.read();
+                                    if (done) break;
+                                    got += value.byteLength;
+                                    controller.enqueue(value);
+                                }
+                            } finally { try { reader0.cancel(); } catch (e) {} }
+                            controller.error(new TypeError('Failed to fetch: rete morta a metà stream'));
+                        },
+                    });
+                    return new Response(stream, { status: r.status, headers: { 'X-Wasm-Decompressed-Length': '51358364' } });
+                });
+            }
+            return fetch(url, opts);
+        };
+    }
+
+    // bootFlow/startBoot: STESSO contratto di index.html (retry interno col
+    // label 'Riprovo…', esito del ciclo GESTITO: la Promise non resta mai
+    // non-gestita e un fallimento finale mette la barra in errore).
+    async function bootFlow(tries) {
+        const n = tries || MAX_TRIES;
+        if (n >= MAX_TRIES) {
+            bar.show();
+        } else {
+            bar.update('retrying', null,
+                n === 1 ? 'Riprovo… (ultimo tentativo)' : 'Riprovo… (ancora ' + n + ' tentativi)');
+        }
+        try {
+            return await loadWasmLifecycle(wasmUrl, { init, events: bus, sizeUrl, fetchImpl: dyingFetch || undefined });
+        } catch (err) {
+            if (n <= 1) throw err;
+            bootEvents.push({ name: 'retry', payload: { left: n - 1, message: String(err.message || err) } });
+            await new Promise((r) => setTimeout(r, 1500));
+            return bootFlow(n - 1);
+        }
+    }
+
+    function startBoot() {
+        return bootFlow(MAX_TRIES).then(
+            (wasm) => {
+                // come index.html: espone il modulo per la diagnostica post-boot
+                window.__sandbox = wasm;
+                document.getElementById('version-badge').textContent = 'boot OK';
+            },
+            (err) => {
+                // come index.html: barra in stato errore ROSSO con bottone
+                // 'Riprova' (handler = startBoot: budget pieno) — NON sparisce.
+                bar.error(err.message || String(err));
+                document.getElementById('version-badge').textContent = 'boot ERR ' + (err.message || err);
+            },
+        );
+    }
+
+    window.__bar = bar;
+    window.__bootReady = startBoot();
+</script>
+</body>
+</html>
