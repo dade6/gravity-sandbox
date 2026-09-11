@@ -39,7 +39,34 @@ impl Plugin for GravitySandboxPlugin {
 }
 
 fn setup(mut commands: Commands) {
-    commands.spawn((Camera2d, RenderLayers::from_layers(&[0, 1]), MainCamera));
+    commands.spawn((
+        Camera2d,
+        RenderLayers::from_layers(&[0, 1]),
+        MainCamera,
+        main_camera_projection(),
+    ));
+}
+
+/// Proiezione della main camera con frustum ESTESO (v0.14.82).
+///
+/// Bug "pianeta nero a distanza 1000": `sync_sprite_z` scrive sulle sprite
+/// dei pianeti `z = -distanza_dalla_stella` (semantica z-sorting firefly
+/// v0.14.67), ma `OrthographicProjection::default_2d()` ha frustum
+/// near=-1000/far=+1000 → il piano far sta a view z=-1000: un pianeta a
+/// distanza ESATTAMENTE 1000 dalla stella mette la sprite SUL piano far e
+/// viene clip-cullata (il pianeta sparisce del tutto; resta solo il cono
+/// d'ombra nella lightmap, che non è z-clippata). Il numero tondo "1000"
+/// del sintomo è il piano far, NON il gate della luce (radius+fade).
+/// Fix: frustum ±1e6 (1000× oltre le distanze di gioco; precisione f32 a
+/// 1e6 = 0.06 unità, gli z-sorting compare di firefly restano accurati).
+/// `CameraProjectionPlugin` ricalcola il Frustum su `Changed<Projection>`
+/// → basta settarlo qui a Startup.
+pub(crate) fn main_camera_projection() -> Projection {
+    Projection::Orthographic(OrthographicProjection {
+        near: -1.0e6,
+        far: 1.0e6,
+        ..OrthographicProjection::default_2d()
+    })
 }
 
 /// Gizmos (traiettorie, highlight selezione) su layer 1: visibili solo dalla
@@ -489,6 +516,72 @@ mod tests {
         let mut app = sandbox_app_with_window();
         app.update();
         app.update();
+    }
+
+    /// Regressione v0.14.82 — bug "pianeta che diventa nero a distanza 1000
+    /// dalla stella". `sync_sprite_z` scrive sulle sprite dei pianeti
+    /// `z = -distanza_dalla_stella` (z-sorting firefly): con la proiezione
+    /// 2D di default (near=-1000, far=1000) il piano far sta a view z=-1000,
+    /// quindi un pianeta a distanza ESATTAMENTE 1000 mette la sprite sul
+    /// piano far e il culling `Frustum::intersects_obb` (che culla quando
+    /// `dot + radius <= 0`, cioè ANCHE sul piano) la elimina → il pianeta
+    /// sparisce del tutto (a schermo resta solo il cono d'ombra, che vive
+    /// nella lightmap fullscreen e non è z-clippata).
+    ///
+    /// Il test riproduce il culling con la proiezione di DEFAULT (deve
+    /// culled) e con la proiezione del fix `main_camera_projection()` (non
+    /// deve essere cullata), a distanza 999 (controllo) e 1000 (bug).
+    #[test]
+    fn far_plane_does_not_clip_planet_sprite_at_distance_1000() {
+        use bevy::camera::primitives::Aabb;
+        use bevy::camera::CameraProjection;
+        use bevy::math::bounding::IntersectsVolume;
+
+        // Sprite quad del pianeta (custom_size = 2*radius, appiattita su z):
+        // AABB con center a view z = -distanza e half_extents.z ~ 0.
+        // world = view (camera a origine, senza trasformazioni).
+        let camera_transform = GlobalTransform::IDENTITY;
+        let sprite_aabb_at = |dist: f32| Aabb {
+            center: Vec3A::new(0.0, 0.0, -dist),
+            half_extents: Vec3A::new(20.0, 20.0, 0.0),
+        };
+
+        let default_2d = OrthographicProjection::default_2d();
+        let fixed = match main_camera_projection() {
+            Projection::Orthographic(o) => o,
+            _ => panic!("main_camera_projection deve essere ortografica"),
+        };
+
+        let default_frustum = default_2d.compute_frustum(&camera_transform);
+        let fixed_frustum = fixed.compute_frustum(&camera_transform);
+
+        // Bug storico: a distanza 1000 la sprite finisce SUL piano far della
+        // proiezione default → culled (il pianeta "diventa nero").
+        assert!(
+            !default_frustum.intersects_obb_identity(&sprite_aabb_at(1000.0)),
+            "default_2d: sprite a z=-1000 sul piano far DEVE essere cullata (reproduce il bug)"
+        );
+        // A 999 è ancora dentro (visibile) — il sintomo "0,999 ok / 0,1000 nero".
+        assert!(
+            default_frustum.intersects_obb_identity(&sprite_aabb_at(999.0)),
+            "default_2d: sprite a z=-999 deve restare visibile"
+        );
+        // Fix: con la proiezione estesa la sprite NON è mai cullata, né a
+        // 1000 né a distanze enormi (1e5, oltre il vecchio far).
+        for dist in [1000.0f32, 1001.0, 5000.0, 100_000.0] {
+            assert!(
+                fixed_frustum.intersects_obb_identity(&sprite_aabb_at(dist)),
+                "fix: sprite a z=-{dist} NON deve essere cullata (bug pianeta nero a 1000)"
+            );
+        }
+        // E la stella (SpriteHeight 1000, z di spawn ~0) resta visibile.
+        assert!(
+            fixed_frustum.intersects_obb_identity(&Aabb {
+                center: Vec3A::ZERO,
+                half_extents: Vec3A::new(30.0, 30.0, 0.0),
+            }),
+            "fix: stella a z=0 resta visibile"
+        );
     }
 
     /// Compila light_material.wgsl in GLSL esattamente come fa wgpu su
