@@ -124,7 +124,7 @@ fn selection_system(
 /// Prende un iteratore (di `Query::iter()` o `QueryState::iter(world)`) così da
 /// essere testabile senza un sistema: `Query` e `QueryState` producono lo stesso
 /// tipo di item.
-fn ui_point_hits_any_node<'a>(
+pub(crate) fn ui_point_hits_any_node<'a>(
     point: Vec2,
     mut ui_nodes: impl Iterator<Item = (&'a ComputedNode, &'a UiGlobalTransform)>,
 ) -> bool {

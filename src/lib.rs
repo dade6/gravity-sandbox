@@ -414,6 +414,7 @@ pub fn wasm_main() {
         SandboxUIPlugin,
         ResetPlugin,
         systems::keypad::KeypadPlugin,
+        systems::settings::SettingsPlugin,
         FireflyBridgePlugin,
     ))
     .insert_resource(Gravity::ZERO)
@@ -475,7 +476,7 @@ mod tests {
             // SPIKE v2: sistemi luce/ombra custom disattivati (firefly fa tutto)
             PhysicsPlugins::default(),
         ))
-        .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin))
+        .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin, systems::settings::SettingsPlugin))
         .insert_resource(Gravity::ZERO)
         .add_systems(FixedUpdate, gravity::gravity_system);
         // N.B.: debug_state_snapshot/apply_mobile_text_input/clear_focus_*
@@ -491,6 +492,7 @@ mod tests {
         app.add_message::<bevy::window::WindowResized>();
         app.add_message::<bevy::window::WindowCreated>();
         app.add_message::<bevy::window::WindowCloseRequested>();
+        app.add_message::<bevy::window::WindowClosing>();
         app.add_message::<bevy::window::WindowScaleFactorChanged>();
         app.add_message::<bevy::window::WindowFocused>();
         app.add_message::<bevy::window::CursorMoved>();
@@ -514,6 +516,18 @@ mod tests {
     #[test]
     fn first_update_no_b0001() {
         let mut app = sandbox_app_with_window();
+        // Il runner reale (WinitPlugin) attende che TUTTI i plugin siano
+        // ready prima del primo update: RenderPlugin::ready() completa
+        // l'inizializzazione wgpu ASINCRONA (su adapter SW / driver rotti
+        // richiede qualche poll in più). Senza questa attesa, il primo
+        // update può estrarre il render world prima che
+        // PipelinedRenderingPlugin::cleanup inserisca RenderAppChannels →
+        // panic "resource does not exist" NON legato a B0001.
+        while app.plugins_state() == bevy::app::PluginsState::Adding {
+            std::thread::yield_now();
+        }
+        app.finish();
+        app.cleanup();
         app.update();
         app.update();
     }

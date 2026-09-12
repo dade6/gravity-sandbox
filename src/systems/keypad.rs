@@ -50,7 +50,11 @@ impl Plugin for KeypadPlugin {
 
 /// Campi numerici editabili dal keypad (Name è testo -> escluso; anche i
 /// campi stella Luce/Glow tranne il falloff, che è una stringa enum).
+/// Ticket 21: inclusi TUTTI i campi numerici del modale settings (set_*).
 fn is_numeric_field(prop: &str) -> bool {
+    if prop.starts_with("set_") {
+        return true;
+    }
     matches!(
         prop,
         "mass"
@@ -128,7 +132,9 @@ fn spawn_keypad(commands: &mut Commands) {
             // viene spawnato (Safari iOS riorganizza lo stack e il pannello
             // finisce SOPRA il keypad, nascondendolo). Forziamo il keypad in
             // cima con un valore più alto di qualsiasi altra UI overlay.
-            GlobalZIndex(200),
+            // Ticket 21: 400 > modale settings/delete dialog (300): il keypad
+            // serve SOPRA il modale quando si edita un campo `set_` da iPhone.
+            GlobalZIndex(400),
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(48.0),

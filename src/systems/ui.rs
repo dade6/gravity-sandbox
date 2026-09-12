@@ -231,6 +231,10 @@ fn spawn_toolbar(commands: &mut Commands) {
                 TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
                 TextColor(TEXT_COLOR),
             ));
+            // Bottone Settings (Ticket 21): apre il modale delle impostazioni
+            // globali (gravità/ambient/glow/traiettorie). DOPO Reset/Salva,
+            // stesso stile esatto degli altri bottoni.
+            crate::systems::settings::spawn_settings_button(bar);
             bar.spawn((Node { flex_grow: 1.0, ..default() }));
             bar.spawn((
                 Text::new(format!("Sandbox v{}", crate::version::VERSION)),
@@ -668,6 +672,11 @@ fn update_property_panel(
     if !mobile_active {
         // Update EditableText fields — salta solo il campo con il focus
         for (entity, prop, mut editable_text, mut text_color) in editable_inputs.iter_mut() {
+            // Campi del modale settings (Ticket 21): gestiti da settings.rs,
+            // sempre editabili (le impostazioni globali non seguono la pausa)
+            if prop.0.starts_with("set_") {
+                continue;
+            }
             // Gray-out fields when not paused (readonly visivo)
             text_color.0 = if sim_state.paused {
                 TEXT_COLOR
@@ -1185,7 +1194,7 @@ fn handle_ui_buttons(
         Option<&ToolBtn>,
         Option<&TimelinBtn>,
         &mut BackgroundColor,
-    ), (Without<DeleteDialogBtn>, Without<DeleteDialog>)>,
+    ), (Without<DeleteDialogBtn>, Without<DeleteDialog>, Without<crate::systems::settings::SettingsBtn>, Without<crate::systems::settings::SettingsCloseBtn>, Without<crate::systems::settings::SettingsToggleBtn>)>,
     // Query separata con edge detection per i toggle (play/step/reset):
     // `Changed<Interaction>` scatta UNA volta per transizione di stato
     // (es. None/Hovered -> Pressed), NON a ogni frame mentre il bottone

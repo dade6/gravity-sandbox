@@ -1,11 +1,12 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy::ui::{ComputedNode, UiGlobalTransform};
 
 use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::initial_state::InitialBodyState;
 use crate::components::trajectory::TrajectoryHistory;
 use crate::systems::camera::MainCamera;
-use crate::systems::selection::SelectedBody;
+use crate::systems::selection::{ui_point_hits_any_node, SelectedBody};
 use crate::systems::timeline::SimulationState;
 
 /// Marker component for toolbar buttons.
@@ -148,15 +149,55 @@ fn cursor_to_world(
     camera.viewport_to_world_2d(camera_transform, cursor).ok()
 }
 
+/// Guardia UI anti click-through (Ticket 21): true se il click/tap corrente
+/// cade su un nodo UI (toolbar, timeline, panel, modale settings/delete).
+/// Stesso pattern di selection_system: così un tap sull'overlay di un modale
+/// NON spawna corpi (Add), NON inizia drag (Move) e NON apre il delete
+/// dialog (Delete) — il tap "non attraversa" la UI.
+fn click_hits_ui(
+    windows: &Query<&Window>,
+    touches: &Res<Touches>,
+    mouse_buttons: &Res<ButtonInput<MouseButton>>,
+    camera_query: &Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
+    ui_nodes: &Query<(&ComputedNode, &UiGlobalTransform)>,
+) -> bool {
+    let Ok(w) = windows.single() else {
+        return false;
+    };
+    // Punto in pixel FISICI viewport-relativi (convenzione ui_focus_system),
+    // solo se c'è un press in corso.
+    let pressed: Option<Vec2> = if mouse_buttons.just_pressed(MouseButton::Left) {
+        w.physical_cursor_position()
+    } else {
+        touches
+            .iter_just_pressed()
+            .next()
+            .map(|t| t.position() * w.scale_factor())
+    };
+    let Some(point) = pressed else {
+        return false; // nessun press: nessun click da bloccare
+    };
+    let Ok((camera, _)) = camera_query.single() else {
+        return false;
+    };
+    let viewport_min = camera
+        .physical_viewport_rect()
+        .map(|r| r.min.as_vec2())
+        .unwrap_or_default();
+    ui_point_hits_any_node(point - viewport_min, ui_nodes.iter())
+}
+
 // ============================================================
 // Add tool: click canvas → spawn nuovo corpo
 // ============================================================
 
 fn add_tool_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
+    ui_nodes: Query<(&ComputedNode, &UiGlobalTransform)>,
     current_tool: Res<CurrentTool>,
     sim_state: Res<SimulationState>,
     mut commands: Commands,
@@ -170,6 +211,10 @@ fn add_tool_system(
         return;
     }
     if !mouse_buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    // Guardia UI: click su toolbar/timeline/panel/modale → NON attraversa
+    if click_hits_ui(&windows, &touches, &mouse_buttons, &camera_query, &ui_nodes) {
         return;
     }
     let world_pos = match cursor_to_world(&windows, &camera_query) {
@@ -223,9 +268,11 @@ fn add_tool_system(
 
 fn move_tool_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
+    ui_nodes: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut transforms: Query<&mut Transform>,
     mut velocities: Query<&mut LinearVelocity>,
     current_tool: Res<CurrentTool>,
@@ -261,6 +308,11 @@ fn move_tool_system(
     };
 
     if mouse_buttons.just_pressed(MouseButton::Left) {
+        // Guardia UI (Ticket 21): un tap che inizia su un nodo UI (toolbar,
+        // panel, modale settings/delete) NON inizia un drag — non attraversa.
+        if click_hits_ui(&windows, &touches, &mouse_buttons, &camera_query, &ui_nodes) {
+            return;
+        }
         // Se un drag precedente è rimasto attivo (es. release persa su WASM),
         // chiudilo prima di iniziarne uno nuovo.
         if drag_state.active {
@@ -395,9 +447,11 @@ fn restore_alpha(
 
 fn delete_tool_system(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
+    touches: Res<Touches>,
     windows: Query<&Window>,
     camera_query: Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<(Entity, &GlobalTransform, &CelestialBody)>,
+    ui_nodes: Query<(&ComputedNode, &UiGlobalTransform)>,
     current_tool: Res<CurrentTool>,
     sim_state: Res<SimulationState>,
     mut selected: ResMut<SelectedBody>,
@@ -413,6 +467,11 @@ fn delete_tool_system(
     }
     // If something is already pending delete, ignore new clicks
     if pending.0.is_some() {
+        return;
+    }
+    // Guardia UI: click su toolbar/timeline/panel/modale settings → NON
+    // attraversa (un tap sull'overlay settings NON apre il delete dialog).
+    if click_hits_ui(&windows, &touches, &mouse_buttons, &camera_query, &ui_nodes) {
         return;
     }
     let world_pos = match cursor_to_world(&windows, &camera_query) {

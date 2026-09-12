@@ -13,6 +13,7 @@ use gravity_sandbox::systems::persistence::PersistencePlugin;
 use gravity_sandbox::systems::property_editor::PropertyEditorPlugin;
 use gravity_sandbox::systems::reset::ResetPlugin;
 use gravity_sandbox::systems::selection::SelectionPlugin;
+use gravity_sandbox::systems::settings::SettingsPlugin;
 use gravity_sandbox::systems::timeline::TimelinePlugin;
 use gravity_sandbox::systems::tools::ToolPlugin;
 use gravity_sandbox::systems::trajectory::TrajectoryPlugin;
@@ -48,6 +49,7 @@ fn main() {
             SandboxUIPlugin,
             SelectionPlugin, ToolPlugin,
             ParallaxPlugin, LightPlugin, LightingPlugin, MinimapPlugin, TrajectoryPlugin, TexturePlugin,
+            SettingsPlugin,
         ))
         .add_plugins((ResetPlugin,))
         .add_systems(FixedUpdate, gravity::gravity_system)

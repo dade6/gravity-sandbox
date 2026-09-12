@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::lighting::{AmbientLight, GlowCurve, StarGlow, StarLightSettings};
+use crate::components::trajectory::TrajectoryConfig;
 use crate::systems::timeline::SimulationState;
 
 // ============================================================
@@ -41,6 +42,10 @@ pub struct LevelData {
     /// Global glow-curve params (radial falloff + soft edge).
     #[serde(default)]
     pub glow_curve: GlowCurve,
+    /// Global trajectory params (trails + prediction). Ticket 21: old
+    /// presets without the section load the defaults {true, 500, 200, 2}.
+    #[serde(default)]
+    pub trajectory: TrajectoryConfig,
 }
 
 /// Resource holding the gravitational constant loaded from/saved to level files.
@@ -65,6 +70,7 @@ impl Plugin for PersistencePlugin {
         app.init_resource::<GravitationalConstant>()
             .init_resource::<AmbientLight>()
             .init_resource::<GlowCurve>()
+            .init_resource::<TrajectoryConfig>()
             .add_systems(Update, (
                 process_load_commands,
                 save_level_system,
@@ -92,6 +98,7 @@ fn save_level_system(
     grav_constant: Res<GravitationalConstant>,
     ambient: Res<AmbientLight>,
     glow_curve: Res<GlowCurve>,
+    trajectory: Res<TrajectoryConfig>,
 ) {
     crate::mark_system("save_level_system");
 
@@ -148,6 +155,7 @@ fn save_level_system(
             bodies: bodies_data,
             ambient: ambient.clone(),
             glow_curve: glow_curve.clone(),
+            trajectory: trajectory.clone(),
         };
 
         let json = serde_json::to_string(&level).unwrap_or_else(|e| {
@@ -182,6 +190,7 @@ fn process_load_commands(
     mut grav_constant: ResMut<GravitationalConstant>,
     mut ambient: ResMut<AmbientLight>,
     mut glow_curve: ResMut<GlowCurve>,
+    mut trajectory: ResMut<TrajectoryConfig>,
 ) {
     crate::mark_system("process_load_commands");
 
@@ -226,6 +235,13 @@ fn process_load_commands(
         // Update global ambient + glow curve resources from the preset
         *ambient = level.ambient.clone();
         *glow_curve = level.glow_curve.clone();
+
+        // Ticket 21: trajectory config from the preset (old presets without
+        // the "trajectory" section keep the defaults — serde(default)).
+        trajectory.enabled = level.trajectory.enabled;
+        trajectory.history_length = level.trajectory.history_length;
+        trajectory.prediction_steps = level.trajectory.prediction_steps;
+        trajectory.sample_interval = level.trajectory.sample_interval;
 
         // Spawn new bodies from the level data
         for body_data in &level.bodies {
@@ -367,6 +383,12 @@ mod tests {
                 falloff_exp: 2.0,
                 soft_edge: 0.04,
             },
+            trajectory: TrajectoryConfig {
+                enabled: false,
+                history_length: 250,
+                prediction_steps: 120,
+                sample_interval: 3,
+            },
         };
         let json = serde_json::to_string(&level).unwrap();
         let back: LevelData = serde_json::from_str(&json).unwrap();
@@ -376,6 +398,11 @@ mod tests {
         assert!(back.bodies[1].light.is_none());
         assert_eq!(back.ambient.intensity, 0.03);
         assert_eq!(back.glow_curve.soft_edge, 0.04);
+        // Ticket 21: la sezione trajectory sopravvive al roundtrip
+        assert!(!back.trajectory.enabled);
+        assert_eq!(back.trajectory.history_length, 250);
+        assert_eq!(back.trajectory.prediction_steps, 120);
+        assert_eq!(back.trajectory.sample_interval, 3);
     }
 
     #[test]
@@ -390,5 +417,23 @@ mod tests {
         // componente riceve comunque i default via unwrap_or_default).
         assert!(l.bodies[0].light.is_none());
         assert!(l.bodies[1].glow.is_none());
+        // Ticket 21: preset senza sezione "trajectory" -> default {true, 500, 200, 2}
+        assert_eq!(l.trajectory.enabled, true);
+        assert_eq!(l.trajectory.history_length, 500);
+        assert_eq!(l.trajectory.prediction_steps, 200);
+        assert_eq!(l.trajectory.sample_interval, 2);
+    }
+
+    /// Ticket 21: preset con sezione "trajectory" parziale — i campi mancanti
+    /// cadono sui default del singolo campo (#[serde(default)] per campo).
+    #[test]
+    fn preset_partial_trajectory_section_loads_field_defaults() {
+        let partial = r#"{"name":"My Level","gravity_constant":5000.0,"bodies":[],"trajectory":{"enabled":false,"history_length":80}}"#;
+        let l: LevelData = serde_json::from_str(partial).unwrap();
+        assert!(!l.trajectory.enabled);
+        assert_eq!(l.trajectory.history_length, 80);
+        // Campi assenti -> default
+        assert_eq!(l.trajectory.prediction_steps, 200);
+        assert_eq!(l.trajectory.sample_interval, 2);
     }
 }

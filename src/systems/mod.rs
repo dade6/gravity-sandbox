@@ -10,6 +10,7 @@ pub mod persistence;
 pub mod property_editor;
 pub mod reset;
 pub mod selection;
+pub mod settings;
 pub mod shadow;
 pub mod timeline;
 pub mod tools;

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// Component that stores historical positions of a celestial body
 /// for rendering trails.
@@ -18,7 +19,12 @@ impl Default for TrajectoryHistory {
 }
 
 /// Global configuration for trajectory rendering.
-#[derive(Resource)]
+///
+/// Serialised at the level level (`LevelData.trajectory`) since Ticket 21;
+/// each field carries `#[serde(default)]` so presets saved BEFORE the field
+/// existed load with the historic defaults without errors.
+#[derive(Debug, Clone, Resource, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TrajectoryConfig {
     pub enabled: bool,
     pub history_length: usize,
