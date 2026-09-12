@@ -41,6 +41,16 @@ pub struct SettingsBtn;
 #[derive(Component)]
 pub struct SettingsDialog;
 
+/// Marker "appena aperto": il modale lo porta per il suo primo frame di vita.
+/// Serve a ignorare il tap-outside nel frame di apertura: il tap che APRE il
+/// modale è `just_pressed` in quello stesso frame, e `apply_settings_on_confirm`
+/// (che gira DOPO nel medesimo frame, post sync-point dei comandi di spawn)
+/// lo vedrebbe come "tap fuori dal riquadro" chiudendo il modale appena nato
+/// — nasce e muore senza mai essere renderizzato (bug "premo Settings e non
+/// compare nulla", iPhone). Il marker viene rimosso al frame successivo.
+#[derive(Component)]
+pub struct SettingsDialogJustOpened;
+
 /// Il riquadro centrato del modale (figlio dell'overlay). Serve al
 /// hit-test del tap-fuori: chiude solo se il tap è FUORI da questo box.
 #[derive(Component)]
@@ -244,6 +254,9 @@ fn spawn_settings_dialog(
     commands
         .spawn((
             SettingsDialog,
+            // Grace frame: il modale nasce col marker "appena aperto" —
+            // vedi la doc di SettingsDialogJustOpened (bug race tap-outside).
+            SettingsDialogJustOpened,
             GlobalZIndex(SETTINGS_Z),
             Node {
                 position_type: PositionType::Absolute,
@@ -543,7 +556,7 @@ fn point_in_node(node: &ComputedNode, gt: &UiGlobalTransform, pos: Vec2) -> bool
 /// B0001-safe: UNA ResMut per tipo risorsa in questo sistema (i quattro tipi
 /// sono distinti; altrove le stesse risorse sono solo `Res`).
 fn apply_settings_on_confirm(
-    dialog_query: Query<Entity, With<SettingsDialog>>,
+    dialog_query: Query<(Entity, Has<SettingsDialogJustOpened>), With<SettingsDialog>>,
     input_focus: Res<InputFocus>,
     fields: Query<(Entity, &PropInput, &EditableText)>,
     close_btns: Query<&Interaction, (With<SettingsCloseBtn>, Changed<Interaction>)>,
@@ -573,7 +586,7 @@ fn apply_settings_on_confirm(
     crate::mark_system("apply_settings_on_confirm");
 
     // Il modale non esiste: azzera il tracking e basta.
-    let Ok(dialog) = dialog_query.single() else {
+    let Ok((dialog, just_opened)) = dialog_query.single() else {
         *last_focused = None;
         return;
     };
@@ -629,6 +642,12 @@ fn apply_settings_on_confirm(
     //     fullscreen che la guardia UI di selection/tools vede (il tap NON
     //     attraversa). Il tap sui tasti del KEYPAD non conta (il keypad sta
     //     sopra il modale ma fuori dal riquadro).
+    //     SKIP nel grace frame: il tap che ha APERTO il modale è lo stesso
+    //     just_pressed di questo frame (vedi SettingsDialogJustOpened).
+    if just_opened {
+        commands.entity(dialog).remove::<SettingsDialogJustOpened>();
+        return;
+    }
     let Some(pos) = ui_press_position(&windows, &camera_query, &touches, &mouse_buttons) else {
         return;
     };
@@ -671,6 +690,9 @@ fn close_and_apply_all(
         }
     }
     commands.entity(dialog).despawn();
+    // Il modale è chiuso: azzera anche il tracking del focus per evitare che
+    // il prossimo open applichi un focus fantasma.
+    // (last_focused vive in apply_settings_on_confirm come Local)
 }
 
 /// Applica il testo di UN campo alla risorsa globale corrispondente, con

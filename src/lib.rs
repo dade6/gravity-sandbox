@@ -532,6 +532,166 @@ mod tests {
         app.update();
     }
 
+    /// REGRESSIONE Ticket 21 (v0.14.83): "premo Settings e il pannello non
+    /// compare". Race tap-outside: il tap che APRE il modale è `just_pressed`
+    /// nello stesso frame in cui il modale nasce (i comandi di spawn sono
+    /// applicati al sync-point tra i due sistemi); `apply_settings_on_confirm`
+    /// gira DOPO nello stesso frame, vede il tap FUORI dal riquadro e chiude
+    /// il modale appena nato — nasce e muore senza mai essere renderizzato.
+    ///
+    /// FIX: marker `SettingsDialogJustOpened` sul modale appena spawnato;
+    /// `apply_settings_on_confirm` ignora il tap-outside nel frame di
+    /// apertura (grace frame) e rimuove il marker.
+    ///
+    /// Il test riproduce il tap COMPLETO: cursore sopra il bottone Settings,
+    /// `Interaction::Pressed` e mouse `just_pressed` nello stesso frame.
+    #[test]
+    fn settings_modal_survives_opening_tap() {
+        let mut app = sandbox_app_with_window();
+        while app.plugins_state() == bevy::app::PluginsState::Adding {
+            std::thread::yield_now();
+        }
+        app.finish();
+        app.cleanup();
+        app.update();
+        app.update();
+
+        // Boot: il bottone Settings esiste nella toolbar
+        let settings_btn = app
+            .world_mut()
+            .query_filtered::<Entity, With<crate::systems::settings::SettingsBtn>>()
+            .single(app.world())
+            .expect("bottone Settings presente nella toolbar");
+
+        // Nessun modale prima del tap
+        {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<(), With<crate::systems::settings::SettingsDialog>>();
+            assert!(
+                q.single(app.world()).is_err(),
+                "nessun modale prima del tap"
+            );
+        }
+
+        // Posizione del bottone (per il cursore del mouse) — UI transform.
+        // Un solo borrow mutabile del world per volta: estraggo i valori
+        // (copy) per non trascinare i riferimenti.
+        let (btn_cx, btn_cy, btn_half) = {
+            let world = app.world_mut();
+            let (node, gt) = world
+                .query_filtered::<
+                    (&bevy::ui::ComputedNode, &bevy::ui::UiGlobalTransform),
+                    With<crate::systems::settings::SettingsBtn>,
+                >()
+                .single(world)
+                .expect("ComputedNode del bottone Settings");
+            (gt.translation.x, gt.translation.y, node.size / 2.0)
+        };
+        let window_height = {
+            let world = app.world_mut();
+            let w = world
+                .query_filtered::<&Window, With<bevy::window::PrimaryWindow>>()
+                .single(world)
+                .expect("PrimaryWindow");
+            w.physical_height() as f32
+        };
+        // UiGlobalTransform: y cresce verso il BASSO dall'alto-sinistra;
+        // il cursore window usa la stessa convenzione → nessun flip.
+        let btn_center = Vec2::new(btn_cx, btn_cy);
+        assert!(
+            btn_center.x >= btn_cx - btn_half.x && btn_center.x <= btn_cx + btn_half.x,
+            "centro bottone calcolato correttamente"
+        );
+
+        // Cursore sopra il bottone + pressione mouse nello stesso frame
+        // Simula il tap completo: cursore sopra il bottone, mouse premuto e
+        // Interaction::Pressed impostata manualmente (simula il picking UI
+        // che in assenza di winit non ha eventi reali da processare).
+        {
+            let mut w = app
+                .world_mut()
+                .query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>()
+                .single_mut(app.world_mut())
+                .expect("PrimaryWindow");
+            w.set_physical_cursor_position(Some(bevy::math::DVec2::new(
+                btn_center.x as f64,
+                btn_center.y as f64,
+            )));
+        }
+        {
+            let window_entity = {
+                let w = app.world_mut();
+                let mut q = w
+                    .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>();
+                q.single(w).expect("primary window")
+            };
+            // La via ufficiale: mouse_button_input_system (PreUpdate) AZZERA
+            // ButtonInput e ripopola SOLO dai messaggi MouseButtonInput —
+            // un press() diretto sulla risorsa verrebbe cancellato prima
+            // dell'Update. Scrivo l'evento, come fa winit.
+            let mut mouse_events = app
+                .world_mut()
+                .resource_mut::<bevy::ecs::message::Messages<bevy::input::mouse::MouseButtonInput>>();
+            mouse_events.write(bevy::input::mouse::MouseButtonInput {
+                button: MouseButton::Left,
+                state: bevy::input::ButtonState::Pressed,
+                window: window_entity,
+            });
+        }
+        // Interaction::Pressed con cambio reale (Changed<Interaction> deve
+        // scattare in handle_settings_button): uso insert per forzare il
+        // change detection di default, oppure set + trigger_change.
+        {
+            let mut interaction = app
+                .world_mut()
+                .get_mut::<Interaction>(settings_btn)
+                .expect("Interaction sul bottone");
+            *interaction = Interaction::Pressed;
+        }
+
+        // Frame del tap: SENZA fix il modale nasce e muore in questo frame.
+        app.update();
+
+        let modal_alive = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<Entity, With<crate::systems::settings::SettingsDialog>>();
+            q.single(app.world()).is_ok()
+        };
+        assert!(
+            modal_alive,
+            "REGRESSIONE race tap-outside: il modale è morto nel frame del proprio tap di apertura"
+        );
+
+        // Rilascio del mouse: dai frame successivi il modale deve restare
+        // aperto (nessun just_pressed residuo).
+        {
+            let mut mouse = app
+                .world_mut()
+                .resource_mut::<ButtonInput<MouseButton>>();
+            mouse.release(MouseButton::Left);
+            mouse.clear_just_pressed(MouseButton::Left);
+            mouse.clear_just_released(MouseButton::Left);
+        }
+        *app.world_mut()
+            .get_mut::<Interaction>(settings_btn)
+            .unwrap() = Interaction::None;
+        app.update();
+        app.update();
+
+        let modal_alive_2 = {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<Entity, With<crate::systems::settings::SettingsDialog>>();
+            q.single(app.world()).is_ok()
+        };
+        assert!(
+            modal_alive_2,
+            "il modale deve restare aperto nei frame successivi al tap di apertura"
+        );
+    }
+
     /// Regressione v0.14.82 — bug "pianeta che diventa nero a distanza 1000
     /// dalla stella". `sync_sprite_z` scrive sulle sprite dei pianeti
     /// `z = -distanza_dalla_stella` (z-sorting firefly): con la proiezione

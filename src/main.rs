@@ -45,8 +45,10 @@ fn main() {
         .add_plugins((
             GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin,
             TimelinePlugin, PersistencePlugin, PropertyEditorPlugin,
-            
+
             SandboxUIPlugin,
+        ))
+        .add_plugins((
             SelectionPlugin, ToolPlugin,
             ParallaxPlugin, LightPlugin, LightingPlugin, MinimapPlugin, TrajectoryPlugin, TexturePlugin,
             SettingsPlugin,
