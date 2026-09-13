@@ -178,10 +178,7 @@ fn handle_settings_button(
     }
     // N.B. niente window_size: il modale è responsive (anchor ai 4 lati),
     // non cattura la size allo spawn.
-    spawn_settings_dialog(
-        &mut commands,
-        (&grav, &ambient, &glow, &trajectory),
-    );
+    spawn_settings_dialog(&mut commands, (&grav, &ambient, &glow, &trajectory));
 }
 
 // ============================================================
@@ -238,10 +235,15 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
 
 fn spawn_settings_dialog(
     commands: &mut Commands,
-    snapshot: (&GravitationalConstant, &AmbientLight, &GlowCurve, &TrajectoryConfig),
+    snapshot: (
+        &GravitationalConstant,
+        &AmbientLight,
+        &GlowCurve,
+        &TrajectoryConfig,
+    ),
 ) {
     let ctx = SettingsSnapshot {
-        gravity: GravitationalConstant(snapshot.0.0),
+        gravity: GravitationalConstant(snapshot.0 .0),
         ambient: snapshot.1.clone(),
         glow: snapshot.2.clone(),
         trajectory: snapshot.3.clone(),
@@ -415,7 +417,11 @@ fn spawn_settings_dialog(
 }
 
 fn toggle_label(enabled: bool) -> &'static str {
-    if enabled { "ON" } else { "OFF" }
+    if enabled {
+        "ON"
+    } else {
+        "OFF"
+    }
 }
 
 fn toggle_color(enabled: bool) -> Color {
@@ -518,7 +524,10 @@ fn spawn_field_row(
 /// (= nessuna camera con render target) → None.
 fn ui_press_position(
     windows: &Query<&Window>,
-    camera_query: &Query<(&Camera, &GlobalTransform), (With<Camera2d>, With<crate::systems::camera::MainCamera>)>,
+    camera_query: &Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera2d>, With<crate::systems::camera::MainCamera>),
+    >,
     touches: &Touches,
     mouse_buttons: &Res<ButtonInput<MouseButton>>,
 ) -> Option<Vec2> {
@@ -531,8 +540,7 @@ fn ui_press_position(
         .map(|r| r.min.as_vec2())
         .unwrap_or_default();
     if mouse_buttons.just_pressed(MouseButton::Left) {
-        w.physical_cursor_position()
-            .map(|p| p - viewport_min)
+        w.physical_cursor_position().map(|p| p - viewport_min)
     } else {
         touches
             .iter_just_pressed()
@@ -575,10 +583,7 @@ fn apply_settings_on_confirm(
     // il modale ma NON dentro il riquadro: senza contarlo, ogni tasto del
     // keypad chiuderebbe il modale su iPhone).
     box_nodes: Query<(&ComputedNode, &UiGlobalTransform), (With<SettingsBox>, Without<Keypad>)>,
-    keypad_nodes: Query<
-        (&ComputedNode, &UiGlobalTransform),
-        (With<Keypad>, Without<SettingsBox>),
-    >,
+    keypad_nodes: Query<(&ComputedNode, &UiGlobalTransform), (With<Keypad>, Without<SettingsBox>)>,
     mut commands: Commands,
     mut grav: ResMut<GravitationalConstant>,
     mut ambient: ResMut<AmbientLight>,
@@ -655,8 +660,12 @@ fn apply_settings_on_confirm(
     let Some(pos) = ui_press_position(&windows, &camera_query, &touches, &mouse_buttons) else {
         return;
     };
-    let inside_box = box_nodes.iter().any(|(node, gt)| point_in_node(node, gt, pos));
-    let over_keypad = keypad_nodes.iter().any(|(node, gt)| point_in_node(node, gt, pos));
+    let inside_box = box_nodes
+        .iter()
+        .any(|(node, gt)| point_in_node(node, gt, pos));
+    let over_keypad = keypad_nodes
+        .iter()
+        .any(|(node, gt)| point_in_node(node, gt, pos));
     if !inside_box && !over_keypad {
         // tap sull'overlay (fuori dal riquadro e dal keypad): chiudi applicando
         close_and_apply_all(
@@ -922,68 +931,236 @@ mod tests {
         let mut t = TrajectoryConfig::default();
 
         // gravità: clamp min 0.1 / max 1e7
-        assert!(apply_settings_field("set_gravity", "50", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_gravity",
+            "50",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(g.0, 50.0);
-        assert!(apply_settings_field("set_gravity", "0.0001", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_gravity",
+            "0.0001",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(g.0, 0.1, "gravity clamp min 0.1");
-        assert!(apply_settings_field("set_gravity", "9e9", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_gravity",
+            "9e9",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(g.0, 1.0e7, "gravity clamp max 1e7");
 
         // ambient intensity 0..1
-        assert!(apply_settings_field("set_ambient_intensity", "1.5", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_ambient_intensity",
+            "1.5",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(a.intensity, 1.0);
-        assert!(apply_settings_field("set_ambient_intensity", "-3", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_ambient_intensity",
+            "-3",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(a.intensity, 0.0);
 
         // ambient RGB 0..1 per canale. N.B. il default è [1,1,1]: R/B cambiano
         // davvero, G "2.0" clampa a 1.0 che è GIA' il valore corrente →
         // apply_settings_field ritorna false (idempotente, no riscrittura).
-        assert!(apply_settings_field("set_ambient_r", "0.2", &mut g, &mut a, &mut gl, &mut t));
-        assert!(!apply_settings_field("set_ambient_g", "2.0", &mut g, &mut a, &mut gl, &mut t));
-        assert!(apply_settings_field("set_ambient_b", "0.2", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_ambient_r",
+            "0.2",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
+        assert!(!apply_settings_field(
+            "set_ambient_g",
+            "2.0",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
+        assert!(apply_settings_field(
+            "set_ambient_b",
+            "0.2",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(a.color, [0.2, 1.0, 0.2]);
         // un valore DIVERSO dal corrente su G: cambia e clampa
-        assert!(apply_settings_field("set_ambient_g", "0.4", &mut g, &mut a, &mut gl, &mut t));
-        assert!(apply_settings_field("set_ambient_g", "2.0", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_ambient_g",
+            "0.4",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
+        assert!(apply_settings_field(
+            "set_ambient_g",
+            "2.0",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(a.color, [0.2, 1.0, 0.2]);
 
         // ambient range >= 0
-        assert!(apply_settings_field("set_ambient_range", "2000", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_ambient_range",
+            "2000",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(a.range, 2000.0);
-        assert!(apply_settings_field("set_ambient_range", "-5", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_ambient_range",
+            "-5",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(a.range, 0.0);
 
         // glow falloff 0.5..8, soft edge 0..0.1
-        assert!(apply_settings_field("set_glow_falloff", "0.1", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_glow_falloff",
+            "0.1",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(gl.falloff_exp, 0.5);
-        assert!(apply_settings_field("set_glow_falloff", "50", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_glow_falloff",
+            "50",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(gl.falloff_exp, 8.0);
-        assert!(apply_settings_field("set_glow_soft", "0.5", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_glow_soft",
+            "0.5",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(gl.soft_edge, 0.1);
-        assert!(apply_settings_field("set_glow_soft", "-1", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_glow_soft",
+            "-1",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(gl.soft_edge, 0.0);
 
         // trajectory: history/prediction min 0, sample min 1
-        assert!(apply_settings_field("set_traj_history", "50", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_traj_history",
+            "50",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(t.history_length, 50);
-        assert!(apply_settings_field("set_traj_history", "-4", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_traj_history",
+            "-4",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(t.history_length, 0);
-        assert!(apply_settings_field("set_traj_prediction", "300", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_traj_prediction",
+            "300",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(t.prediction_steps, 300);
-        assert!(apply_settings_field("set_traj_sample", "0", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_traj_sample",
+            "0",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(t.sample_interval, 1, "sample interval min 1");
-        assert!(apply_settings_field("set_traj_sample", "5", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_traj_sample",
+            "5",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(t.sample_interval, 5);
 
         // testo invalido: nessun panic, nessun cambio
-        assert!(!apply_settings_field("set_gravity", "abc", &mut g, &mut a, &mut gl, &mut t));
+        assert!(!apply_settings_field(
+            "set_gravity",
+            "abc",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(g.0, 1.0e7);
 
         // idempotenza: stesso valore → false (nessuna riscrittura)
-        assert!(!apply_settings_field("set_traj_sample", "5", &mut g, &mut a, &mut gl, &mut t));
+        assert!(!apply_settings_field(
+            "set_traj_sample",
+            "5",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
 
         // testo con spazi → trim
-        assert!(apply_settings_field("set_traj_history", "  120  ", &mut g, &mut a, &mut gl, &mut t));
+        assert!(apply_settings_field(
+            "set_traj_history",
+            "  120  ",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
         assert_eq!(t.history_length, 120);
     }
 

@@ -180,7 +180,10 @@ mod tests {
     #[test]
     fn hit_detects_click_inside_node() {
         let mut world = World::new();
-        query_with(&mut world, vec![test_node(Vec2::new(100.0, 50.0), Vec2::new(200.0, 100.0))]);
+        query_with(
+            &mut world,
+            vec![test_node(Vec2::new(100.0, 50.0), Vec2::new(200.0, 100.0))],
+        );
         let mut query = world.query::<(&ComputedNode, &UiGlobalTransform)>();
         let point = Vec2::new(210.0, 105.0); // dentro il nodo
         assert!(ui_point_hits_any_node(point, query.iter(&world)));
@@ -190,7 +193,10 @@ mod tests {
     #[test]
     fn hit_ignores_click_outside_node() {
         let mut world = World::new();
-        query_with(&mut world, vec![test_node(Vec2::new(100.0, 50.0), Vec2::new(200.0, 100.0))]);
+        query_with(
+            &mut world,
+            vec![test_node(Vec2::new(100.0, 50.0), Vec2::new(200.0, 100.0))],
+        );
         let mut query = world.query::<(&ComputedNode, &UiGlobalTransform)>();
         let point = Vec2::new(500.0, 500.0); // fuori da tutti i nodi
         assert!(!ui_point_hits_any_node(point, query.iter(&world)));
@@ -202,7 +208,10 @@ mod tests {
     #[test]
     fn hit_ignores_zero_size_hidden_node() {
         let mut world = World::new();
-        query_with(&mut world, vec![test_node(Vec2::ZERO, Vec2::new(200.0, 100.0))]);
+        query_with(
+            &mut world,
+            vec![test_node(Vec2::ZERO, Vec2::new(200.0, 100.0))],
+        );
         let mut query = world.query::<(&ComputedNode, &UiGlobalTransform)>();
         let point = Vec2::new(200.0, 100.0); // dove starebbe il nodo se visibile
         assert!(!ui_point_hits_any_node(point, query.iter(&world)));

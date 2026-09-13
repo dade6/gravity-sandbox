@@ -228,9 +228,9 @@ fn generate_rocky_diffuse() -> Vec<u8> {
 
             // Palette: brown #8B5E3C → red #C1440E → ocher #D4A24C
             let (r, g, b) = if n < 0.35 {
-                (139, 94, 60)  // brown
+                (139, 94, 60) // brown
             } else if n < 0.6 {
-                (193, 68, 14)  // red-orange
+                (193, 68, 14) // red-orange
             } else {
                 (212, 162, 76) // ocher
             };
@@ -636,9 +636,21 @@ mod tests {
         // (discretizzazione), quindi nz ≈ 0.99998 -> 254.99 -> 254.
         let c = size / 2;
         let i = (c * size + c) * 4;
-        assert!((pixels[i] as i32 - 128).abs() <= 2, "centro R≈128 (nx=0), got {}", pixels[i]);
-        assert!((pixels[i + 1] as i32 - 128).abs() <= 2, "centro G≈128 (ny=0), got {}", pixels[i + 1]);
-        assert!((pixels[i + 2] as i32 - 255).abs() <= 2, "centro B≈255 (nz=1), got {}", pixels[i + 2]);
+        assert!(
+            (pixels[i] as i32 - 128).abs() <= 2,
+            "centro R≈128 (nx=0), got {}",
+            pixels[i]
+        );
+        assert!(
+            (pixels[i + 1] as i32 - 128).abs() <= 2,
+            "centro G≈128 (ny=0), got {}",
+            pixels[i + 1]
+        );
+        assert!(
+            (pixels[i + 2] as i32 - 255).abs() <= 2,
+            "centro B≈255 (nz=1), got {}",
+            pixels[i + 2]
+        );
         assert_eq!(pixels[i + 3], 255, "centro alpha pieno");
 
         // Gradiente R (normale x): cresce da sinistra a destra.
@@ -687,8 +699,8 @@ mod tests {
         assert_eq!(pixels[qi + 3], 255, "quadrante dentro sfera opaco");
 
         // Salva il PNG per ispezione visiva (accanto al workspace spike)
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("sphere_normal_generated.png");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sphere_normal_generated.png");
         image::save_buffer(
             &path,
             &pixels,

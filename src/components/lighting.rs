@@ -322,7 +322,10 @@ mod tests {
 
         let g = StarGlow::default();
         let gj = serde_json::to_string(&g).unwrap();
-        assert_eq!(serde_json::from_str::<StarGlow>(&gj).unwrap().outer_scale, 25.0);
+        assert_eq!(
+            serde_json::from_str::<StarGlow>(&gj).unwrap().outer_scale,
+            25.0
+        );
 
         // Missing fields fall back to defaults (old preset compatibility).
         let old = r#"{"intensity":1.8}"#;

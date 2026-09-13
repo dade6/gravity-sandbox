@@ -184,14 +184,17 @@ fn spawn_star_glows(
             texture: Some(shadow_assets.glow_texture.clone()),
             ..default()
         });
-        commands.entity(entity).insert(StarGlow).with_children(|parent| {
-            parent.spawn((
-                Mesh2d(mesh),
-                MeshMaterial2d::<ColorMaterial>(material),
-                Transform::from_xyz(0.0, 0.0, GLOW_Z),
-                Visibility::default(),
-            ));
-        });
+        commands
+            .entity(entity)
+            .insert(StarGlow)
+            .with_children(|parent| {
+                parent.spawn((
+                    Mesh2d(mesh),
+                    MeshMaterial2d::<ColorMaterial>(material),
+                    Transform::from_xyz(0.0, 0.0, GLOW_Z),
+                    Visibility::default(),
+                ));
+            });
     }
 }
 
@@ -231,7 +234,8 @@ fn update_shadows(
                 // World direction -> body-local frame so the cone stays
                 // oriented away from the star regardless of the body's
                 // rotation (e.g. after a collision).
-                let local_dir = (transform.rotation.inverse() * li.direction.extend(0.0)).truncate();
+                let local_dir =
+                    (transform.rotation.inverse() * li.direction.extend(0.0)).truncate();
                 shadow_cone_vertices(body.radius, local_dir, li.distance_to_star)
             } else {
                 None
@@ -309,7 +313,10 @@ fn shadow_cone_vertices(radius: f32, light_dir: Vec2, dist: f32) -> Option<[Vec3
 /// Pre-allocated 4-vertex quad (2 triangles, CCW) used as the shadow mesh.
 /// Position is rewritten in place every frame; normal/UV never change.
 fn new_shadow_mesh() -> Mesh {
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0, 0.0, 0.0]; 4]);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 4]);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; 4]);
@@ -421,12 +428,18 @@ mod tests {
         // Wider body -> wider base (proportional, not constant).
         let v_big = shadow_cone_vertices(40.0, Vec2::X, 300.0).unwrap();
         let base_big = v_big[0].truncate().distance(v_big[1].truncate());
-        assert!((base_big - 80.0).abs() < 1e-3, "base {base_big} should be 80");
+        assert!(
+            (base_big - 80.0).abs() < 1e-3,
+            "base {base_big} should be 80"
+        );
         // Base points sit ON the body silhouette (|t| == radius) and the cone
         // still widens away from the star.
         assert!((v[0].truncate().length() - 12.0).abs() < 1e-4);
         let far_width = v[2].truncate().distance(v[3].truncate());
-        assert!(far_width > base_width, "far {far_width} > base {base_width}");
+        assert!(
+            far_width > base_width,
+            "far {far_width} > base {base_width}"
+        );
     }
 
     #[test]
@@ -474,7 +487,10 @@ mod tests {
         app.update(); // LightInfo exists -> update positions/visibility
 
         let mut world = app.world_mut();
-        assert!(world.get_entity(planet).unwrap().contains::<ShadowAttached>());
+        assert!(world
+            .get_entity(planet)
+            .unwrap()
+            .contains::<ShadowAttached>());
 
         // Find the shadow child of the planet (entity WITH ChildOf -> planet).
         let mut query = world.query::<(Entity, &ChildOf, &Visibility, &Mesh2d)>();
@@ -535,7 +551,10 @@ mod tests {
         // And none of the star's children is a shadow cone.
         let mut query = world.query::<(Entity, &ChildOf, &ShadowCone)>();
         let has_shadow_child = query.iter(world).any(|(_, co, _)| co.0 == star);
-        assert!(!has_shadow_child, "star children must not include shadow cones");
+        assert!(
+            !has_shadow_child,
+            "star children must not include shadow cones"
+        );
     }
 
     #[test]
@@ -611,7 +630,11 @@ mod tests {
             .map(|(_, _, m)| m.0.clone())
             .expect("shadow child exists");
         assert_eq!(
-            query.iter(world).find(|(co, _, _)| co.0 == planet).unwrap().1,
+            query
+                .iter(world)
+                .find(|(co, _, _)| co.0 == planet)
+                .unwrap()
+                .1,
             &Visibility::Visible
         );
 

@@ -10,7 +10,10 @@ pub struct SimulationState {
 
 impl Default for SimulationState {
     fn default() -> Self {
-        Self { paused: false, speed: 1.0 }
+        Self {
+            paused: false,
+            speed: 1.0,
+        }
     }
 }
 
@@ -25,12 +28,15 @@ impl Plugin for TimelinePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SimulationState>()
             .add_message::<StepMessage>()
-            .add_systems(Update, (
-                handle_play_pause,
-                handle_step,
-                handle_speed_change,
-                apply_speed,
-            ))
+            .add_systems(
+                Update,
+                (
+                    handle_play_pause,
+                    handle_step,
+                    handle_speed_change,
+                    apply_speed,
+                ),
+            )
             .add_systems(Last, repause_after_step);
     }
 }

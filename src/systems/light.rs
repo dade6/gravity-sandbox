@@ -80,14 +80,12 @@ struct StarData {
 }
 
 fn compute_lighting(
-    stars: Query<
-        (
-            &CelestialBody,
-            &GlobalTransform,
-            &LightSource,
-            Option<&StarLightSettings>,
-        ),
-    >,
+    stars: Query<(
+        &CelestialBody,
+        &GlobalTransform,
+        &LightSource,
+        Option<&StarLightSettings>,
+    )>,
     occluders: Query<(Entity, &CelestialBody, &GlobalTransform), Without<LightSource>>,
     mut bodies: Query<(
         Entity,
@@ -109,7 +107,9 @@ fn compute_lighting(
             falloff: ls.falloff,
             color: Vec3::new(body.color[0], body.color[1], body.color[2]),
             radius: settings.map(|s| s.radius).unwrap_or(defaults.radius),
-            fade_width: settings.map(|s| s.fade_width).unwrap_or(defaults.fade_width),
+            fade_width: settings
+                .map(|s| s.fade_width)
+                .unwrap_or(defaults.fade_width),
         })
         .collect();
 
@@ -352,9 +352,9 @@ fn apply_lighting_to_materials(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use avian2d::prelude::*;
     use crate::components::celestial::BodyType;
     use crate::components::lighting::{AmbientLight, LightInfo};
+    use avian2d::prelude::*;
 
     fn test_app() -> App {
         let mut app = App::new();
@@ -462,13 +462,20 @@ mod tests {
         assert_eq!(mat.body_pos, Vec2::new(300.0, 0.0), "posizione corpo");
         assert_eq!(mat.body_radius, 12.0, "raggio corpo");
         // Il falloff GPU è scalato rispetto al LightSource (vedi GPU_FALLOFF_SCALE)
-        assert_eq!(mat.falloff, 0.0001 * GPU_FALLOFF_SCALE, "falloff stella (scalato GPU)");
+        assert_eq!(
+            mat.falloff,
+            0.0001 * GPU_FALLOFF_SCALE,
+            "falloff stella (scalato GPU)"
+        );
         assert_eq!(mat.has_normal_map, 0, "senza TextureAssets -> flat");
         assert!(mat.normal_map.is_none());
         // base_color: colore del corpo con alpha preservata
         let srgba = mat.base_color.to_srgba();
-        assert!((srgba.red - 0.3).abs() < 1e-4 && (srgba.green - 0.6).abs() < 1e-4
-            && (srgba.blue - 1.0).abs() < 1e-4);
+        assert!(
+            (srgba.red - 0.3).abs() < 1e-4
+                && (srgba.green - 0.6).abs() < 1e-4
+                && (srgba.blue - 1.0).abs() < 1e-4
+        );
         assert!((srgba.alpha - 1.0).abs() < 1e-4, "alpha preservata");
 
         // L'entity esiste ancora (nessun conflitto di query nel sistema)
@@ -709,7 +716,12 @@ mod tests {
     #[test]
     fn segment_hits_circle_cases() {
         // Segment (0,0) -> (400,0), circle at (200,0) r=20: dead centre.
-        assert!(segment_hits_circle(Vec2::ZERO, Vec2::new(400.0, 0.0), Vec2::new(200.0, 0.0), 20.0));
+        assert!(segment_hits_circle(
+            Vec2::ZERO,
+            Vec2::new(400.0, 0.0),
+            Vec2::new(200.0, 0.0),
+            20.0
+        ));
         // Circle off to the side, farther than its radius from the segment.
         assert!(!segment_hits_circle(
             Vec2::ZERO,
@@ -739,7 +751,12 @@ mod tests {
             20.0
         ));
         // Degenerate segment.
-        assert!(!segment_hits_circle(Vec2::ZERO, Vec2::ZERO, Vec2::new(10.0, 0.0), 5.0));
+        assert!(!segment_hits_circle(
+            Vec2::ZERO,
+            Vec2::ZERO,
+            Vec2::new(10.0, 0.0),
+            5.0
+        ));
     }
 
     /// Un pianeta allineato dietro un altro (rispetto alla stella) è in
@@ -750,8 +767,10 @@ mod tests {
         let mut app = test_app();
         let (front, back) = {
             let world = app.world_mut();
-            let (e_front, _) = spawn_planet(world, Vec2::new(200.0, 0.0), [0.3, 0.6, 1.0], 20.0, 1.0);
-            let (e_back, _) = spawn_planet(world, Vec2::new(400.0, 0.0), [0.8, 0.4, 0.2], 12.0, 1.0);
+            let (e_front, _) =
+                spawn_planet(world, Vec2::new(200.0, 0.0), [0.3, 0.6, 1.0], 20.0, 1.0);
+            let (e_back, _) =
+                spawn_planet(world, Vec2::new(400.0, 0.0), [0.8, 0.4, 0.2], 12.0, 1.0);
             spawn_star(world, Vec2::ZERO);
             (e_front, e_back)
         };
@@ -771,7 +790,10 @@ mod tests {
             li_back.intensity, 0.0,
             "pianeta dietro in ombra -> 0 luce diretta"
         );
-        assert_eq!(li_back.star_intensity, 0.0, "raw intensity azzerata pure per lo shader");
+        assert_eq!(
+            li_back.star_intensity, 0.0,
+            "raw intensity azzerata pure per lo shader"
+        );
     }
 
     /// Corpi NON allineati (l'occluder è fuori dal segmento stella→corpo)
@@ -781,8 +803,10 @@ mod tests {
         let mut app = test_app();
         let (front, back) = {
             let world = app.world_mut();
-            let (e_front, _) = spawn_planet(world, Vec2::new(200.0, 0.0), [0.3, 0.6, 1.0], 20.0, 1.0);
-            let (e_back, _) = spawn_planet(world, Vec2::new(400.0, 80.0), [0.8, 0.4, 0.2], 12.0, 1.0);
+            let (e_front, _) =
+                spawn_planet(world, Vec2::new(200.0, 0.0), [0.3, 0.6, 1.0], 20.0, 1.0);
+            let (e_back, _) =
+                spawn_planet(world, Vec2::new(400.0, 80.0), [0.8, 0.4, 0.2], 12.0, 1.0);
             spawn_star(world, Vec2::ZERO);
             (e_front, e_back)
         };

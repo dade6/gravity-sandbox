@@ -21,7 +21,10 @@ impl Plugin for CameraControllerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PanState>()
             .init_resource::<TouchPanState>()
-            .add_systems(Update, (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom).ambiguous_with_all());
+            .add_systems(
+                Update,
+                (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom).ambiguous_with_all(),
+            );
     }
 }
 
@@ -50,7 +53,14 @@ fn pan_camera(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     drag_state: Res<MoveDragState>,
-    mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
+    mut camera_query: Query<
+        &mut Transform,
+        (
+            (With<Camera2d>, With<MainCamera>),
+            With<Projection>,
+            With<MainCamera>,
+        ),
+    >,
 ) {
     crate::mark_system("pan_camera");
 
@@ -76,7 +86,14 @@ fn scroll_pan(
     scroll: Res<AccumulatedMouseScroll>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     drag_state: Res<MoveDragState>,
-    mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
+    mut camera_query: Query<
+        &mut Transform,
+        (
+            (With<Camera2d>, With<MainCamera>),
+            With<Projection>,
+            With<MainCamera>,
+        ),
+    >,
 ) {
     crate::mark_system("scroll_pan");
 
@@ -132,7 +149,14 @@ fn touch_pan(
     mut state: ResMut<TouchPanState>,
     touches: Res<Touches>,
     drag_state: Res<MoveDragState>,
-    mut camera_query: Query<&mut Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
+    mut camera_query: Query<
+        &mut Transform,
+        (
+            (With<Camera2d>, With<MainCamera>),
+            With<Projection>,
+            With<MainCamera>,
+        ),
+    >,
 ) {
     crate::mark_system("touch_pan");
 

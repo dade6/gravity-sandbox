@@ -59,12 +59,15 @@ impl Plugin for ToolPlugin {
         app.init_resource::<CurrentTool>()
             .init_resource::<MoveDragState>()
             .init_resource::<PendingDelete>()
-            .add_systems(Update, (
-                handle_tool_shortcuts,
-                add_tool_system,
-                move_tool_system,
-                delete_tool_system,
-            ));
+            .add_systems(
+                Update,
+                (
+                    handle_tool_shortcuts,
+                    add_tool_system,
+                    move_tool_system,
+                    delete_tool_system,
+                ),
+            );
     }
 }
 
@@ -82,11 +85,17 @@ fn handle_tool_shortcuts(
         return;
     }
 
-    let new_tool = if keys.just_pressed(KeyCode::Digit1) { Some(Tool::Select) }
-    else if keys.just_pressed(KeyCode::Digit2) { Some(Tool::Add) }
-    else if keys.just_pressed(KeyCode::Digit3) { Some(Tool::Move) }
-    else if keys.just_pressed(KeyCode::Digit4) { Some(Tool::Delete) }
-    else { None };
+    let new_tool = if keys.just_pressed(KeyCode::Digit1) {
+        Some(Tool::Select)
+    } else if keys.just_pressed(KeyCode::Digit2) {
+        Some(Tool::Add)
+    } else if keys.just_pressed(KeyCode::Digit3) {
+        Some(Tool::Move)
+    } else if keys.just_pressed(KeyCode::Digit4) {
+        Some(Tool::Delete)
+    } else {
+        None
+    };
 
     if let Some(tool) = new_tool {
         // Only allow switching to Add/Move/Delete when paused (playing)
@@ -230,33 +239,35 @@ fn add_tool_system(
     let radius = 15.0;
     let color = [0.5, 0.5, 0.5];
 
-    let entity = commands.spawn((
-        CelestialBody {
-            name: "New Body".into(),
-            body_type: BodyType::Planet,
-            mass: 100.0,
-            radius,
-            color,
-            luminous: false,
-        },
-        Mesh2d(meshes.add(Circle::new(radius))),
-        MeshMaterial2d(light_materials.add(ColorMaterial::from_color(
-            Color::srgb(color[0], color[1], color[2]),
-        ))),
-        Transform::from_xyz(world_pos.x, world_pos.y, 0.0),
-        RigidBody::Dynamic,
-        Collider::circle(radius),
-        Mass(100.0),
-        LinearVelocity(Vec2::ZERO),
-        ConstantForce(Vec2::ZERO),
-        TrajectoryHistory::default(),
-        InitialBodyState {
-            position: world_pos,
-            velocity: Vec2::ZERO,
-            mass: 100.0,
-            radius,
-        },
-    )).id();
+    let entity = commands
+        .spawn((
+            CelestialBody {
+                name: "New Body".into(),
+                body_type: BodyType::Planet,
+                mass: 100.0,
+                radius,
+                color,
+                luminous: false,
+            },
+            Mesh2d(meshes.add(Circle::new(radius))),
+            MeshMaterial2d(light_materials.add(ColorMaterial::from_color(Color::srgb(
+                color[0], color[1], color[2],
+            )))),
+            Transform::from_xyz(world_pos.x, world_pos.y, 0.0),
+            RigidBody::Dynamic,
+            Collider::circle(radius),
+            Mass(100.0),
+            LinearVelocity(Vec2::ZERO),
+            ConstantForce(Vec2::ZERO),
+            TrajectoryHistory::default(),
+            InitialBodyState {
+                position: world_pos,
+                velocity: Vec2::ZERO,
+                mass: 100.0,
+                radius,
+            },
+        ))
+        .id();
 
     // Auto-select the newly spawned body so the property panel opens
     selected.0 = Some(entity);
@@ -288,7 +299,12 @@ fn move_tool_system(
     // Se non siamo in Move+pausa, cancella eventuale drag attivo
     if current_tool.0 != Tool::Move || !sim_state.paused {
         if drag_state.active {
-            close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
+            close_drag(
+                &mut drag_state,
+                &mut velocities,
+                &material_query,
+                &mut light_materials,
+            );
         }
         return;
     }
@@ -316,7 +332,12 @@ fn move_tool_system(
         // Se un drag precedente è rimasto attivo (es. release persa su WASM),
         // chiudilo prima di iniziarne uno nuovo.
         if drag_state.active {
-            close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
+            close_drag(
+                &mut drag_state,
+                &mut velocities,
+                &material_query,
+                &mut light_materials,
+            );
         }
         // Inizia drag: cerca corpo sotto il cursore. Non sposta ancora nulla:
         // il corpo viene agganciato solo quando il cursore supera la soglia.
@@ -350,7 +371,12 @@ fn move_tool_system(
                     selected.0 = Some(entity);
                 }
             }
-            close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
+            close_drag(
+                &mut drag_state,
+                &mut velocities,
+                &material_query,
+                &mut light_materials,
+            );
         }
     } else if drag_state.active
         && mouse_buttons.pressed(MouseButton::Left)
@@ -362,9 +388,7 @@ fn move_tool_system(
         // Soglia di drag: il corpo si aggancia solo oltre DRAG_THRESHOLD_PX px
         // E dopo almeno DRAG_HOLD_SECS di pressione (click rapido = selezione)
         if !drag_state.engaged {
-            if let (Some(press), Some(start)) =
-                (drag_state.press_cursor, drag_state.press_start)
-            {
+            if let (Some(press), Some(start)) = (drag_state.press_cursor, drag_state.press_start) {
                 let moved = press.distance(cursor_px) >= DRAG_THRESHOLD_PX;
                 let held = time.elapsed_secs_f64() - start >= DRAG_HOLD_SECS;
                 if moved && held {
@@ -390,7 +414,12 @@ fn move_tool_system(
         // successivo pressed() è già false ma active è ancora true. Chiudi il
         // drag senza spostare il corpo: se non ha superato la soglia non si è
         // mai mosso.
-        close_drag(&mut drag_state, &mut velocities, &material_query, &mut light_materials);
+        close_drag(
+            &mut drag_state,
+            &mut velocities,
+            &material_query,
+            &mut light_materials,
+        );
     }
 }
 
@@ -405,7 +434,12 @@ fn close_drag(
         if let Ok(mut vel) = velocities.get_mut(entity) {
             vel.0 = Vec2::ZERO;
         }
-        restore_alpha(entity, material_query, light_materials, drag_state.original_alpha);
+        restore_alpha(
+            entity,
+            material_query,
+            light_materials,
+            drag_state.original_alpha,
+        );
     }
     drag_state.active = false;
     drag_state.entity = None;

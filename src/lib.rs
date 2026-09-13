@@ -1,7 +1,7 @@
 use avian2d::prelude::*;
-use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
 use bevy::gizmos::prelude::{DefaultGizmoConfigGroup, GizmoConfigStore};
+use bevy::prelude::*;
 use bevy::window::{Window, WindowResolution};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -93,9 +93,12 @@ mod js_bridge {
     pub static TRAJECTORY_CONFIG_CMD: Mutex<Option<String>> = Mutex::new(None);
 
     /// Trajectory config snapshot for JS polling (written by Rust systems)
-    pub static TRAJECTORY_CONFIG_SNAPSHOT: std::sync::LazyLock<Mutex<String>> = std::sync::LazyLock::new(|| {
-        Mutex::new(r#"{"trail_length":500,"prediction_steps":200,"trails_visible":true}"#.into())
-    });
+    pub static TRAJECTORY_CONFIG_SNAPSHOT: std::sync::LazyLock<Mutex<String>> =
+        std::sync::LazyLock::new(|| {
+            Mutex::new(
+                r#"{"trail_length":500,"prediction_steps":200,"trails_visible":true}"#.into(),
+            )
+        });
 
     // ---- Persistence bridge (save / load) ----
 
@@ -360,18 +363,24 @@ pub fn wasm_main() {
             ..default()
         });
     });
-    app.edit_schedule(PostUpdate, |schedule: &mut bevy::ecs::schedule::Schedule| {
-        schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
-            ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
-            ..default()
-        });
-    });
-    app.edit_schedule(FixedUpdate, |schedule: &mut bevy::ecs::schedule::Schedule| {
-        schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
-            ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
-            ..default()
-        });
-    });
+    app.edit_schedule(
+        PostUpdate,
+        |schedule: &mut bevy::ecs::schedule::Schedule| {
+            schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+                ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+                ..default()
+            });
+        },
+    );
+    app.edit_schedule(
+        FixedUpdate,
+        |schedule: &mut bevy::ecs::schedule::Schedule| {
+            schedule.set_build_settings(bevy::ecs::schedule::ScheduleBuildSettings {
+                ambiguity_detection: bevy::ecs::schedule::LogLevel::Ignore,
+                ..default()
+            });
+        },
+    );
     app.add_plugins(
         DefaultPlugins
             // Allineato all'esempio ufficiale del crate (crates.rs): sampler
@@ -380,15 +389,16 @@ pub fn wasm_main() {
             // texture -> rilievo appiattito.
             .set(ImagePlugin::default_nearest())
             .set(WindowPlugin {
-        primary_window: Some(Window {
-            title: format!("Gravity Sandbox {}", version::VERSION),
-            canvas: Some("#bevy-canvas".into()),
-            fit_canvas_to_parent: true,
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        }),
-        ..default()
-    }))
+                primary_window: Some(Window {
+                    title: format!("Gravity Sandbox {}", version::VERSION),
+                    canvas: Some("#bevy-canvas".into()),
+                    fit_canvas_to_parent: true,
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                }),
+                ..default()
+            }),
+    )
     .insert_resource(ClearColor(Color::srgb(0.10, 0.10, 0.13)))
     // TEMP-DIAG: il trap "Unreachable" del primo frame su Mac/iPhone è la
     // Minimap (render-to-texture WebGL2) — CONFERMATO dalla bisettrice
@@ -419,7 +429,14 @@ pub fn wasm_main() {
     ))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
-    .add_systems(Update, (debug_state_snapshot, apply_mobile_text_input, clear_focus_on_outside_press))
+    .add_systems(
+        Update,
+        (
+            debug_state_snapshot,
+            apply_mobile_text_input,
+            clear_focus_on_outside_press,
+        ),
+    )
     .run();
     crate::mark_system("after_run");
 }
@@ -476,7 +493,12 @@ mod tests {
             // SPIKE v2: sistemi luce/ombra custom disattivati (firefly fa tutto)
             PhysicsPlugins::default(),
         ))
-        .add_plugins((SandboxUIPlugin, ResetPlugin, systems::keypad::KeypadPlugin, systems::settings::SettingsPlugin))
+        .add_plugins((
+            SandboxUIPlugin,
+            ResetPlugin,
+            systems::keypad::KeypadPlugin,
+            systems::settings::SettingsPlugin,
+        ))
         .insert_resource(Gravity::ZERO)
         .add_systems(FixedUpdate, gravity::gravity_system);
         // N.B.: debug_state_snapshot/apply_mobile_text_input/clear_focus_*
@@ -622,8 +644,7 @@ mod tests {
         {
             let window_entity = {
                 let w = app.world_mut();
-                let mut q = w
-                    .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>();
+                let mut q = w.query_filtered::<Entity, With<bevy::window::PrimaryWindow>>();
                 q.single(w).expect("primary window")
             };
             // La via ufficiale: mouse_button_input_system (PreUpdate) AZZERA
@@ -632,7 +653,8 @@ mod tests {
             // dell'Update. Scrivo l'evento, come fa winit.
             let mut mouse_events = app
                 .world_mut()
-                .resource_mut::<bevy::ecs::message::Messages<bevy::input::mouse::MouseButtonInput>>();
+                .resource_mut::<bevy::ecs::message::Messages<bevy::input::mouse::MouseButtonInput>>(
+                );
             mouse_events.write(bevy::input::mouse::MouseButtonInput {
                 button: MouseButton::Left,
                 state: bevy::input::ButtonState::Pressed,
@@ -667,9 +689,7 @@ mod tests {
         // Rilascio del mouse: dai frame successivi il modale deve restare
         // aperto (nessun just_pressed residuo).
         {
-            let mut mouse = app
-                .world_mut()
-                .resource_mut::<ButtonInput<MouseButton>>();
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
             mouse.release(MouseButton::Left);
             mouse.clear_just_pressed(MouseButton::Left);
             mouse.clear_just_released(MouseButton::Left);
@@ -767,7 +787,8 @@ mod tests {
     /// compilare comunque).
     #[test]
     fn light_shader_compiles_to_glsl() {
-        let raw = std::fs::read_to_string("assets/shaders/light_material.wgsl").expect("shader file");
+        let raw =
+            std::fs::read_to_string("assets/shaders/light_material.wgsl").expect("shader file");
         // Pre-process: Bevy risolve `#define_import_path` (rimosso),
         // `#import` (stub di VertexOutput con la vera disposizione dei
         // location) e il macro `MATERIAL_BIND_GROUP` (sostituito dal valore
@@ -963,7 +984,10 @@ fn apply_mobile_text_input(
         return;
     };
     let Some(new_text) = cmd else { return };
-    let mode = crate::js_bridge::TEXT_INPUT_MODE.lock().map(|m| *m).unwrap_or(0);
+    let mode = crate::js_bridge::TEXT_INPUT_MODE
+        .lock()
+        .map(|m| *m)
+        .unwrap_or(0);
     // Apertura campo (mode 1): il testo vuoto NON genera edit: parley
     // panica con is_char_boundary se riceve Insert/SelectAll su edit vuoto
     // (panic visto al semplice click sul campo su Safari Mac).
@@ -1009,10 +1033,10 @@ fn clear_focus_on_outside_press(
         &bevy::ui::ComputedNode,
         &bevy::ui::UiGlobalTransform,
     )>,
-    keypad_btns: Query<(
-        &bevy::ui::ComputedNode,
-        &bevy::ui::UiGlobalTransform,
-    ), With<crate::systems::keypad::KeypadAction>>,
+    keypad_btns: Query<
+        (&bevy::ui::ComputedNode, &bevy::ui::UiGlobalTransform),
+        With<crate::systems::keypad::KeypadAction>,
+    >,
     mut bodies: Query<(
         &mut crate::components::celestial::CelestialBody,
         &mut Transform,
@@ -1094,7 +1118,11 @@ fn debug_state_snapshot(
     selected: Res<crate::systems::selection::SelectedBody>,
     sim_state: Res<crate::systems::timeline::SimulationState>,
     input_focus: Res<bevy::input_focus::InputFocus>,
-    prop_texts: Query<(Entity, &crate::systems::ui::PropInput, &bevy::text::EditableText)>,
+    prop_texts: Query<(
+        Entity,
+        &crate::systems::ui::PropInput,
+        &bevy::text::EditableText,
+    )>,
     ui_nodes: Query<(
         &crate::systems::ui::PropInput,
         &bevy::ui::ComputedNode,
@@ -1125,7 +1153,10 @@ fn debug_state_snapshot(
         Tool::Delete => "Delete",
     };
     let selected_id = selected.0.map(|e| e.index().index()).unwrap_or(u32::MAX);
-    let focused_id = input_focus.get().map(|e| e.index().index()).unwrap_or(u32::MAX);
+    let focused_id = input_focus
+        .get()
+        .map(|e| e.index().index())
+        .unwrap_or(u32::MAX);
     // Testo del campo focussato (per capire se la tastiera arriva)
     let mut focused_text = String::new();
     for (e, prop, editable) in prop_texts.iter() {
@@ -1173,15 +1204,11 @@ fn debug_state_snapshot(
             _ => 9,
         })
         .unwrap_or(99);
-            // Altezza della luce (TopDownY): 0 = luce a terra -> pianeti piatti
-                        let lh = light_heights
-                            .iter()
-                            .next()
-                            .map(|h| h.0)
-                            .unwrap_or(-1.0);
-                        let json = format!(
-                            r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0}}},"field_rects":[{}],"bodies":[{}]}}"#,
-                last_system,
+    // Altezza della luce (TopDownY): 0 = luce a terra -> pianeti piatti
+    let lh = light_heights.iter().next().map(|h| h.0).unwrap_or(-1.0);
+    let json = format!(
+        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0}}},"field_rects":[{}],"bodies":[{}]}}"#,
+        last_system,
         frame,
         tool,
         sim_state.paused,

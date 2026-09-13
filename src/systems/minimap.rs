@@ -1,5 +1,5 @@
-use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
+use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
@@ -205,15 +205,17 @@ fn handle_minimap_click(
     let image_right = image_left + MAP_SIZE;
     let image_bottom = image_top + MAP_SIZE;
 
-    if cursor.x < image_left || cursor.x > image_right
-        || cursor.y < image_top || cursor.y > image_bottom
+    if cursor.x < image_left
+        || cursor.x > image_right
+        || cursor.y < image_top
+        || cursor.y > image_bottom
     {
         return; // click fuori dalla minimap
     }
 
     // Posizione del click in pixel relativi alla minimap (0,0 = top-left)
-    let px = cursor.x - image_left;   // [0, MAP_SIZE]
-    let py = cursor.y - image_top;    // [0, MAP_SIZE]
+    let px = cursor.x - image_left; // [0, MAP_SIZE]
+    let py = cursor.y - image_top; // [0, MAP_SIZE]
 
     let (mm_transform, mm_projection) = match minimap_camera_query.single() {
         Ok(c) => c,

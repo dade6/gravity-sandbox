@@ -23,11 +23,7 @@ fn parse_hex_color(hex: &str) -> Option<[f32; 3]> {
         let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
         let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some([
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-        ])
+        Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
     } else if hex.len() == 3 {
         let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
         let g = u8::from_str_radix(&hex[1..2], 16).ok()?;

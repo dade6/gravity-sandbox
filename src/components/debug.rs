@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use avian2d::prelude::*;
+use bevy::prelude::*;
 
 use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::initial_state::InitialBodyState;
@@ -61,7 +61,7 @@ fn spawn_test_system(
         RigidBody::Dynamic,
         Collider::circle(12.0),
         Mass(50.0),
-        LinearVelocity(Vec2::new(0.0, 0.0)),  // velocità zero — test gravità
+        LinearVelocity(Vec2::new(0.0, 0.0)), // velocità zero — test gravità
         ConstantForce(Vec2::ZERO),
         TrajectoryHistory::default(),
         InitialBodyState {

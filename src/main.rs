@@ -18,11 +18,10 @@ use gravity_sandbox::systems::timeline::TimelinePlugin;
 use gravity_sandbox::systems::tools::ToolPlugin;
 use gravity_sandbox::systems::trajectory::TrajectoryPlugin;
 
-use gravity_sandbox::systems::ui::SandboxUIPlugin;
 use gravity_sandbox::rendering::TexturePlugin;
+use gravity_sandbox::systems::ui::SandboxUIPlugin;
 use gravity_sandbox::version::VERSION;
 use gravity_sandbox::GravitySandboxPlugin;
-
 
 #[cfg(not(target_family = "wasm"))]
 fn main() {
@@ -43,14 +42,23 @@ fn main() {
         .insert_resource(Gravity::ZERO)
         .insert_resource(ClearColor(Color::srgb(0.0, 0.0, 0.0)))
         .add_plugins((
-            GravitySandboxPlugin, DebugSpawnPlugin, CameraControllerPlugin,
-            TimelinePlugin, PersistencePlugin, PropertyEditorPlugin,
-
+            GravitySandboxPlugin,
+            DebugSpawnPlugin,
+            CameraControllerPlugin,
+            TimelinePlugin,
+            PersistencePlugin,
+            PropertyEditorPlugin,
             SandboxUIPlugin,
         ))
         .add_plugins((
-            SelectionPlugin, ToolPlugin,
-            ParallaxPlugin, LightPlugin, LightingPlugin, MinimapPlugin, TrajectoryPlugin, TexturePlugin,
+            SelectionPlugin,
+            ToolPlugin,
+            ParallaxPlugin,
+            LightPlugin,
+            LightingPlugin,
+            MinimapPlugin,
+            TrajectoryPlugin,
+            TexturePlugin,
             SettingsPlugin,
         ))
         .add_plugins((ResetPlugin,))

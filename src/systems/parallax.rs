@@ -1,6 +1,6 @@
-use bevy::prelude::*;
 use crate::systems::camera::MainCamera;
 use bevy::camera::visibility::RenderLayers;
+use bevy::prelude::*;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -156,8 +156,7 @@ fn star_color(rng: &mut StdRng, factor: f32) -> Color {
     } else {
         // Layer 3: white/yellow, opacity 0.7–1.0
         let warmth = rng.gen_range(0.8..1.0);
-        Color::srgb(warmth, warmth * 0.9, warmth * 0.6)
-            .with_alpha(rng.gen_range(0.7..1.0))
+        Color::srgb(warmth, warmth * 0.9, warmth * 0.6).with_alpha(rng.gen_range(0.7..1.0))
     }
 }
 
@@ -169,7 +168,14 @@ fn star_color(rng: &mut StdRng, factor: f32) -> Color {
 /// Layer 1 (factor 0.0) stays fixed relative to the viewport.
 fn update_parallax(
     mut cameras: ParamSet<(
-        Query<&Transform, ((With<Camera2d>, With<MainCamera>), With<Projection>, With<MainCamera>)>,
+        Query<
+            &Transform,
+            (
+                (With<Camera2d>, With<MainCamera>),
+                With<Projection>,
+                With<MainCamera>,
+            ),
+        >,
         Query<(&mut Transform, &ParallaxLayer)>,
     )>,
 ) {

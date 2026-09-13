@@ -29,15 +29,15 @@ use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
 use bevy::ui::widget::TextScroll;
 
-use bevy::text::{EditableText, TextCursorStyle};
 use bevy::input_focus::InputFocus;
+use bevy::text::{EditableText, TextCursorStyle};
 
 use crate::components::celestial::CelestialBody;
+use crate::components::lighting::{LightFalloff, StarGlow, StarLightSettings};
 use crate::systems::reset::ResetMessage;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::{SimulationState, StepMessage};
 use crate::systems::tools::{CurrentTool, PendingDelete, Tool, ToolBtn};
-use crate::components::lighting::{LightFalloff, StarGlow, StarLightSettings};
 
 /// Plugin per l'interfaccia utente Bevy (solo build native/desktop).
 ///
@@ -48,22 +48,20 @@ use crate::components::lighting::{LightFalloff, StarGlow, StarLightSettings};
 
 pub struct SandboxUIPlugin;
 
-
 impl Plugin for SandboxUIPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_ui)
-            .add_systems(
-                Update,
-                (
-                    handle_ui_buttons,
-                    update_property_panel,
-                    sync_property_input_to_body,
-                    update_field_focus_feedback,
-                    update_timeline_buttons,
-                    manage_delete_dialog,
-                    handle_delete_dialog_buttons,
-                ),
-            );
+        app.add_systems(Startup, spawn_ui).add_systems(
+            Update,
+            (
+                handle_ui_buttons,
+                update_property_panel,
+                sync_property_input_to_body,
+                update_field_focus_feedback,
+                update_timeline_buttons,
+                manage_delete_dialog,
+                handle_delete_dialog_buttons,
+            ),
+        );
     }
 }
 
@@ -131,7 +129,6 @@ const INPUT_FOCUS_BG: Color = Color::srgba(0.1, 0.25, 0.4, 0.5);
 const OVERLAY_FG: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
 const DIALOG_BG: Color = Color::srgba(0.12, 0.12, 0.22, 0.95);
 
-
 fn spawn_ui(mut commands: Commands) {
     crate::mark_system("spawn_ui");
     // === Toolbar in alto ===
@@ -143,7 +140,6 @@ fn spawn_ui(mut commands: Commands) {
     // === Property Panel (a destra) ===
     spawn_property_panel(&mut commands);
 }
-
 
 fn spawn_toolbar(commands: &mut Commands) {
     crate::mark_system("spawn_toolbar");
@@ -192,7 +188,11 @@ fn spawn_toolbar(commands: &mut Commands) {
                 ))
                 .with_child((
                     Text::new(*name),
-                    TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
+                    TextFont {
+                        font: FontSource::default(),
+                        font_size: FontSize::Px(14.0),
+                        ..default()
+                    },
                     TextColor(TEXT_COLOR),
                 ));
             }
@@ -215,7 +215,11 @@ fn spawn_toolbar(commands: &mut Commands) {
             ))
             .with_child((
                 Text::new("Reset"),
-                TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
                 TextColor(TEXT_COLOR),
             ));
             // Bottone Salva: sovrascrive assets/preset.json sul server con il
@@ -237,22 +241,34 @@ fn spawn_toolbar(commands: &mut Commands) {
             ))
             .with_child((
                 Text::new("Salva"),
-                TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
                 TextColor(TEXT_COLOR),
             ));
             // Bottone Settings (Ticket 21): apre il modale delle impostazioni
             // globali (gravità/ambient/glow/traiettorie). DOPO Reset/Salva,
             // stesso stile esatto degli altri bottoni.
             crate::systems::settings::spawn_settings_button(bar);
-            bar.spawn((Node { flex_grow: 1.0, ..default() }));
+            bar.spawn(
+                (Node {
+                    flex_grow: 1.0,
+                    ..default()
+                }),
+            );
             bar.spawn((
                 Text::new(format!("Sandbox v{}", crate::version::VERSION)),
-                TextFont { font: FontSource::default(), font_size: FontSize::Px(11.0), ..default() },
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
             ));
         });
 }
-
 
 fn spawn_timeline(commands: &mut Commands) {
     crate::mark_system("spawn_timeline");
@@ -293,19 +309,26 @@ fn spawn_timeline(commands: &mut Commands) {
                 ))
                 .with_child((
                     Text::new(*label),
-                    TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
+                    TextFont {
+                        font: FontSource::default(),
+                        font_size: FontSize::Px(14.0),
+                        ..default()
+                    },
                     TextColor(TEXT_COLOR),
                 ));
             }
             bar.spawn((
                 TimelinSpeed,
                 Text::new("Speed 1.0x"),
-                TextFont { font: FontSource::default(), font_size: FontSize::Px(13.0), ..default() },
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.35)),
             ));
         });
 }
-
 
 fn spawn_property_panel(commands: &mut Commands) {
     crate::mark_system("spawn_property_panel");
@@ -327,7 +350,7 @@ fn spawn_property_panel(commands: &mut Commands) {
                 row_gap: Val::Px(5.0),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::px(8.0, 8.0, 8.0, 8.0),
-                display: Display::None,  // hidden initially
+                display: Display::None, // hidden initially
                 ..default()
             },
             BackgroundColor(PANEL_BG),
@@ -337,7 +360,11 @@ fn spawn_property_panel(commands: &mut Commands) {
             // Title
             panel.spawn((
                 Text::new("Properties"),
-                TextFont { font: FontSource::default(), font_size: FontSize::Px(14.0), ..default() },
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
             ));
 
@@ -345,21 +372,25 @@ fn spawn_property_panel(commands: &mut Commands) {
             panel.spawn((
                 PropField("_status"),
                 Text::new(""),
-                TextFont { font: FontSource::default(), font_size: FontSize::Px(10.0), ..default() },
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(10.0),
+                    ..default()
+                },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.4)),
             ));
 
             // Field definitions: (label, field_key, is_editable)
             let fields: &[(&str, &str, bool)] = &[
-                ("Name:",  "name",   true),
-                ("Type:",  "_type",  false),
-                ("Mass:",  "mass",   true),
-                ("Radius:","radius", true),
-                ("Pos X:", "pos_x",  true),
-                ("Pos Y:", "pos_y",  true),
-                ("Vel X:", "vel_x",  true),
-                ("Vel Y:", "vel_y",  true),
-                ("Color:", "color",  true),
+                ("Name:", "name", true),
+                ("Type:", "_type", false),
+                ("Mass:", "mass", true),
+                ("Radius:", "radius", true),
+                ("Pos X:", "pos_x", true),
+                ("Pos Y:", "pos_y", true),
+                ("Vel X:", "vel_x", true),
+                ("Vel Y:", "vel_y", true),
+                ("Color:", "color", true),
             ];
 
             for &(label, key, editable) in fields {
@@ -378,57 +409,66 @@ fn spawn_property_panel(commands: &mut Commands) {
                 // Label
                 row.with_child((
                     Text::new(label),
-                    TextFont { font: FontSource::default(), font_size: FontSize::Px(11.0), ..default() },
+                    TextFont {
+                        font: FontSource::default(),
+                        font_size: FontSize::Px(11.0),
+                        ..default()
+                    },
                     TextColor(TEXT_COLOR),
                 ));
 
                 if editable {
                     // Input container with border
                     row.with_children(|input_container| {
-                        input_container.spawn((
-                            Node {
-                                flex_grow: 1.0,
-                                height: Val::Px(22.0),
-                                padding: UiRect::horizontal(Val::Px(4.0)),
-                                border: UiRect::all(Val::Px(1.0)),
-                                border_radius: BorderRadius::px(3.0, 3.0, 3.0, 3.0),
-                                align_items: AlignItems::Center,
-                                ..default()
-                            },
-                            BackgroundColor(INPUT_BG),
-                            BorderColor::all(INPUT_BORDER),
-                        ))
-                        .with_child((
-                            EditableText::new(""),
-                            PropInput(key),
-                            TextFont {
-                                font: FontSource::default(),
-                                font_size: FontSize::Px(11.0),
-                                ..default()
-                            },
-                            TextColor(TEXT_COLOR),
-                            TextScroll(Vec2::ZERO),
-                            // Cursore di testo visibile quando il campo ha il focus
-                            TextCursorStyle {
-                                color: Color::WHITE,
-                                selection_color: Color::srgba(0.45, 0.75, 1.0, 0.6),
-                                unfocused_selection_color: Color::srgba(0.45, 0.75, 1.0, 0.2),
-                                selected_text_color: None,
-                            },
-                            // Nodes are required but added automatically via Node requirement on child?
-                            // Let's be explicit:
-                            Node {
-                                width: Val::Percent(100.0),
-                                ..default()
-                            },
-                        ));
+                        input_container
+                            .spawn((
+                                Node {
+                                    flex_grow: 1.0,
+                                    height: Val::Px(22.0),
+                                    padding: UiRect::horizontal(Val::Px(4.0)),
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::px(3.0, 3.0, 3.0, 3.0),
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                },
+                                BackgroundColor(INPUT_BG),
+                                BorderColor::all(INPUT_BORDER),
+                            ))
+                            .with_child((
+                                EditableText::new(""),
+                                PropInput(key),
+                                TextFont {
+                                    font: FontSource::default(),
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(TEXT_COLOR),
+                                TextScroll(Vec2::ZERO),
+                                // Cursore di testo visibile quando il campo ha il focus
+                                TextCursorStyle {
+                                    color: Color::WHITE,
+                                    selection_color: Color::srgba(0.45, 0.75, 1.0, 0.6),
+                                    unfocused_selection_color: Color::srgba(0.45, 0.75, 1.0, 0.2),
+                                    selected_text_color: None,
+                                },
+                                // Nodes are required but added automatically via Node requirement on child?
+                                // Let's be explicit:
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    ..default()
+                                },
+                            ));
                     });
                 } else {
                     // Read-only value text (for Type: field)
                     row.with_child((
                         PropField(key),
                         Text::new(""),
-                        TextFont { font: FontSource::default(), font_size: FontSize::Px(11.0), ..default() },
+                        TextFont {
+                            font: FontSource::default(),
+                            font_size: FontSize::Px(11.0),
+                            ..default()
+                        },
                         TextColor(TEXT_COLOR),
                     ));
                 }
@@ -555,11 +595,7 @@ fn update_timeline_buttons(
     // Update Play/Pause button text
     for (btn, children) in btn_query.iter_mut() {
         if btn.0 == "play" {
-            let new_label = if sim_state.paused {
-                "Play"
-            } else {
-                "Pause"
-            };
+            let new_label = if sim_state.paused { "Play" } else { "Pause" };
             for child in children.iter() {
                 if let Ok(mut text) = text_queries.p0().get_mut(child) {
                     if text.0 != new_label {
@@ -644,7 +680,11 @@ fn update_property_panel(
     // stella (luminous).
     let is_star = body.luminous;
     for mut node in node_queries.p1().iter_mut() {
-        node.display = if is_star { Display::Flex } else { Display::None };
+        node.display = if is_star {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
     let star_data = stars_query.get(entity).ok();
     let light = star_data
@@ -1035,7 +1075,6 @@ fn manage_delete_dialog(
     }
 }
 
-
 fn spawn_delete_dialog(commands: &mut Commands, window_size: Vec2, body_name: &str) {
     commands
         .spawn((
@@ -1077,7 +1116,11 @@ fn spawn_delete_dialog(commands: &mut Commands, window_size: Vec2, body_name: &s
                     // Confirmation text
                     dialog.spawn((
                         Text::new(format!("Delete \"{}\"?", body_name)),
-                        TextFont { font: FontSource::default(), font_size: FontSize::Px(15.0), ..default() },
+                        TextFont {
+                            font: FontSource::default(),
+                            font_size: FontSize::Px(15.0),
+                            ..default()
+                        },
                         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
                     ));
 
@@ -1090,46 +1133,56 @@ fn spawn_delete_dialog(commands: &mut Commands, window_size: Vec2, body_name: &s
                         })
                         .with_children(|buttons| {
                             // Confirm button
-                            buttons.spawn((
-                                Button,
-                                DeleteDialogBtn("confirm"),
-                                Node {
-                                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                                    align_items: AlignItems::Center,
-                                    justify_content: JustifyContent::Center,
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgba(0.8, 0.15, 0.15, 0.7)),
-                                BorderColor::all(Color::srgba(1.0, 0.2, 0.2, 0.4)),
-                            ))
-                            .with_child((
-                                Text::new("Delete"),
-                                TextFont { font: FontSource::default(), font_size: FontSize::Px(13.0), ..default() },
-                                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
-                            ));
+                            buttons
+                                .spawn((
+                                    Button,
+                                    DeleteDialogBtn("confirm"),
+                                    Node {
+                                        padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::Center,
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.8, 0.15, 0.15, 0.7)),
+                                    BorderColor::all(Color::srgba(1.0, 0.2, 0.2, 0.4)),
+                                ))
+                                .with_child((
+                                    Text::new("Delete"),
+                                    TextFont {
+                                        font: FontSource::default(),
+                                        font_size: FontSize::Px(13.0),
+                                        ..default()
+                                    },
+                                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                                ));
 
                             // Cancel button
-                            buttons.spawn((
-                                Button,
-                                DeleteDialogBtn("cancel"),
-                                Node {
-                                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                                    align_items: AlignItems::Center,
-                                    justify_content: JustifyContent::Center,
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgba(0.2, 0.2, 0.3, 0.6)),
-                                BorderColor::all(BORDER_COLOR),
-                            ))
-                            .with_child((
-                                Text::new("Annulla"),
-                                TextFont { font: FontSource::default(), font_size: FontSize::Px(13.0), ..default() },
-                                TextColor(TEXT_COLOR),
-                            ));
+                            buttons
+                                .spawn((
+                                    Button,
+                                    DeleteDialogBtn("cancel"),
+                                    Node {
+                                        padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::Center,
+                                        border: UiRect::all(Val::Px(1.0)),
+                                        border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgba(0.2, 0.2, 0.3, 0.6)),
+                                    BorderColor::all(BORDER_COLOR),
+                                ))
+                                .with_child((
+                                    Text::new("Annulla"),
+                                    TextFont {
+                                        font: FontSource::default(),
+                                        font_size: FontSize::Px(13.0),
+                                        ..default()
+                                    },
+                                    TextColor(TEXT_COLOR),
+                                ));
                         });
                 });
         });
@@ -1154,7 +1207,9 @@ fn handle_delete_dialog_buttons(
                 *bg = BTN_PRESS.into();
                 action = Some(btn.0);
             }
-            Interaction::Hovered => { *bg = BTN_HOVER.into(); }
+            Interaction::Hovered => {
+                *bg = BTN_HOVER.into();
+            }
             Interaction::None => {
                 // Reset to default colors
                 *bg = match btn.0 {
@@ -1193,17 +1248,25 @@ fn handle_delete_dialog_buttons(
 
 // === Gestione unificata click e hover ===
 
-
 fn handle_ui_buttons(
     // Query principale: colori/highlight + cambio tool. SENZA filtro
     // `Changed<Interaction>`: deve aggiornare i colori anche a bottoni
     // invariati (es. highlight del tool attivo in stato None).
-    mut interaction_query: Query<(
-        &Interaction,
-        Option<&ToolBtn>,
-        Option<&TimelinBtn>,
-        &mut BackgroundColor,
-    ), (Without<DeleteDialogBtn>, Without<DeleteDialog>, Without<crate::systems::settings::SettingsBtn>, Without<crate::systems::settings::SettingsCloseBtn>, Without<crate::systems::settings::SettingsToggleBtn>)>,
+    mut interaction_query: Query<
+        (
+            &Interaction,
+            Option<&ToolBtn>,
+            Option<&TimelinBtn>,
+            &mut BackgroundColor,
+        ),
+        (
+            Without<DeleteDialogBtn>,
+            Without<DeleteDialog>,
+            Without<crate::systems::settings::SettingsBtn>,
+            Without<crate::systems::settings::SettingsCloseBtn>,
+            Without<crate::systems::settings::SettingsToggleBtn>,
+        ),
+    >,
     // Query separata con edge detection per i toggle (play/step/reset):
     // `Changed<Interaction>` scatta UNA volta per transizione di stato
     // (es. None/Hovered -> Pressed), NON a ogni frame mentre il bottone
@@ -1211,7 +1274,11 @@ fn handle_ui_buttons(
     // flapperebbe decine di volte al secondo tenendo premuto il mouse.
     toggle_query: Query<
         (&Interaction, &TimelinBtn),
-        (Changed<Interaction>, Without<DeleteDialogBtn>, Without<DeleteDialog>),
+        (
+            Changed<Interaction>,
+            Without<DeleteDialogBtn>,
+            Without<DeleteDialog>,
+        ),
     >,
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
@@ -1286,7 +1353,9 @@ fn handle_ui_buttons(
                     }
                 }
             }
-            Interaction::Hovered => { *bg = BTN_HOVER.into(); }
+            Interaction::Hovered => {
+                *bg = BTN_HOVER.into();
+            }
             Interaction::None => {
                 if let Some(t) = tool {
                     // Mantieni l'highlight del tool attivo anche senza interazione
@@ -1334,11 +1403,7 @@ fn parse_hex_color(hex: &str) -> Option<[f32; 3]> {
         let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
         let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
         let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        Some([
-            r as f32 / 255.0,
-            g as f32 / 255.0,
-            b as f32 / 255.0,
-        ])
+        Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
     } else if hex.len() == 3 {
         let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
         let g = u8::from_str_radix(&hex[1..2], 16).ok()?;

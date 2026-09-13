@@ -275,10 +275,7 @@ fn keypad_buttons(
     // ParamSet obbligatorio: Query<&mut EditableText> e Query<&EditableText>
     // accedono allo stesso componente -> senza ParamSet è un B0001 (panic
     // all'avvio su WASM)
-    mut queries: ParamSet<(
-        Query<&mut EditableText>,
-        Query<(&PropInput, &EditableText)>,
-    )>,
+    mut queries: ParamSet<(Query<&mut EditableText>, Query<(&PropInput, &EditableText)>)>,
     mut bodies: Query<(
         &mut CelestialBody,
         &mut Transform,

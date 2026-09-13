@@ -21,7 +21,9 @@ use crate::components::celestial::CelestialBody;
 use crate::components::lighting::{
     AmbientLight, GlowCurve, LightFalloff, StarGlow, StarLightSettings,
 };
-use crate::rendering::textures::{build_image, generate_radial_glow_texture, generate_sphere_normal_map};
+use crate::rendering::textures::{
+    build_image, generate_radial_glow_texture, generate_sphere_normal_map,
+};
 
 /// Configurazione luce: disco circolare della dimensione della stella.
 /// I valori LIVE vengono letti dal componente `StarLightSettings` attaccato
@@ -177,7 +179,9 @@ fn lock_body_rotation(
     bodies: Query<Entity, (With<CelestialBody>, Without<LockedAxes>)>,
 ) {
     for entity in bodies.iter() {
-        commands.entity(entity).try_insert(LockedAxes::ROTATION_LOCKED);
+        commands
+            .entity(entity)
+            .try_insert(LockedAxes::ROTATION_LOCKED);
     }
 }
 
@@ -197,11 +201,7 @@ fn setup_firefly_camera(
             bevy::core_pipeline::tonemapping::Tonemapping::Reinhard,
             bevy::camera::Hdr,
             FireflyConfig {
-                ambient_color: Color::srgb(
-                    ambient.color[0],
-                    ambient.color[1],
-                    ambient.color[2],
-                ),
+                ambient_color: Color::srgb(ambient.color[0], ambient.color[1], ambient.color[2]),
                 ambient_brightness: ambient.intensity,
                 soft_shadows: true,
                 // v0.14.59 (con patch vendored nella shader): z_sorting=true
@@ -372,8 +372,16 @@ fn attach_normal_maps(
 /// senza doverli ri-applicare in un secondo tempo.
 fn spawn_star_lights(
     stars: Query<
-        (Entity, &CelestialBody, Option<&StarLightSettings>, Option<&StarGlow>),
-        (Without<FireflyLightAttached>, Without<FireflyOccluderAttached>),
+        (
+            Entity,
+            &CelestialBody,
+            Option<&StarLightSettings>,
+            Option<&StarGlow>,
+        ),
+        (
+            Without<FireflyLightAttached>,
+            Without<FireflyOccluderAttached>,
+        ),
     >,
     mut commands: Commands,
 ) {
@@ -560,7 +568,10 @@ fn apply_ambient_light(
 /// v0.14.79: NON tocca `light.color` — l'alpha del colore trasporta Halo
 /// Brightness ed è gestito da `apply_star_glow_settings`.
 fn apply_star_light_settings(
-    bodies: Query<(&CelestialBody, &Children, &StarLightSettings), (Changed<StarLightSettings>, With<FireflyLightAttached>)>,
+    bodies: Query<
+        (&CelestialBody, &Children, &StarLightSettings),
+        (Changed<StarLightSettings>, With<FireflyLightAttached>),
+    >,
     mut lights: Query<&mut PointLight2d>,
 ) {
     for (body, children, s) in &bodies {
@@ -607,12 +618,7 @@ fn apply_star_glow_settings(
         for child in children.iter() {
             if let Ok(mut light) = lights.get_mut(child) {
                 let srgba = light.color.to_srgba();
-                light.color = Color::srgba(
-                    srgba.red,
-                    srgba.green,
-                    srgba.blue,
-                    g.brightness,
-                );
+                light.color = Color::srgba(srgba.red, srgba.green, srgba.blue, g.brightness);
             }
         }
         // 1) Sprite glow: alpha base pura.
@@ -625,11 +631,13 @@ fn apply_star_glow_settings(
             match (is_inner, is_outer) {
                 (true, false) => {
                     sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.inner_scale));
-                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], inner_alpha);
+                    sp.color =
+                        Color::srgba(body.color[0], body.color[1], body.color[2], inner_alpha);
                 }
                 (false, true) => {
                     sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * g.outer_scale));
-                    sp.color = Color::srgba(body.color[0], body.color[1], body.color[2], outer_alpha);
+                    sp.color =
+                        Color::srgba(body.color[0], body.color[1], body.color[2], outer_alpha);
                 }
                 _ => {}
             }
@@ -681,7 +689,10 @@ mod tests {
                 z_back = t.translation.z;
             }
         }
-        assert!(z_front < 0.0 && z_back < 0.0, "z negativi ({z_front}, {z_back})");
+        assert!(
+            z_front < 0.0 && z_back < 0.0,
+            "z negativi ({z_front}, {z_back})"
+        );
         assert!(
             z_back < z_front - 1.0,
             "il pianeta dietro deve avere z PIU' BASSO (riceve l'ombra): {z_front} vs {z_back}"
@@ -719,7 +730,7 @@ mod tests {
         let color = Color::srgba(1.0, 0.9, 0.3, 0.7); // brightness=0.7
         let halo = color.to_srgba().alpha;
         let intensity = 3.0; // Planet Light alto
-        // Pixel SFONDO (normal.a == 0): select(intensity, halo, true) = halo.
+                             // Pixel SFONDO (normal.a == 0): select(intensity, halo, true) = halo.
         let surface_background = if true { halo } else { intensity };
         assert_eq!(surface_background, 0.7, "sfondo usa Halo, non Planet Light");
         // Pixel PIANETA (normal.a > 0): select = intensity.
@@ -740,6 +751,10 @@ mod tests {
             lin.alpha
         );
         let v4 = lin.to_vec4();
-        assert!((v4.w - 0.42).abs() < 1e-6, "alpha persa in to_vec4: {}", v4.w);
+        assert!(
+            (v4.w - 0.42).abs() < 1e-6,
+            "alpha persa in to_vec4: {}",
+            v4.w
+        );
     }
 }
