@@ -1244,6 +1244,7 @@ fn handle_ui_buttons(
             "step" => {
                 if sim_state.paused {
                     virtual_time.unpause();
+                    physics_time.unpause();
                     step_writer.write(StepMessage);
                 }
             }
