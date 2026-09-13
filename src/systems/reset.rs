@@ -1,5 +1,6 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use std::collections::VecDeque;
 
 use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::initial_state::InitialBodyState;
@@ -29,10 +30,7 @@ impl Plugin for ResetPlugin {
 /// quello iniziale del corpo.
 fn lazy_init_initial_state(
     mut commands: Commands,
-    bodies: Query<
-        (Entity, &Transform, &LinearVelocity, &CelestialBody),
-        Without<InitialBodyState>,
-    >,
+    bodies: Query<(Entity, &Transform, &LinearVelocity, &CelestialBody), Without<InitialBodyState>>,
 ) {
     crate::mark_system("lazy_init_initial_state");
 
@@ -129,13 +127,7 @@ mod tests {
     }
 
     /// Corpo di test completo di stato iniziale (come spawnato dai plugin).
-    fn spawn_body(
-        commands: &mut Commands,
-        pos: Vec2,
-        vel: Vec2,
-        mass: f32,
-        radius: f32,
-    ) -> Entity {
+    fn spawn_body(commands: &mut Commands, pos: Vec2, vel: Vec2, mass: f32, radius: f32) -> Entity {
         commands
             .spawn((
                 CelestialBody {
@@ -186,8 +178,11 @@ mod tests {
         // Rovina lo stato: sposta, cambia velocità/massa/raggio, sporca la traccia
         {
             let mut world = app.world_mut();
-            world.entity_mut(entity).get_mut::<Transform>().unwrap().translation =
-                Vec3::new(999.0, -555.0, 0.0);
+            world
+                .entity_mut(entity)
+                .get_mut::<Transform>()
+                .unwrap()
+                .translation = Vec3::new(999.0, -555.0, 0.0);
             world
                 .entity_mut(entity)
                 .get_mut::<LinearVelocity>()
@@ -204,7 +199,7 @@ mod tests {
                 .entity_mut(entity)
                 .get_mut::<TrajectoryHistory>()
                 .unwrap()
-                .positions = vec![Vec2::new(1.0, 1.0), Vec2::new(2.0, 2.0)];
+                .positions = VecDeque::from(vec![Vec2::new(1.0, 1.0), Vec2::new(2.0, 2.0)]);
         }
 
         // Trigger reset via message
@@ -255,7 +250,12 @@ mod tests {
 
         let world = app.world();
         assert_eq!(
-            world.entity(entity).get::<Transform>().unwrap().translation.truncate(),
+            world
+                .entity(entity)
+                .get::<Transform>()
+                .unwrap()
+                .translation
+                .truncate(),
             spawn_pos
         );
     }
@@ -300,8 +300,10 @@ mod tests {
             e
         };
         // Inserisci SimulationState non in pausa (play mode)
-        app.world_mut()
-            .insert_resource(SimulationState { paused: false, speed: 2.0 });
+        app.world_mut().insert_resource(SimulationState {
+            paused: false,
+            speed: 2.0,
+        });
         app.world_mut()
             .entity_mut(entity)
             .get_mut::<Transform>()
@@ -318,7 +320,12 @@ mod tests {
         assert!(!sim.paused, "reset must not pause the simulation");
         assert_eq!(sim.speed, 2.0);
         assert_eq!(
-            world.entity(entity).get::<Transform>().unwrap().translation.truncate(),
+            world
+                .entity(entity)
+                .get::<Transform>()
+                .unwrap()
+                .translation
+                .truncate(),
             Vec2::ZERO
         );
     }
@@ -441,7 +448,12 @@ mod tests {
 
         let world = app.world();
         assert_eq!(
-            world.entity(entity).get::<Transform>().unwrap().translation.truncate(),
+            world
+                .entity(entity)
+                .get::<Transform>()
+                .unwrap()
+                .translation
+                .truncate(),
             Vec2::new(400.0, -100.0),
             "body without TrajectoryHistory must still be reset"
         );

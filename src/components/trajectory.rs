@@ -1,19 +1,43 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// Component that stores historical positions of a celestial body
 /// for rendering trails.
+///
+/// Uses a ring buffer ([`VecDeque`]) so both push and eviction are O(1)
+/// (the old `Vec` implementation memmoved the whole buffer on every
+/// `remove(0)`).
 #[derive(Component)]
 pub struct TrajectoryHistory {
-    pub positions: Vec<Vec2>,
+    pub positions: VecDeque<Vec2>,
     pub max_len: usize,
 }
 
 impl Default for TrajectoryHistory {
     fn default() -> Self {
         Self {
-            positions: Vec::new(),
+            positions: VecDeque::with_capacity(500),
             max_len: 500,
+        }
+    }
+}
+
+impl TrajectoryHistory {
+    /// Appends a new sample, evicting the oldest one when the buffer
+    /// is at capacity. O(1).
+    pub fn push_sample(&mut self, pos: Vec2) {
+        if self.positions.len() == self.max_len {
+            self.positions.pop_front();
+        }
+        self.positions.push_back(pos);
+    }
+
+    /// Applies a new capacity limit, evicting oldest samples if it shrinks.
+    pub fn set_max_len(&mut self, max_len: usize) {
+        self.max_len = max_len;
+        while self.positions.len() > max_len {
+            self.positions.pop_front();
         }
     }
 }
@@ -43,9 +67,9 @@ impl Default for TrajectoryConfig {
     }
 }
 
-/// Per-frame counter to enforce the sample interval.
+/// Per-tick counter to enforce the sample interval (physics ticks).
 #[derive(Resource, Default)]
-pub struct TrajectoryFrameCounter(pub u64);
+pub struct TrajectoryTickCounter(pub u64);
 
 /// Resource holding the prediction trail (RK4 positions) for the selected body.
 #[derive(Resource, Default)]

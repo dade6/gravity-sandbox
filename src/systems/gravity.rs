@@ -2,10 +2,7 @@ use avian2d::prelude::*;
 use bevy::prelude::*;
 
 use crate::components::celestial::CelestialBody;
-use crate::systems::persistence::GravitationalConstant;
-
-/// Softening factor to avoid singularities at close distances
-const SOFTENING: f32 = 5.0;
+use crate::systems::persistence::{GravitationalConstant, SOFTENING};
 
 /// N-body gravity system.
 /// Runs in FixedUpdate to sync with Avian's physics solver.

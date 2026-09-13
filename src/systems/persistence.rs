@@ -53,6 +53,11 @@ pub struct LevelData {
 #[derive(Resource)]
 pub struct GravitationalConstant(pub f32);
 
+/// Softening factor used to avoid singularities at close distances.
+/// Single source of truth shared by the gravity system (gravity.rs) and
+/// the trajectory predictor (trajectory.rs) — the two MUST stay in sync.
+pub const SOFTENING: f32 = 5.0;
+
 impl Default for GravitationalConstant {
     fn default() -> Self {
         Self(5000.0)
@@ -71,11 +76,14 @@ impl Plugin for PersistencePlugin {
             .init_resource::<AmbientLight>()
             .init_resource::<GlowCurve>()
             .init_resource::<TrajectoryConfig>()
-            .add_systems(Update, (
-                process_load_commands,
-                save_level_system,
-                handle_save_load_shortcuts,
-            ));
+            .add_systems(
+                Update,
+                (
+                    process_load_commands,
+                    save_level_system,
+                    handle_save_load_shortcuts,
+                ),
+            );
     }
 }
 
@@ -286,9 +294,9 @@ fn process_load_commands(
                     .insert(body_data.light.clone().unwrap_or_default())
                     .insert(body_data.glow.clone().unwrap_or_default());
             } else {
-                commands.entity(entity).insert(MeshMaterial2d(materials.add(
-                    ColorMaterial::from_color(color),
-                )));
+                commands.entity(entity).insert(MeshMaterial2d(
+                    materials.add(ColorMaterial::from_color(color)),
+                ));
             }
         }
 
@@ -308,9 +316,7 @@ fn process_load_commands(
 /// On WASM, Ctrl+S triggers a save by setting SAVE_REQUESTED (picked up
 /// by save_level_system next frame). Ctrl+O sets LOAD_REQUESTED so JS
 /// can show a file-open dialog.
-fn handle_save_load_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-) {
+fn handle_save_load_shortcuts(keys: Res<ButtonInput<KeyCode>>) {
     crate::mark_system("handle_save_load_shortcuts");
 
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
