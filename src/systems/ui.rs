@@ -155,11 +155,20 @@ fn spawn_toolbar(commands: &mut Commands) {
                 top: Val::Px(0.0),
                 left: Val::Px(0.0),
                 width: Val::Percent(100.0),
-                height: Val::Px(52.0),
+                // RESPONSIVE (portrait iPhone ~390px): 7 bottoni da ~70-90px
+                // = ~600px su una riga -> Salva/Settings finivano fuori
+                // schermo. Wrap: i bottoni vanno a capo da soli su schermi
+                // stretti; height Auto fa crescere la barra su due righe
+                // (52px = min su desktop, dove non c'è wrap).
+                min_height: Val::Px(52.0),
+                height: Val::Auto,
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 align_items: AlignItems::Center,
-                padding: UiRect::horizontal(Val::Px(12.0)),
+                align_content: AlignContent::FlexStart,
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
                 column_gap: Val::Px(8.0),
+                row_gap: Val::Px(4.0),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),

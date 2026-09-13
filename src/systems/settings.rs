@@ -147,7 +147,6 @@ fn handle_settings_button(
     pending: Res<PendingDelete>,
     dialog_query: Query<Entity, With<SettingsDialog>>,
     mut commands: Commands,
-    windows: Query<&Window>,
     grav: Res<GravitationalConstant>,
     ambient: Res<AmbientLight>,
     glow: Res<GlowCurve>,
@@ -177,13 +176,10 @@ fn handle_settings_button(
     if pending.0.is_some() || dialog_query.iter().next().is_some() {
         return;
     }
-    let window_size = windows
-        .single()
-        .map(|w| Vec2::new(w.width(), w.height()))
-        .unwrap_or(Vec2::new(800.0, 600.0));
+    // N.B. niente window_size: il modale è responsive (anchor ai 4 lati),
+    // non cattura la size allo spawn.
     spawn_settings_dialog(
         &mut commands,
-        window_size,
         (&grav, &ambient, &glow, &trajectory),
     );
 }
@@ -242,7 +238,6 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
 
 fn spawn_settings_dialog(
     commands: &mut Commands,
-    window_size: Vec2,
     snapshot: (&GravitationalConstant, &AmbientLight, &GlowCurve, &TrajectoryConfig),
 ) {
     let ctx = SettingsSnapshot {
@@ -262,8 +257,12 @@ fn spawn_settings_dialog(
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),
                 top: Val::Px(0.0),
-                width: Val::Px(window_size.x),
-                height: Val::Px(window_size.y),
+                // RESPONSIVE (Ticket 21 portrait): niente Px(window_size)
+                // catturati allo spawn — alla rotazione lo schermo cambia ma
+                // il modale no. Come il property panel: percentuali + anchor
+                // ai 4 lati, il layout si adatta da solo a qualunque size.
+                right: Val::Px(0.0),
+                bottom: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
@@ -284,8 +283,13 @@ fn spawn_settings_dialog(
                         padding: UiRect::all(Val::Px(16.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::px(10.0, 10.0, 10.0, 10.0),
-                        width: Val::Px(300.0),
-                        max_height: Val::Px(window_size.y * 0.8),
+                        // RESPONSIVE: in portrait (iPhone ~390px) 300px fissi
+                        // + padding sforano — il box segue lo schermo e si cap
+                        // a 340px su desktop. max_height in %: si adatta alla
+                        // rotazione senza size catturate allo spawn.
+                        width: Val::Percent(92.0),
+                        max_width: Val::Px(340.0),
+                        max_height: Val::Percent(80.0),
                         overflow: Overflow::scroll_y(),
                         ..default()
                     },

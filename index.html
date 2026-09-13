@@ -261,7 +261,7 @@
     </script>
 
     <script type="module">
-        import init, * as sandbox from './gravity_sandbox_p84.js?v=0.14.84';
+        import init, * as sandbox from './gravity_sandbox_p85.js?v=0.14.85';
         import { loadWasmLifecycle, createLoaderEvents } from './wasm_runtime.js';
         import { createLoadingBar } from './loading_bar.js';
 
@@ -315,8 +315,8 @@
         // glue — il pattern Safari/CORS resta preservato).
         // La UI è loading_bar.js (createLoadingBar) montata su #ui-overlay:
         // gli eventi del bus vengono mappati 1:1 sulle fasi della barra.
-        const WASM_URL = new URL('gravity_sandbox_p84_bg.wasm?v=0.14.84', location.href).href;
-        const WASM_SIZE_URL = new URL('gravity_sandbox_p84_bg.wasm.size?v=0.14.84', location.href).href;
+        const WASM_URL = new URL('gravity_sandbox_p85_bg.wasm?v=0.14.85', location.href).href;
+        const WASM_SIZE_URL = new URL('gravity_sandbox_p85_bg.wasm.size?v=0.14.85', location.href).href;
         const MAX_INIT_TRIES = 3;
 
         // ---- Barra di caricamento: componente loading_bar.js ---------------
