@@ -36,7 +36,7 @@ use crate::components::celestial::CelestialBody;
 use crate::components::lighting::{LightFalloff, StarGlow, StarLightSettings};
 use crate::systems::reset::ResetMessage;
 use crate::systems::selection::SelectedBody;
-use crate::systems::timeline::{SimulationState, StepMessage};
+use crate::systems::timeline::{PendingSteps, SimulationState, StepMessage};
 use crate::systems::tools::{CurrentTool, PendingDelete, Tool, ToolBtn};
 
 /// Plugin per l'interfaccia utente Bevy (solo build native/desktop).
@@ -1283,6 +1283,7 @@ fn handle_ui_buttons(
     mut sim_state: ResMut<SimulationState>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut physics_time: ResMut<Time<Physics>>,
+    mut pending_steps: ResMut<PendingSteps>,
     mut current_tool: ResMut<CurrentTool>,
     mut pending: ResMut<PendingDelete>,
     mut step_writer: MessageWriter<StepMessage>,
@@ -1298,6 +1299,9 @@ fn handle_ui_buttons(
         match timeline.0 {
             "play" => {
                 sim_state.paused = !sim_state.paused;
+                // Play/Pause azzera gli step armati: Play = esecuzione
+                // continua, Pause = stato congelato pulito.
+                pending_steps.0 = 0;
                 if sim_state.paused {
                     virtual_time.pause();
                     physics_time.pause();
@@ -1310,8 +1314,13 @@ fn handle_ui_buttons(
             }
             "step" => {
                 if sim_state.paused {
-                    virtual_time.unpause();
-                    physics_time.unpause();
+                    // Arma UN tick nel sequencer (arm_steps in
+                    // RunFixedMainLoopSystems::BeforeFixedMainLoop esegue
+                    // esattamente 1/64 s di simulazione al frame successivo).
+                    // NON unpausare gli orologi qui: il fixed loop e' gia'
+                    // passato in questo frame, l'unpause in Update e' il bug
+                    // storico che rendeva lo step un no-op.
+                    pending_steps.0 = pending_steps.0.saturating_add(1);
                     step_writer.write(StepMessage);
                 }
             }

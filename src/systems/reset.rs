@@ -6,6 +6,7 @@ use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::initial_state::InitialBodyState;
 use crate::components::trajectory::TrajectoryHistory;
 use crate::systems::selection::SelectedBody;
+use crate::systems::timeline::PendingSteps;
 use crate::systems::tools::PendingDelete;
 
 /// Messaggio per richiedere il reset della simulazione allo stato iniziale
@@ -57,6 +58,7 @@ fn reset_simulation(
     mut reset_reader: MessageReader<ResetMessage>,
     mut selected: ResMut<SelectedBody>,
     mut pending: ResMut<PendingDelete>,
+    mut pending_steps: ResMut<PendingSteps>,
     mut bodies: Query<(
         &InitialBodyState,
         &mut Transform,
@@ -71,6 +73,10 @@ fn reset_simulation(
     if reset_reader.read().next().is_none() {
         return;
     }
+    // Il reset riporta i corpi allo stato iniziale: eventuali step armati
+    // (click Step immediatamente precedenti) non devono avanzare la fisica
+    // dallo stato appena ripristinato.
+    pending_steps.0 = 0;
 
     // Se il preset esterno (assets/preset.json) è stato caricato su WASM,
     // il Reset chiede a JS di RI-FETCHARE il file dal server (cache-buster)
@@ -122,6 +128,7 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<SelectedBody>()
             .init_resource::<PendingDelete>()
+            .init_resource::<PendingSteps>()
             .add_plugins(ResetPlugin);
         app
     }
