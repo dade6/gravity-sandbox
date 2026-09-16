@@ -134,6 +134,12 @@ mod js_bridge {
     /// DEBUG: snapshot JSON dello stato interno (tool, drag, selezione, corpi)
     pub static DEBUG_STATE: Mutex<String> = Mutex::new(String::new());
 
+    /// DEBUG: snapshot JSON dello stato ghost (dirty, computed/horizon tick,
+    /// horizon_seconds, n. corpi, lunghezze trail, marker). Riempito ogni
+    /// frame dal sistema `debug_ghost_snapshot` (solo wasm32): serve per
+    /// verificare che l'orizzonte impostato nel pannello arrivi al ghost.
+    pub static GHOST_DEBUG_STATE: Mutex<String> = Mutex::new(String::new());
+
     /// Tastiera mobile: testo del campo focussato inviato da JS (iOS)
     pub static TEXT_INPUT_CMD: Mutex<Option<String>> = Mutex::new(None);
     /// 0=off, 1=select-all (apertura campo), 2=replace (digitazione)
@@ -213,6 +219,20 @@ pub fn debug_state() -> String {
     #[cfg(target_arch = "wasm32")]
     {
         if let Ok(s) = crate::js_bridge::DEBUG_STATE.lock() {
+            return s.clone();
+        }
+    }
+    "{}".to_string()
+}
+
+/// DEBUG: legge lo snapshot dello stato ghost (dirty, computed/horizon,
+/// horizon_seconds, trail lens, marker). Riempito ogni frame dal sistema
+/// `debug_ghost_snapshot` (solo wasm32).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn ghost_debug_state() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(s) = crate::js_bridge::GHOST_DEBUG_STATE.lock() {
             return s.clone();
         }
     }
@@ -434,6 +454,7 @@ pub fn wasm_main() {
         Update,
         (
             debug_state_snapshot,
+            debug_ghost_snapshot,
             apply_mobile_text_input,
             clear_focus_on_outside_press,
         ),
@@ -1235,6 +1256,32 @@ fn debug_state_snapshot(
         parts.join(",")
     );
     if let Ok(mut shared) = crate::js_bridge::DEBUG_STATE.lock() {
+        *shared = json;
+    }
+}
+
+/// Snapshot compatto dello stato ghost (solo wasm32): dirty, tick calcolati
+/// vs orizzonte, horizon_seconds della config, n. corpi, lunghezze trail e
+/// marker. Sistema separato da `debug_state_snapshot` (Bevy non implementa
+/// `System` oltre i 16 parametri).
+#[cfg(target_arch = "wasm32")]
+fn debug_ghost_snapshot(
+    ghost: Res<crate::components::trajectory::GhostPrediction>,
+    ghost_cfg: Res<crate::components::trajectory::TrajectoryConfig>,
+) {
+    crate::mark_system("debug_ghost_snapshot");
+    let trail_lens: Vec<String> = ghost.trails.iter().map(|t| t.len().to_string()).collect();
+    let json = format!(
+        r#"{{"dirty":{},"computed":{},"horizon":{},"horizon_s":{},"bodies":{},"trails":[{}],"markers":{}}}"#,
+        ghost.dirty,
+        ghost.computed_ticks,
+        ghost.horizon_ticks,
+        ghost_cfg.horizon_seconds,
+        ghost.bodies.len(),
+        trail_lens.join(","),
+        ghost.collision_markers.len(),
+    );
+    if let Ok(mut shared) = crate::js_bridge::GHOST_DEBUG_STATE.lock() {
         *shared = json;
     }
 }

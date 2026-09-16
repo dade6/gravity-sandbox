@@ -250,6 +250,9 @@ fn process_load_commands(
         trajectory.history_length = level.trajectory.history_length;
         trajectory.prediction_steps = level.trajectory.prediction_steps;
         trajectory.sample_interval = level.trajectory.sample_interval;
+        // T22-D: ghost horizon in sim-seconds (era dimenticato: il load
+        // resettava di fatto l'orizzonte senza aggiornarlo dal preset).
+        trajectory.horizon_seconds = level.trajectory.horizon_seconds;
 
         // Spawn new bodies from the level data
         for body_data in &level.bodies {
