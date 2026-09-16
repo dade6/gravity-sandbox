@@ -394,6 +394,7 @@ mod tests {
                 history_length: 250,
                 prediction_steps: 120,
                 sample_interval: 3,
+                horizon_seconds: 300.0,
             },
         };
         let json = serde_json::to_string(&level).unwrap();
@@ -428,6 +429,8 @@ mod tests {
         assert_eq!(l.trajectory.history_length, 500);
         assert_eq!(l.trajectory.prediction_steps, 200);
         assert_eq!(l.trajectory.sample_interval, 2);
+        // T22-D: preset senza orizzonte -> default 300.0 s (serde default T22-A)
+        assert!((l.trajectory.horizon_seconds - 300.0).abs() < f32::EPSILON);
     }
 
     /// Ticket 21: preset con sezione "trajectory" parziale — i campi mancanti
@@ -441,5 +444,21 @@ mod tests {
         // Campi assenti -> default
         assert_eq!(l.trajectory.prediction_steps, 200);
         assert_eq!(l.trajectory.sample_interval, 2);
+        // T22-D: sezione trajectory senza orizzonte -> default 300.0 s
+        assert!((l.trajectory.horizon_seconds - 300.0).abs() < f32::EPSILON);
+    }
+
+    /// T22-D: round-trip serde di un preset VECCHIO (sezione trajectory senza
+    /// `horizon_seconds`, come salvato prima di T22-A): carica con default
+    /// 300.0 e il re-save include l'orizzonte.
+    #[test]
+    fn legacy_trajectory_without_horizon_roundtrips_with_default() {
+        let legacy = r#"{"name":"Old","gravity_constant":5000.0,"bodies":[],"trajectory":{"enabled":true,"history_length":500,"prediction_steps":200,"sample_interval":2}}"#;
+        let l: LevelData = serde_json::from_str(legacy).unwrap();
+        assert!((l.trajectory.horizon_seconds - 300.0).abs() < f32::EPSILON);
+        let json = serde_json::to_string(&l).unwrap();
+        assert!(json.contains("horizon_seconds"));
+        let back: LevelData = serde_json::from_str(&json).unwrap();
+        assert!((back.trajectory.horizon_seconds - 300.0).abs() < f32::EPSILON);
     }
 }

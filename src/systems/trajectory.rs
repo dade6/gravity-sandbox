@@ -1,95 +1,14 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use std::collections::VecDeque;
 
 use crate::components::celestial::CelestialBody;
 use crate::components::trajectory::{
-    PredictionTrail, TrajectoryConfig, TrajectoryHistory, TrajectoryTickCounter,
+    GhostBody, GhostPrediction, TrajectoryConfig, TrajectoryHistory, TrajectoryTickCounter,
 };
 use crate::systems::persistence::{GravitationalConstant, SOFTENING};
 use crate::systems::selection::SelectedBody;
-
-// ============================================================
-// RK4 N-body integrator (T11-B)
-// ============================================================
-
-/// Compute the N-body gravitational acceleration on a body at position `pos`
-/// due to all other bodies. Other bodies' positions are treated as fixed.
-///
-/// `g` is the live gravitational constant (from `GravitationalConstant`,
-/// editable in the settings panel) so the prediction always matches the
-/// real simulation.
-fn nbody_acceleration(
-    pos: Vec2,
-    _vel: Vec2,
-    g: f32,
-    bodies: &[(f32, Vec2, Vec2)],
-    self_idx: usize,
-) -> Vec2 {
-    let mut acc = Vec2::ZERO;
-    for (j, &(mj, pj, _)) in bodies.iter().enumerate() {
-        if j == self_idx {
-            continue;
-        }
-        let delta = pj - pos;
-        let dist_sq = delta.length_squared();
-        if dist_sq < 1.0 {
-            continue;
-        }
-        let dist = dist_sq.sqrt();
-        // Same formula as gravity.rs: a = G * m_j * direction / (dist_sq + SOFTENING^2)
-        let acc_mag = g * mj / (dist_sq + SOFTENING * SOFTENING);
-        let direction = delta / dist;
-        acc += direction * acc_mag;
-    }
-    acc
-}
-
-/// Runge-Kutta 4th order integration for the target body's trajectory.
-///
-/// `bodies` is a snapshot of (mass, position, velocity) for ALL bodies.
-/// Only the target body at `target_idx` is integrated; all other bodies
-/// are assumed stationary for the prediction horizon.
-///
-/// Returns `steps` predicted positions of the target body.
-///
-/// `g` is the live gravitational constant and `dt` the physics timestep
-/// actually used by the simulation (see `prediction_system`).
-pub fn rk4_integrate(
-    bodies: &[(f32, Vec2, Vec2)],
-    dt: f32,
-    steps: usize,
-    target_idx: usize,
-    g: f32,
-) -> Vec<Vec2> {
-    let mut positions = Vec::with_capacity(steps);
-    let (mut pos, mut vel) = (bodies[target_idx].1, bodies[target_idx].2);
-
-    for _ in 0..steps {
-        // k1
-        let k1_v = vel;
-        let k1_a = nbody_acceleration(pos, vel, g, bodies, target_idx);
-
-        // k2
-        let k2_v = vel + k1_a * (dt / 2.0);
-        let k2_a = nbody_acceleration(pos + k1_v * (dt / 2.0), k2_v, g, bodies, target_idx);
-
-        // k3
-        let k3_v = vel + k2_a * (dt / 2.0);
-        let k3_a = nbody_acceleration(pos + k2_v * (dt / 2.0), k3_v, g, bodies, target_idx);
-
-        // k4
-        let k4_v = vel + k3_a * dt;
-        let k4_a = nbody_acceleration(pos + k3_v * dt, k4_v, g, bodies, target_idx);
-
-        // Weighted average (RK4)
-        pos += (k1_v + k2_v * 2.0 + k3_v * 2.0 + k4_v) * (dt / 6.0);
-        vel += (k1_a + k2_a * 2.0 + k3_a * 2.0 + k4_a) * (dt / 6.0);
-
-        positions.push(pos);
-    }
-
-    positions
-}
+use crate::systems::timeline::SimulationState;
 
 // ============================================================
 // Physics dt (testable helper)
@@ -102,110 +21,6 @@ pub fn rk4_integrate(
 /// Extracted as a pure function so tests can verify it.
 pub fn physics_dt(fixed_timestep_secs: f64, physics_relative_speed: f64) -> f32 {
     (fixed_timestep_secs * physics_relative_speed) as f32
-}
-
-// ============================================================
-// Prediction system (T11-B, fix A)
-// ============================================================
-
-/// System that computes the prediction trail for the selected body.
-/// Runs in `Update` to refresh every frame.
-///
-/// Fix A: the gravitational constant now comes from the live
-/// `GravitationalConstant` resource (editable in settings), and the
-/// integration dt matches the real physics timestep: Bevy's fixed
-/// timestep (64 Hz) scaled by the physics relative speed — the same
-/// dt Avian advances the simulation by each tick.
-pub fn prediction_system(
-    selected: Res<SelectedBody>,
-    config: Res<TrajectoryConfig>,
-    grav: Res<GravitationalConstant>,
-    fixed_time: Res<Time<Fixed>>,
-    physics_time: Res<Time<Physics>>,
-    bodies: Query<(Entity, &CelestialBody, &GlobalTransform, &LinearVelocity)>,
-    mut trail: ResMut<PredictionTrail>,
-) {
-    crate::mark_system("prediction_system");
-
-    if !config.enabled {
-        trail.0.clear();
-        return;
-    }
-
-    let target = match selected.0 {
-        Some(e) => e,
-        None => {
-            trail.0.clear();
-            return;
-        }
-    };
-
-    // Collect all body states as a flat snapshot (mass, position, velocity)
-    let body_states: Vec<(f32, Vec2, Vec2)> = bodies
-        .iter()
-        .map(|(_, body, xform, vel)| (body.mass, xform.translation().truncate(), vel.0))
-        .collect();
-
-    if body_states.len() < 2 {
-        trail.0.clear();
-        return;
-    }
-
-    // Find index of the selected body in the snapshot list
-    let target_idx = bodies.iter().position(|(e, _, _, _)| e == target);
-
-    let target_idx = match target_idx {
-        Some(i) => i,
-        None => {
-            trail.0.clear();
-            return;
-        }
-    };
-
-    // Real physics dt: Bevy fixed timestep (default 64 Hz) scaled by the
-    // physics relative speed. This is exactly the dt Avian advances by
-    // each physics tick (`run_physics_schedule` in Avian's source).
-    let dt = physics_dt(
-        fixed_time.timestep().as_secs_f64(),
-        physics_time.relative_speed_f64(),
-    );
-
-    let predicted = rk4_integrate(
-        &body_states,
-        dt,
-        config.prediction_steps,
-        target_idx,
-        grav.0,
-    );
-    trail.0 = predicted;
-}
-
-// ============================================================
-// Prediction rendering system (T11-B)
-// ============================================================
-
-/// Renders the prediction trail as green fading dots in `PostUpdate`.
-pub fn prediction_render_system(
-    selected: Res<SelectedBody>,
-    config: Res<TrajectoryConfig>,
-    trail: Res<PredictionTrail>,
-    mut gizmos: Gizmos,
-) {
-    if !config.enabled || selected.0.is_none() || trail.0.is_empty() {
-        return;
-    }
-
-    let total = trail.0.len();
-    // Draw at most ~80 dots for performance
-    let spacing = (total / 80).max(1);
-
-    for i in (0..total).step_by(spacing) {
-        let t = i as f32 / total as f32;
-        // Fade from opaque (near) to transparent (far)
-        let alpha = (1.0 - t) * 0.7 + 0.05;
-        let color = Color::srgba(0.3, 1.0, 0.3, alpha);
-        gizmos.circle_2d(trail.0[i], 2.0, color);
-    }
 }
 
 // ============================================================
@@ -289,11 +104,15 @@ fn sync_trajectory_config_to_js(config: Res<TrajectoryConfig>) {
         if config.is_changed() {
             // The JS side uses these field names:
             //   trail_length     -> history_length
-            //   prediction_steps -> prediction_steps
+            //   prediction_steps -> prediction_steps (back-compat, ignored by ghost)
+            //   horizon_seconds  -> horizon_seconds (ghost horizon, T22-D)
             //   trails_visible   -> enabled
             let json = format!(
-                r#"{{"trail_length":{},"prediction_steps":{},"trails_visible":{}}}"#,
-                config.history_length, config.prediction_steps, config.enabled,
+                r#"{{"trail_length":{},"prediction_steps":{},"horizon_seconds":{},"trails_visible":{}}}"#,
+                config.history_length,
+                config.prediction_steps,
+                config.horizon_seconds,
+                config.enabled,
             );
             if let Ok(mut shared) = crate::js_bridge::TRAJECTORY_CONFIG_SNAPSHOT.lock() {
                 *shared = json;
@@ -323,6 +142,12 @@ fn apply_js_trajectory_config(mut config: ResMut<TrajectoryConfig>) {
                 if let Some(val) = parsed.get("prediction_steps").and_then(|v| v.as_u64()) {
                     config.prediction_steps = (val as usize).clamp(50, 1000);
                 }
+                // T22-D/E: ghost horizon in sim-seconds (clamp 10–3600).
+                // The dirty flag on horizon change is raised by
+                // `ghost_dirty_triggers`, so no GhostPrediction access here.
+                if let Some(val) = parsed.get("horizon_seconds").and_then(|v| v.as_f64()) {
+                    config.horizon_seconds = (val as f32).clamp(10.0, 3600.0);
+                }
                 if let Some(val) = parsed.get("trails_visible").and_then(|v| v.as_bool()) {
                     config.enabled = val;
                 }
@@ -335,11 +160,14 @@ fn apply_js_trajectory_config(mut config: ResMut<TrajectoryConfig>) {
 // Plugin
 // ============================================================
 
-/// Plugin for all trajectory systems (history + prediction).
+/// Plugin for all trajectory systems (history + ghost forecast).
 ///
 /// Registers resources and systems for:
 /// - History trail sampling & rendering (T11-A)
-/// - RK4 prediction trail for selected body (T11-B)
+/// - Ghost N-body forecast: snapshot + progressive compute (T22-B),
+///   collisions/merge (T22-C), sliding window in Run + dashed
+///   rendering (T22-E). The old RK4 `prediction_system` was REPLACED
+///   by the ghost (ADR 0001 Dec. 10).
 ///
 /// Sampling runs inside Avian's `PhysicsSystems::Last` set (FixedPostUpdate):
 /// once per real physics tick, after position writeback.
@@ -349,8 +177,18 @@ impl Plugin for TrajectoryPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TrajectoryConfig>()
             .init_resource::<TrajectoryTickCounter>()
-            .init_resource::<PredictionTrail>()
-            .add_systems(Update, (prediction_system, apply_js_trajectory_config))
+            .init_resource::<GhostPrediction>()
+            .add_systems(Update, apply_js_trajectory_config)
+            .add_systems(
+                Update,
+                (
+                    ghost_dirty_triggers,
+                    ghost_snapshot_system,
+                    ghost_compute_system,
+                    ghost_sliding_window_system,
+                )
+                    .chain(),
+            )
             .add_systems(
                 PhysicsSchedule,
                 sample_trajectory.after(PhysicsStepSystems::Last),
@@ -359,7 +197,7 @@ impl Plugin for TrajectoryPlugin {
                 PostUpdate,
                 (
                     render_trajectories,
-                    prediction_render_system,
+                    render_ghost_predictions,
                     sync_trajectory_config_to_js,
                 ),
             );
@@ -367,7 +205,572 @@ impl Plugin for TrajectoryPlugin {
 }
 
 // ============================================================
-// Tests (fix A + B + C)
+// Ghost N-body forecast — faithful integrator (T22-B, ADR 0001 Dec. 1-4)
+// ============================================================
+
+/// Ticks of ghost future integrated per frame (Dec. 1: progressive compute).
+pub const GHOST_TICKS_PER_FRAME: usize = 256;
+
+/// Max wall-clock budget per frame chunk before a warn is logged (ms).
+/// No adaptivity: fixed chunk, just observability (T22-B scope).
+const GHOST_CHUNK_WARN_MS: u128 = 4;
+
+/// Faithful ghost tick (ADR-4): EXACT replica of `gravity_system`
+/// (force evaluated ONCE per tick from current positions, same formula,
+/// same `dist_sq < 1.0` skip, same i<j action/reaction order) followed by
+/// 6 frozen-force semi-implicit Euler substeps — the same 6 substeps Avian
+/// runs per tick (`SubstepCount` default 6).
+///
+/// Pure function over plain data: no Avian components on ghosts (Dec. 2).
+pub fn ghost_step_tick(ghosts: &mut [GhostBody], g: f32, dt_tick: f32) {
+    let n = ghosts.len();
+    if n == 0 {
+        return;
+    }
+    // --- Force pass: same loop as gravity.rs ---
+    // Dead (merged-away) ghosts exert and feel no force (T22-C).
+    let mut forces = vec![Vec2::ZERO; n];
+    for i in 0..n {
+        if !ghosts[i].alive {
+            continue;
+        }
+        for j in (i + 1)..n {
+            if !ghosts[j].alive {
+                continue;
+            }
+            let delta = ghosts[j].pos - ghosts[i].pos;
+            let dist_sq = delta.length_squared();
+            if dist_sq < 1.0 {
+                continue;
+            }
+            let force_magnitude =
+                g * ghosts[i].mass * ghosts[j].mass / (dist_sq + SOFTENING * SOFTENING);
+            let direction = delta / dist_sq.sqrt();
+            let force_vec = direction * force_magnitude;
+            forces[i] += force_vec;
+            forces[j] -= force_vec;
+        }
+    }
+    // --- Integrate: 6 frozen-force semi-implicit Euler substeps ---
+    // Dead ghosts are frozen in place (T22-C).
+    let dt_sub = dt_tick / 6.0;
+    for (body, force) in ghosts.iter_mut().zip(forces.iter()) {
+        if !body.alive {
+            continue;
+        }
+        let acc = *force / body.mass;
+        for _ in 0..6 {
+            body.vel += acc * dt_sub;
+            body.pos += body.vel * dt_sub;
+        }
+    }
+}
+
+/// Snapshot helper shared by `ghost_snapshot_system` and
+/// `ghost_compute_system`: clones every live body into
+/// `GhostPrediction.bodies`, sizes one trail deque per ghost, records the
+/// horizon and anchor tick, and clears the dirty flag.
+fn take_ghost_snapshot(
+    pred: &mut GhostPrediction,
+    snapshot: Vec<GhostBody>,
+    horizon_ticks: usize,
+    anchor_tick: u64,
+) {
+    let n = snapshot.len();
+    pred.bodies = snapshot;
+    pred.trails = vec![VecDeque::new(); n];
+    pred.collision_markers.clear();
+    pred.computed_ticks = 0;
+    pred.horizon_ticks = horizon_ticks;
+    pred.anchor_tick = anchor_tick;
+    pred.dirty = false;
+}
+
+/// Snapshot system (T22-B.1): while the sim is paused (editing is only
+/// allowed paused — see `tools.rs`), a dirty forecast is re-anchored to
+/// the live bodies: Entity + pos (GlobalTransform) + vel (LinearVelocity)
+/// + mass (CelestialBody) + radius + color.
+pub fn ghost_snapshot_system(
+    sim_state: Res<SimulationState>,
+    config: Res<TrajectoryConfig>,
+    counter: Res<TrajectoryTickCounter>,
+    bodies: Query<(Entity, &CelestialBody, &GlobalTransform, &LinearVelocity)>,
+    mut pred: ResMut<GhostPrediction>,
+) {
+    crate::mark_system("ghost_snapshot_system");
+
+    if !sim_state.paused {
+        return;
+    }
+    if !pred.dirty {
+        return;
+    }
+    let snapshot: Vec<GhostBody> = bodies
+        .iter()
+        .map(|(e, body, xform, vel)| {
+            let [r, g, b] = body.color;
+            GhostBody {
+                entity: e,
+                pos: xform.translation().truncate(),
+                vel: vel.0,
+                mass: body.mass,
+                radius: body.radius,
+                color: Color::srgb(r, g, b),
+                alive: true,
+            }
+        })
+        .collect();
+    take_ghost_snapshot(pred.as_mut(), snapshot, config.horizon_ticks(), counter.0);
+}
+
+/// Dirty triggers (T22-B.4, Dec. 3 total invalidation): body drag/edit
+/// (Transform/CelestialBody/LinearVelocity change while paused),
+/// add/remove body, G change, sim-speed change, HORIZON change (T22-E:
+/// the settings panel / JS bridge / preset load only write the resource,
+/// this trigger owns the restart) → `mark_dirty()` so the
+/// forecast restarts from zero and regrows progressively.
+pub fn ghost_dirty_triggers(
+    added: Query<Entity, Added<CelestialBody>>,
+    changed: Query<
+        Entity,
+        Or<(
+            Changed<CelestialBody>,
+            Changed<LinearVelocity>,
+            Changed<Transform>,
+        )>,
+    >,
+    mut removed: RemovedComponents<CelestialBody>,
+    grav: Res<GravitationalConstant>,
+    sim_state: Res<SimulationState>,
+    config: Res<TrajectoryConfig>,
+    mut last_speed: Local<Option<f32>>,
+    mut last_horizon_ticks: Local<Option<usize>>,
+    mut pred: ResMut<GhostPrediction>,
+) {
+    crate::mark_system("ghost_dirty_triggers");
+
+    let mut dirty = false;
+    if !added.is_empty() {
+        dirty = true;
+    }
+    if removed.read().count() > 0 {
+        dirty = true;
+    }
+    if !changed.is_empty() {
+        dirty = true;
+    }
+    if grav.is_changed() {
+        dirty = true;
+    }
+    match *last_speed {
+        Some(s) if (s - sim_state.speed).abs() < f32::EPSILON => {}
+        _ => {
+            dirty = true;
+            *last_speed = Some(sim_state.speed);
+        }
+    }
+    // Horizon change (T22-D writes, T22-E restarts): compare converted
+    // ticks so any source (settings panel, JS bridge, preset load) funnels
+    // through the same total invalidation.
+    let horizon_ticks = config.horizon_ticks();
+    match *last_horizon_ticks {
+        Some(h) if h == horizon_ticks => {}
+        _ => {
+            dirty = true;
+            *last_horizon_ticks = Some(horizon_ticks);
+        }
+    }
+    if dirty && !pred.dirty {
+        pred.mark_dirty();
+    }
+}
+
+// ============================================================
+// Ghost collisions + perfectly-inelastic merge (T22-C, ADR 0001 Dec. 5-6)
+// ============================================================
+
+/// Mean of two ghost colors in sRGB space, used for collision markers.
+pub fn ghost_mix_colors(a: Color, b: Color) -> Color {
+    let x = a.to_srgba();
+    let y = b.to_srgba();
+    Color::srgba(
+        (x.red + y.red) * 0.5,
+        (x.green + y.green) * 0.5,
+        (x.blue + y.blue) * 0.5,
+        (x.alpha + y.alpha) * 0.5,
+    )
+}
+
+/// Pairwise collision check over the ghost bodies, run once per ghost tick
+/// AFTER integration (Dec. 5).
+///
+/// At the FIRST overlap of a pair (`dist < r1+r2`):
+/// - one marker is pushed to `collision_markers` at the barycenter, colored
+///   with the mean of the two ghost colors;
+/// - the pair merges perfectly inelastically (Dec. 6, coherent with the
+///   real sim's `Restitution 0.0`): `mass = m1+m2`, `pos` = barycenter,
+///   `vel` = momentum conservation, `radius = sqrt(r1²+r2²)` (area
+///   conserved), `color` = the more massive body's (tie → lower index).
+///   The absorbed ghost is flagged `alive = false`; its trail is closed at
+///   the merge point (the merged position is appended to it) while the
+///   survivor's trail keeps growing in the compute loop.
+/// - computation NEVER stops (Davide's explicit request): merged ghosts
+///   keep integrating and later ticks may merge again (N sequential
+///   collisions with 3+ bodies, even within the same tick).
+pub fn ghost_check_collisions(pred: &mut GhostPrediction) {
+    let n = pred.bodies.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            // Re-read liveness: either side may have merged earlier this tick.
+            if !pred.bodies[i].alive || !pred.bodies[j].alive {
+                continue;
+            }
+            let (pi, pj, ri, rj) = (
+                pred.bodies[i].pos,
+                pred.bodies[j].pos,
+                pred.bodies[i].radius,
+                pred.bodies[j].radius,
+            );
+            if pi.distance(pj) >= ri + rj {
+                continue;
+            }
+            // --- Collision: snapshot both sides, then merge. ---
+            let (mi, mj) = (pred.bodies[i].mass, pred.bodies[j].mass);
+            let total = mi + mj;
+            // Guard against zero-mass ghosts (should not happen from the
+            // snapshot, but avoid a NaN merge if it ever does).
+            if total <= 0.0 {
+                continue;
+            }
+            let merged_pos = (pi * mi + pj * mj) / total;
+            let merged_vel = (pred.bodies[i].vel * mi + pred.bodies[j].vel * mj) / total;
+            let merged_radius = (ri * ri + rj * rj).sqrt();
+            // Survivor = more massive (tie → lower index i). DECISIONE orchestrator.
+            let (s, d) = if mj > mi { (j, i) } else { (i, j) };
+            let survivor_color = pred.bodies[s].color;
+            let marker = ghost_mix_colors(pred.bodies[i].color, pred.bodies[j].color);
+            pred.collision_markers.push((merged_pos, marker));
+            pred.bodies[s].mass = total;
+            pred.bodies[s].pos = merged_pos;
+            pred.bodies[s].vel = merged_vel;
+            pred.bodies[s].radius = merged_radius;
+            pred.bodies[s].color = survivor_color;
+            pred.bodies[d].alive = false;
+            // Close the absorbed trail AT the merge point; the survivor's
+            // trail continues via the normal per-tick push. Trails stay
+            // 1:1 with bodies by index (dead trails simply stop growing).
+            if pred.trails.len() == n {
+                pred.trails[d].push_back(merged_pos);
+            }
+        }
+    }
+}
+
+/// Total alive-ghost momentum (dead ghosts are merged mass, not missing mass).
+pub fn ghost_alive_momentum(bodies: &[GhostBody]) -> Vec2 {
+    bodies
+        .iter()
+        .filter(|b| b.alive)
+        .map(|b| b.mass * b.vel)
+        .fold(Vec2::ZERO, |a, v| a + v)
+}
+/// snapshot) re-anchor + restart from zero; otherwise integrate one fixed
+/// `GHOST_TICKS_PER_FRAME` chunk per frame, appending 1 point per ghost
+/// per tick, until `horizon_ticks`. Paused-only: in Run the sliding window
+/// (`ghost_sliding_window_system`, T22-E) owns the forecast instead.
+pub fn ghost_compute_system(
+    sim_state: Res<SimulationState>,
+    config: Res<TrajectoryConfig>,
+    grav: Res<GravitationalConstant>,
+    fixed_time: Res<Time<Fixed>>,
+    physics_time: Res<Time<Physics>>,
+    counter: Res<TrajectoryTickCounter>,
+    bodies: Query<(Entity, &CelestialBody, &GlobalTransform, &LinearVelocity)>,
+    mut pred: ResMut<GhostPrediction>,
+) {
+    crate::mark_system("ghost_compute_system");
+
+    if !sim_state.paused {
+        return;
+    }
+    // Re-anchor on dirty or when no snapshot exists yet ("assente").
+    if pred.dirty || pred.bodies.is_empty() {
+        let snapshot: Vec<GhostBody> = bodies
+            .iter()
+            .map(|(e, body, xform, vel)| {
+                let [r, g, b] = body.color;
+                GhostBody {
+                    entity: e,
+                    pos: xform.translation().truncate(),
+                    vel: vel.0,
+                    mass: body.mass,
+                    radius: body.radius,
+                    color: Color::srgb(r, g, b),
+                    alive: true,
+                }
+            })
+            .collect();
+        if snapshot.is_empty() {
+            return;
+        }
+        // A clean (non-dirty) but empty prediction with live bodies means
+        // "assente": snapshot without wiping — take_ghost_snapshot starts
+        // from zero either way, which is the required restart semantics.
+        take_ghost_snapshot(pred.as_mut(), snapshot, config.horizon_ticks(), counter.0);
+    }
+    if pred.bodies.is_empty() || pred.computed_ticks >= pred.horizon_ticks {
+        return;
+    }
+    // Same dt Avian advances per tick (includes current sim speed).
+    let dt_tick = physics_dt(
+        fixed_time.timestep().as_secs_f64(),
+        physics_time.relative_speed_f64(),
+    );
+    let g = grav.0;
+    let t0 = std::time::Instant::now();
+    let remaining = pred.horizon_ticks - pred.computed_ticks;
+    let chunk = remaining.min(GHOST_TICKS_PER_FRAME);
+    for _ in 0..chunk {
+        ghost_step_tick(&mut pred.bodies, g, dt_tick);
+        // T22-C: collision check AFTER integration; never stops the forecast.
+        ghost_check_collisions(pred.as_mut());
+        // Only alive ghosts extend their trail; absorbed trails stay
+        // frozen at the merge point (closed inside ghost_check_collisions).
+        // Index loop (not zip of two borrows) so dead-trail close and
+        // live-trail push coexist under the borrow checker.
+        for idx in 0..pred.bodies.len() {
+            if pred.bodies[idx].alive {
+                let pos = pred.bodies[idx].pos;
+                if let Some(trail) = pred.trails.get_mut(idx) {
+                    trail.push_back(pos);
+                }
+            }
+        }
+    }
+    pred.computed_ticks += chunk;
+    if t0.elapsed().as_millis() > GHOST_CHUNK_WARN_MS {
+        bevy::log::warn!(
+            "ghost_compute chunk of {} ticks took >{}ms (bodies={})",
+            chunk,
+            GHOST_CHUNK_WARN_MS,
+            pred.bodies.len(),
+        );
+    }
+}
+
+// ============================================================
+// Ghost sliding window in Run + dashed rendering (T22-E, ADR 0001 Dec. 8-9)
+// ============================================================
+
+/// Advance the sliding window by ONE consumed physics tick (Dec. 8).
+///
+/// Drops the oldest point of every live trail (`pop_front`), integrates one
+/// ghost tick from the frontier state, runs the collision check, and appends
+/// the new point (`push_back`). Length stays constant — no total recompute.
+/// Dead (merged-away) trails stay frozen and are never touched.
+///
+/// If the forecast is still growing (`computed_ticks < horizon_ticks`), the
+/// pop is skipped so a partial forecast is never eaten: it grows until the
+/// horizon is reached, then slides.
+///
+/// NEVER re-anchors to the live bodies: the window slides purely from the
+/// ghost frontier, so real-vs-predicted divergence stays visible.
+pub fn ghost_slide_tick(pred: &mut GhostPrediction, g: f32, dt_tick: f32) {
+    ghost_step_tick(&mut pred.bodies, g, dt_tick);
+    ghost_check_collisions(pred);
+    let growing = pred.computed_ticks < pred.horizon_ticks;
+    for idx in 0..pred.bodies.len() {
+        if !pred.bodies[idx].alive {
+            continue;
+        }
+        if let Some(trail) = pred.trails.get_mut(idx) {
+            if !growing && !trail.is_empty() {
+                trail.pop_front();
+            }
+            trail.push_back(pred.bodies[idx].pos);
+        }
+    }
+    if growing {
+        pred.computed_ticks += 1;
+    }
+}
+
+/// Sliding-window driver, runs in `Update` (chained after the compute
+/// system, which is paused-only so the two never fight).
+///
+/// - While paused: records the pause edge, nothing else (the progressive
+///   compute owns the forecast).
+/// - On the pause → Run edge: saves `anchor_tick` (= current
+///   `TrajectoryTickCounter`) and the last-seen tick.
+/// - In Run: advances one window tick per consumed physics tick
+///   (`counter - last_seen`). Per-frame work is capped at
+///   `GHOST_TICKS_PER_FRAME`; leftover ticks are caught up over the next
+///   frames (the cap matches the progressive-compute budget).
+/// - If the forecast is dirty in Run (e.g. horizon changed mid-Run), it is
+///   re-anchored to the live bodies immediately — a conditions change
+///   sanctions the total recompute (Dec. 3/8) — then regrows progressively.
+pub fn ghost_sliding_window_system(
+    sim_state: Res<SimulationState>,
+    config: Res<TrajectoryConfig>,
+    grav: Res<GravitationalConstant>,
+    fixed_time: Res<Time<Fixed>>,
+    physics_time: Res<Time<Physics>>,
+    counter: Res<TrajectoryTickCounter>,
+    bodies: Query<(Entity, &CelestialBody, &GlobalTransform, &LinearVelocity)>,
+    mut pred: ResMut<GhostPrediction>,
+    mut prev_paused: Local<bool>,
+    mut last_tick: Local<Option<u64>>,
+) {
+    crate::mark_system("ghost_sliding_window_system");
+
+    if sim_state.paused {
+        *prev_paused = true;
+        return;
+    }
+    // --- Running ---
+    if *prev_paused {
+        // Pause -> Run edge: anchor the window to the current tick.
+        pred.anchor_tick = counter.0;
+        *last_tick = Some(counter.0);
+        *prev_paused = false;
+    }
+    let last = match *last_tick {
+        Some(l) => l,
+        None => {
+            *last_tick = Some(counter.0);
+            return;
+        }
+    };
+    let mut pending = counter.0.saturating_sub(last);
+    if pending == 0 {
+        return;
+    }
+    // Dirty in Run (horizon change, G change, speed change...): re-anchor
+    // to the live bodies now — conditions changed, total recompute applies.
+    if pred.dirty || pred.bodies.is_empty() {
+        if !pred.dirty && pred.bodies.is_empty() {
+            // "Assente" with no snapshot yet: same re-anchor path.
+        }
+        let snapshot: Vec<GhostBody> = bodies
+            .iter()
+            .map(|(e, body, xform, vel)| {
+                let [r, g, b] = body.color;
+                GhostBody {
+                    entity: e,
+                    pos: xform.translation().truncate(),
+                    vel: vel.0,
+                    mass: body.mass,
+                    radius: body.radius,
+                    color: Color::srgb(r, g, b),
+                    alive: true,
+                }
+            })
+            .collect();
+        if snapshot.is_empty() {
+            *last_tick = Some(counter.0);
+            return;
+        }
+        take_ghost_snapshot(pred.as_mut(), snapshot, config.horizon_ticks(), counter.0);
+        *last_tick = Some(counter.0);
+        return;
+    }
+    let dt_tick = physics_dt(
+        fixed_time.timestep().as_secs_f64(),
+        physics_time.relative_speed_f64(),
+    );
+    let g = grav.0;
+    let mut advanced: u64 = 0;
+    while pending > 0 && (advanced as usize) < GHOST_TICKS_PER_FRAME {
+        ghost_slide_tick(pred.as_mut(), g, dt_tick);
+        pending -= 1;
+        advanced += 1;
+    }
+    *last_tick = Some(last + advanced);
+}
+
+/// Decimation stride for ghost rendering (Dec. 9): 1 drawn point every
+/// `max(1, computed_ticks/1500)` trail points, so far-future density
+/// (long horizons) stays bounded.
+pub fn ghost_decimation_stride(computed_ticks: usize) -> usize {
+    (computed_ticks / 1500).max(1)
+}
+
+/// Half-extent (world units) of the collision-marker X arms.
+pub const GHOST_MARKER_HALF: f32 = 7.0;
+
+/// Renders the ghost forecast in `PostUpdate` with the same `Gizmos` as the
+/// historic trail (Dec. 9 + orchestrator decisions):
+/// - one curve per ghost in its own color;
+/// - the `SelectedBody` curve more opaque + dotted at sampled points
+///   (Gizmos lines have a fixed width, so presence — not width —
+///   carries the emphasis), other curves attenuated;
+/// - FUTURE IS DASHED: alternating drawn/skipped segments; the historic
+///   trail (`render_trajectories`) stays continuous;
+/// - decimation via [`ghost_decimation_stride`];
+/// - collision markers as an X cross (two segments) in the marker color.
+pub fn render_ghost_predictions(
+    config: Res<TrajectoryConfig>,
+    selected: Res<SelectedBody>,
+    pred: Res<GhostPrediction>,
+    mut gizmos: Gizmos,
+) {
+    if !config.enabled {
+        return;
+    }
+    if pred.trails.is_empty() {
+        return;
+    }
+    let stride = ghost_decimation_stride(pred.computed_ticks);
+    for (idx, trail) in pred.trails.iter().enumerate() {
+        if trail.len() < 2 {
+            continue;
+        }
+        let body = pred.bodies.get(idx);
+        let base = body.map(|b| b.color).unwrap_or(Color::WHITE).to_srgba();
+        let is_selected = body.map(|b| selected.0 == Some(b.entity)).unwrap_or(false);
+        // Selected: opaque; others attenuated. Dead trails (frozen at the
+        // merge point) render dimmer still — they are history, not future.
+        let alive = body.map(|b| b.alive).unwrap_or(true);
+        let alpha = if is_selected {
+            0.85
+        } else if alive {
+            0.35
+        } else {
+            0.22
+        };
+        let color = Color::srgba(base.red, base.green, base.blue, alpha);
+        // Sampled indices, always including the newest point.
+        let mut sampled: Vec<Vec2> = trail.iter().step_by(stride).copied().collect();
+        if let Some(last) = trail.back() {
+            if sampled.last() != Some(last) {
+                sampled.push(*last);
+            }
+        }
+        // Dashed: draw even segments, skip odd ones.
+        for (k, pair) in sampled.windows(2).enumerate() {
+            if k % 2 == 0 {
+                gizmos.line_2d(pair[0], pair[1], color);
+            }
+        }
+        // Selected emphasis dots at sampled points.
+        if is_selected {
+            for p in sampled.iter().step_by(2) {
+                gizmos.circle_2d(*p, 2.5, color);
+            }
+        }
+    }
+    // Collision markers: X cross in the marker color, full opacity.
+    for (pos, marker) in pred.collision_markers.iter() {
+        let m = marker.to_srgba();
+        let c = Color::srgba(m.red, m.green, m.blue, 1.0);
+        let h = GHOST_MARKER_HALF;
+        gizmos.line_2d(*pos + Vec2::new(-h, -h), *pos + Vec2::new(h, h), c);
+        gizmos.line_2d(*pos + Vec2::new(-h, h), *pos + Vec2::new(h, -h), c);
+    }
+}
+
+// ============================================================
+// Tests (fix B + C)
 // ============================================================
 
 #[cfg(test)]
@@ -399,7 +802,7 @@ mod tests {
         assert_eq!(h.positions[0], Vec2::new(8.0, 0.0));
     }
 
-    // ---------- Fix A: live G + real dt ----------
+    // ---------- Fix A: real dt (ghost reuses the same helper) ----------
 
     #[test]
     fn physics_dt_matches_avian_formula() {
@@ -409,70 +812,11 @@ mod tests {
         assert_eq!(physics_dt(1.0 / 64.0, 4.0), 4.0 / 64.0);
     }
 
-    #[test]
-    fn prediction_follows_live_gravity_constant() {
-        let mut app = App::new();
-        app.init_resource::<SelectedBody>()
-            .init_resource::<TrajectoryConfig>()
-            .init_resource::<GravitationalConstant>()
-            .init_resource::<PredictionTrail>()
-            .insert_resource(Time::<Fixed>::default())
-            .insert_resource(Time::<Physics>::default())
-            .add_systems(Update, prediction_system);
-
-        // Two bodies: heavy star at origin, planet nearby
-        let star = app
-            .world_mut()
-            .spawn((
-                CelestialBody {
-                    name: "Star".into(),
-                    body_type: BodyType::Star,
-                    mass: 500_000.0,
-                    radius: 40.0,
-                    color: [1.0, 0.9, 0.4],
-                    luminous: true,
-                },
-                Transform::from_xyz(0.0, 0.0, 0.0),
-                GlobalTransform::from_xyz(0.0, 0.0, 0.0),
-                LinearVelocity(Vec2::ZERO),
-            ))
-            .id();
-        let planet = app
-            .world_mut()
-            .spawn((
-                CelestialBody {
-                    name: "Planet".into(),
-                    body_type: BodyType::Planet,
-                    mass: 10.0,
-                    radius: 8.0,
-                    color: [0.4, 0.6, 1.0],
-                    luminous: false,
-                },
-                Transform::from_xyz(300.0, 0.0, 0.0),
-                GlobalTransform::from_xyz(300.0, 0.0, 0.0),
-                LinearVelocity(Vec2::new(0.0, 40.0)),
-            ))
-            .id();
-        app.world_mut().resource_mut::<SelectedBody>().0 = Some(planet);
-
-        app.update();
-        let trail_g1 = app.world().resource::<PredictionTrail>().0.clone();
-        assert!(!trail_g1.is_empty());
-
-        // Double the gravitational constant (as the settings panel does)
-        app.world_mut().resource_mut::<GravitationalConstant>().0 = 10000.0;
-        app.update();
-        let trail_g2 = app.world().resource::<PredictionTrail>().0.clone();
-
-        // Different G must produce a different predicted trajectory.
-        let differs = trail_g1.iter().zip(trail_g2.iter()).any(|(a, b)| a != b);
-        assert!(
-            differs,
-            "prediction must react to GravitationalConstant changes"
-        );
-
-        let _ = (star, planet);
-    }
+    // NOTE (T22-E, ADR 0001 Dec. 10): the old RK4 `prediction_system` test
+    // (`prediction_follows_live_gravity_constant`) was removed together with
+    // the system it covered. Live-G reactivity is now owned by the ghost:
+    // `ghost_dirty_triggers` marks dirty on G change (see
+    // `ghost_horizon_change_marks_dirty` for the trigger pattern).
 
     // ---------- Fix C: sampling per physics tick ----------
 
@@ -487,7 +831,6 @@ mod tests {
         .init_resource::<SelectedBody>()
         .init_resource::<TrajectoryConfig>()
         .init_resource::<TrajectoryTickCounter>()
-        .init_resource::<PredictionTrail>()
         // Only the sampling system (no render systems: they need GizmoConfigStore)
         .add_systems(
             PhysicsSchedule,
@@ -603,5 +946,573 @@ mod tests {
             .positions
             .len();
         assert_eq!(len, 0, "paused physics must not sample");
+    }
+}
+
+// ============================================================
+// Ghost forecast tests (T22-B)
+// ============================================================
+
+#[cfg(test)]
+mod ghost_tests {
+    use super::*;
+    use crate::components::celestial::{BodyType, CelestialBody};
+
+    fn star_planet_pair() -> Vec<GhostBody> {
+        // Massive fixed-ish star + planet on circular velocity (T22-B.5).
+        let g: f32 = 5000.0;
+        let m_star: f32 = 500_000.0;
+        let r: f32 = 300.0;
+        let v_circ = (g * m_star / r).sqrt();
+        vec![
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: Vec2::ZERO,
+                vel: Vec2::ZERO,
+                mass: m_star,
+                radius: 40.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: Vec2::new(r, 0.0),
+                vel: Vec2::new(0.0, v_circ),
+                mass: 10.0,
+                radius: 8.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn ghost_tick_is_deterministic_over_k_ticks() {
+        let g = 5000.0;
+        let dt = 1.0 / 64.0;
+        let mut chunked = star_planet_pair();
+        let mut bulk = star_planet_pair();
+        // Same K=600 ticks: one-by-one vs batches of 10 → bitwise identical.
+        for _ in 0..600 {
+            ghost_step_tick(&mut chunked, g, dt);
+        }
+        for _ in 0..60 {
+            for _ in 0..10 {
+                ghost_step_tick(&mut bulk, g, dt);
+            }
+        }
+        for (a, b) in chunked.iter().zip(bulk.iter()) {
+            assert_eq!(a.pos, b.pos, "positions must coincide exactly");
+            assert_eq!(a.vel, b.vel, "velocities must coincide exactly");
+        }
+    }
+
+    #[test]
+    fn ghost_tick_pulls_planet_and_conserves_momentum() {
+        let g = 5000.0;
+        let dt = 1.0 / 64.0;
+        let mut ghosts = star_planet_pair();
+        let p0 = ghosts
+            .iter()
+            .map(|b| b.mass * b.vel)
+            .fold(Vec2::ZERO, |a, v| a + v);
+        ghost_step_tick(&mut ghosts, g, dt);
+        // Planet falls toward the star: x-velocity goes negative.
+        assert!(
+            ghosts[1].vel.x < 0.0,
+            "planet must be pulled toward star, got {:?}",
+            ghosts[1].vel
+        );
+        // Star recoils the other way (action/reaction).
+        assert!(ghosts[0].vel.x > 0.0);
+        // Total momentum conserved to float precision (frozen-force Euler
+        // with exact action/reaction pairs).
+        let p1 = ghosts
+            .iter()
+            .map(|b| b.mass * b.vel)
+            .fold(Vec2::ZERO, |a, v| a + v);
+        assert!(
+            (p1 - p0).length() < 1.0,
+            "momentum drift too large: {p0:?} -> {p1:?}"
+        );
+    }
+
+    #[test]
+    fn ghost_tick_skips_close_encounter() {
+        // dist_sq < 1.0 → no force: bodies drift ballistically.
+        let mut ghosts = vec![
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: Vec2::ZERO,
+                vel: Vec2::new(10.0, 0.0),
+                mass: 100.0,
+                radius: 5.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: Vec2::new(0.5, 0.0),
+                vel: Vec2::ZERO,
+                mass: 100.0,
+                radius: 5.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+        ];
+        ghost_step_tick(&mut ghosts, 5000.0, 1.0 / 64.0);
+        assert_eq!(ghosts[0].vel, Vec2::new(10.0, 0.0));
+        assert_eq!(ghosts[1].vel, Vec2::ZERO);
+    }
+
+    fn ghost_test_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<SimulationState>()
+            .init_resource::<TrajectoryConfig>()
+            .init_resource::<TrajectoryTickCounter>()
+            .init_resource::<GhostPrediction>()
+            .init_resource::<GravitationalConstant>()
+            .insert_resource(Time::<Fixed>::default())
+            .insert_resource(Time::<Physics>::default())
+            .add_systems(
+                Update,
+                (
+                    ghost_dirty_triggers,
+                    ghost_snapshot_system,
+                    ghost_compute_system,
+                )
+                    .chain(),
+            );
+        // Paused sim: the only state where snapshot/compute run.
+        app.world_mut().resource_mut::<SimulationState>().paused = true;
+        app
+    }
+
+    fn spawn_body(app: &mut App, x: f32, mass: f32) -> Entity {
+        app.world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "B".into(),
+                    body_type: BodyType::Planet,
+                    mass,
+                    radius: 8.0,
+                    color: [0.4, 0.6, 1.0],
+                    luminous: false,
+                },
+                Transform::from_xyz(x, 0.0, 0.0),
+                GlobalTransform::from_xyz(x, 0.0, 0.0),
+                LinearVelocity(Vec2::ZERO),
+            ))
+            .id()
+    }
+
+    #[test]
+    fn ghost_snapshot_holds_all_bodies_and_grows_trails() {
+        let mut app = ghost_test_app();
+        let e1 = spawn_body(&mut app, 0.0, 500_000.0);
+        let e2 = spawn_body(&mut app, 300.0, 10.0);
+        // Circular orbit velocity so the pair never collides during the
+        // horizon (T22-C: a head-on infall would merge and freeze one trail).
+        let v_circ = (5000.0_f32 * 500_000.0 / 300.0).sqrt();
+        app.world_mut()
+            .entity_mut(e2)
+            .get_mut::<LinearVelocity>()
+            .unwrap()
+            .0 = Vec2::new(0.0, v_circ);
+        // Short horizon so one frame finishes the forecast.
+        app.world_mut()
+            .resource_mut::<TrajectoryConfig>()
+            .horizon_seconds = 10.0;
+
+        app.update(); // triggers mark dirty (added) — snapshot happens next frame
+        app.update(); // snapshot + first chunk
+                      // Run until the horizon (640 ticks) is covered.
+        for _ in 0..10 {
+            app.update();
+        }
+
+        let pred = app.world().resource::<GhostPrediction>();
+        assert_eq!(pred.bodies.len(), 2, "snapshot must hold ALL bodies");
+        assert!(pred.bodies.iter().any(|b| b.entity == e1));
+        assert!(pred.bodies.iter().any(|b| b.entity == e2));
+        assert_eq!(pred.trails.len(), 2, "one trail Vec per ghost");
+        assert_eq!(pred.computed_ticks, pred.horizon_ticks);
+        assert_eq!(pred.horizon_ticks, 640);
+        for trail in pred.trails.iter() {
+            assert_eq!(trail.len(), 640, "1 point per ghost per tick");
+        }
+        assert!(!pred.dirty);
+    }
+
+    #[test]
+    fn ghost_mark_dirty_restarts_from_zero() {
+        let mut app = ghost_test_app();
+        let _ = spawn_body(&mut app, 0.0, 500_000.0);
+        let _ = spawn_body(&mut app, 300.0, 10.0);
+        app.world_mut()
+            .resource_mut::<TrajectoryConfig>()
+            .horizon_seconds = 10.0;
+        for _ in 0..6 {
+            app.update();
+        }
+        {
+            let pred = app.world().resource::<GhostPrediction>();
+            assert!(pred.computed_ticks > 0);
+        }
+        // Manual invalidation restarts the forecast from zero.
+        app.world_mut()
+            .resource_mut::<GhostPrediction>()
+            .mark_dirty();
+        app.update();
+        app.update();
+        let pred = app.world().resource::<GhostPrediction>();
+        assert!(!pred.dirty, "compute must re-anchor after dirty");
+        assert!(
+            pred.computed_ticks > 0 && pred.computed_ticks <= pred.horizon_ticks,
+            "forecast regrows progressively from zero"
+        );
+        assert_eq!(pred.trails.len(), 2);
+    }
+
+    // ---------- T22-C: collisions + inelastic merge ----------
+
+    fn head_on_pair() -> Vec<GhostBody> {
+        // Equal masses on a frontal collision course (symmetric about origin).
+        vec![
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: Vec2::new(-50.0, 0.0),
+                vel: Vec2::new(20.0, 0.0),
+                mass: 100.0,
+                radius: 5.0,
+                color: Color::srgb(1.0, 0.0, 0.0),
+                alive: true,
+            },
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: Vec2::new(50.0, 0.0),
+                vel: Vec2::new(-20.0, 0.0),
+                mass: 100.0,
+                radius: 5.0,
+                color: Color::srgb(0.0, 0.0, 1.0),
+                alive: true,
+            },
+        ]
+    }
+
+    fn run_ghost_ticks(pred: &mut GhostPrediction, ticks: usize, g: f32, dt: f32) {
+        for _ in 0..ticks {
+            ghost_step_tick(&mut pred.bodies, g, dt);
+            ghost_check_collisions(pred);
+            for (body, trail) in pred.bodies.iter().zip(pred.trails.iter_mut()) {
+                if body.alive {
+                    trail.push_back(body.pos);
+                }
+            }
+        }
+        pred.computed_ticks += ticks;
+    }
+
+    #[test]
+    fn ghost_frontal_collision_marks_merges_and_conserves_momentum() {
+        let mut pred = GhostPrediction {
+            bodies: head_on_pair(),
+            trails: vec![VecDeque::new(), VecDeque::new()],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 0,
+            horizon_ticks: 600,
+            anchor_tick: 0,
+        };
+        let p0 = ghost_alive_momentum(&pred.bodies);
+        run_ghost_ticks(&mut pred, 600, 5000.0, 1.0 / 64.0);
+
+        // Exactly one marker for the pair (first overlap only).
+        assert_eq!(pred.collision_markers.len(), 1);
+        // Symmetric pair → barycenter at the origin.
+        assert!(
+            pred.collision_markers[0].0.length() < 1.0,
+            "marker must sit at the barycenter, got {:?}",
+            pred.collision_markers[0].0
+        );
+        // Marker color = mean of red and blue = purple.
+        let mixed = pred.collision_markers[0].1.to_srgba();
+        assert!((mixed.red - 0.5).abs() < 1e-3);
+        assert!(mixed.green.abs() < 1e-3);
+        assert!((mixed.blue - 0.5).abs() < 1e-3);
+
+        // Perfectly-inelastic merge: one survivor, summed mass, area-kept radius.
+        let alive: Vec<_> = pred.bodies.iter().filter(|b| b.alive).collect();
+        assert_eq!(alive.len(), 1, "two ghosts must become one");
+        assert!((alive[0].mass - 200.0).abs() < 1e-3);
+        assert!((alive[0].radius - (50.0f32).sqrt()).abs() < 1e-3);
+
+        // Momentum conserved through integration + merge (tolerance 1e-3).
+        let p1 = ghost_alive_momentum(&pred.bodies);
+        assert!(
+            (p1 - p0).length() < 1e-3,
+            "momentum drift too large: {p0:?} -> {p1:?}"
+        );
+
+        // One trail active to the end; the absorbed one truncated at the merge.
+        let survivor_idx = pred.bodies.iter().position(|b| b.alive).unwrap();
+        let dead_idx = 1 - survivor_idx;
+        assert_eq!(pred.trails[survivor_idx].len(), 600);
+        assert!(
+            pred.trails[dead_idx].len() < pred.trails[survivor_idx].len(),
+            "absorbed trail must stay truncated"
+        );
+    }
+
+    #[test]
+    fn ghost_no_collision_no_markers() {
+        // Stable circular pair: forecast runs clean, nothing merges.
+        let mut pred = GhostPrediction {
+            bodies: star_planet_pair(),
+            trails: vec![VecDeque::new(), VecDeque::new()],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 0,
+            horizon_ticks: 600,
+            anchor_tick: 0,
+        };
+        run_ghost_ticks(&mut pred, 600, 5000.0, 1.0 / 64.0);
+        assert!(pred.collision_markers.is_empty());
+        assert!(pred.bodies.iter().all(|b| b.alive));
+        for trail in pred.trails.iter() {
+            assert_eq!(trail.len(), 600);
+        }
+    }
+
+    #[test]
+    fn ghost_sequential_merges_absorb_n_bodies() {
+        // A and B overlap now; the AB survivor immediately overlaps C too.
+        // Survivor color must follow the more massive body at each merge.
+        let red = Color::srgb(1.0, 0.0, 0.0);
+        let blue = Color::srgb(0.0, 0.0, 1.0);
+        let green = Color::srgb(0.0, 1.0, 0.0);
+        let mut pred = GhostPrediction {
+            bodies: vec![
+                GhostBody {
+                    entity: Entity::PLACEHOLDER,
+                    pos: Vec2::ZERO,
+                    vel: Vec2::ZERO,
+                    mass: 50.0,
+                    radius: 5.0,
+                    color: red,
+                    alive: true,
+                },
+                GhostBody {
+                    entity: Entity::PLACEHOLDER,
+                    pos: Vec2::new(8.0, 0.0),
+                    vel: Vec2::ZERO,
+                    mass: 200.0,
+                    radius: 5.0,
+                    color: blue,
+                    alive: true,
+                },
+                GhostBody {
+                    entity: Entity::PLACEHOLDER,
+                    pos: Vec2::new(14.0, 0.0),
+                    vel: Vec2::ZERO,
+                    mass: 100.0,
+                    radius: 5.0,
+                    color: green,
+                    alive: true,
+                },
+            ],
+            trails: vec![VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 0,
+            horizon_ticks: 600,
+            anchor_tick: 0,
+        };
+        // One check pass merges A+B (B heavier, survives at index 1) and
+        // then AB+C (AB heavier, still index 1) — N sequential collisions.
+        ghost_check_collisions(&mut pred);
+        assert_eq!(pred.collision_markers.len(), 2);
+        let alive: Vec<_> = pred.bodies.iter().filter(|b| b.alive).collect();
+        assert_eq!(alive.len(), 1);
+        assert_eq!(alive[0].mass, 350.0);
+        // Survivor kept the heaviest color at every merge (blue beats red,
+        // then 250-mass blue beats 100-mass green).
+        assert_eq!(alive[0].color.to_srgba(), blue.to_srgba());
+        // Both absorbed trails closed with exactly the merge point.
+        assert_eq!(pred.trails[0].len(), 1);
+        assert_eq!(pred.trails[2].len(), 1);
+
+        // The forecast CONTINUES after the collisions (never stops).
+        run_ghost_ticks(&mut pred, 100, 5000.0, 1.0 / 64.0);
+        assert_eq!(pred.collision_markers.len(), 2, "no new pairs to merge");
+        assert_eq!(pred.trails[1].len(), 100);
+        assert_eq!(pred.trails[0].len(), 1, "absorbed trail stays frozen");
+        assert_eq!(pred.trails[2].len(), 1, "absorbed trail stays frozen");
+    }
+
+    // ---------- T22-E: sliding window + decimation + horizon dirty ----------
+
+    fn drifting_body(x: f32) -> GhostBody {
+        // g = 0 in the slide tests: pure ballistic drift, exact positions.
+        GhostBody {
+            entity: Entity::PLACEHOLDER,
+            pos: Vec2::new(x, 0.0),
+            vel: Vec2::new(64.0, 0.0),
+            mass: 100.0,
+            radius: 5.0,
+            color: Color::WHITE,
+            alive: true,
+        }
+    }
+
+    #[test]
+    fn ghost_slide_tick_keeps_constant_length() {
+        // dt = 1/64 s, vel = 64 u/s -> exactly +1.0 x per slide tick.
+        let dt = 1.0 / 64.0;
+        let mut pred = GhostPrediction {
+            bodies: vec![drifting_body(4.0)],
+            trails: vec![VecDeque::from([
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+                Vec2::new(3.0, 0.0),
+                Vec2::new(4.0, 0.0),
+            ])],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 5,
+            horizon_ticks: 5,
+            anchor_tick: 0,
+        };
+        ghost_slide_tick(&mut pred, 0.0, dt);
+        // Length constant: oldest popped, newest integrated from the frontier.
+        assert_eq!(pred.trails[0].len(), 5);
+        assert_eq!(pred.trails[0][0], Vec2::new(1.0, 0.0));
+        // Integrated points carry f32 substep rounding (6 x dt/6): approx.
+        assert!((pred.trails[0][4].x - 5.0).abs() < 1e-4);
+        assert_eq!(pred.computed_ticks, 5, "sliding never grows the counter");
+        // Window content equals a fresh full-horizon integration from the
+        // new anchor: slide 4 more ticks, the trail must be x = 5..=9.
+        for _ in 0..4 {
+            ghost_slide_tick(&mut pred, 0.0, dt);
+        }
+        assert_eq!(pred.trails[0].len(), 5);
+        assert!((pred.trails[0][0].x - 5.0).abs() < 1e-4);
+        assert!((pred.trails[0][4].x - 9.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn ghost_slide_tick_grows_partial_forecast_without_pop() {
+        let dt = 1.0 / 64.0;
+        let mut pred = GhostPrediction {
+            bodies: vec![drifting_body(2.0)],
+            trails: vec![VecDeque::from([
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+            ])],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 3,
+            horizon_ticks: 5,
+            anchor_tick: 0,
+        };
+        ghost_slide_tick(&mut pred, 0.0, dt);
+        // Growing: no pop, the head is preserved and the counter advances.
+        assert_eq!(pred.trails[0].len(), 4);
+        assert_eq!(pred.trails[0][0], Vec2::new(0.0, 0.0));
+        assert!((pred.trails[0][3].x - 3.0).abs() < 1e-4);
+        assert_eq!(pred.computed_ticks, 4);
+    }
+
+    #[test]
+    fn ghost_slide_tick_leaves_dead_trails_frozen() {
+        let dt = 1.0 / 64.0;
+        let mut dead = drifting_body(1000.0);
+        dead.alive = false;
+        let frozen: VecDeque<Vec2> = VecDeque::from([Vec2::new(7.0, 0.0), Vec2::new(8.0, 0.0)]);
+        let mut pred = GhostPrediction {
+            bodies: vec![drifting_body(4.0), dead],
+            trails: vec![
+                VecDeque::from([
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(1.0, 0.0),
+                    Vec2::new(2.0, 0.0),
+                    Vec2::new(3.0, 0.0),
+                    Vec2::new(4.0, 0.0),
+                ]),
+                frozen.clone(),
+            ],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 5,
+            horizon_ticks: 5,
+            anchor_tick: 0,
+        };
+        ghost_slide_tick(&mut pred, 0.0, dt);
+        assert_eq!(pred.trails[1], frozen, "dead trail must stay frozen");
+        assert!(pred.collision_markers.is_empty());
+        assert_eq!(pred.trails[0].len(), 5);
+    }
+
+    #[test]
+    fn ghost_decimation_stride_bounds_far_future_density() {
+        assert_eq!(ghost_decimation_stride(0), 1);
+        assert_eq!(ghost_decimation_stride(640), 1);
+        assert_eq!(ghost_decimation_stride(1500), 1);
+        assert_eq!(ghost_decimation_stride(3000), 2);
+        // Default horizon: 300 s * 64 = 19200 ticks -> stride 12.
+        assert_eq!(ghost_decimation_stride(19200), 12);
+        // Max horizon: 3600 s * 64 = 230400 ticks -> stride 153.
+        assert_eq!(ghost_decimation_stride(230400), 153);
+    }
+
+    fn dirty_trigger_test_app() -> App {
+        let mut app = App::new();
+        app.init_resource::<SimulationState>()
+            .init_resource::<TrajectoryConfig>()
+            .init_resource::<TrajectoryTickCounter>()
+            .init_resource::<GravitationalConstant>()
+            .init_resource::<GhostPrediction>()
+            .add_systems(Update, ghost_dirty_triggers);
+        app
+    }
+
+    #[test]
+    fn ghost_horizon_change_marks_dirty() {
+        let mut app = dirty_trigger_test_app();
+        let _ = app
+            .world_mut()
+            .spawn((CelestialBody {
+                name: "B".into(),
+                body_type: BodyType::Planet,
+                mass: 100.0,
+                radius: 8.0,
+                color: [0.4, 0.6, 1.0],
+                luminous: false,
+            },))
+            .id();
+        // Settle: locals latch, Added/Changded triggers drain.
+        app.world_mut()
+            .resource_mut::<TrajectoryConfig>()
+            .horizon_seconds = 10.0;
+        app.update();
+        app.update();
+        // Clear the settled dirty flag to isolate the horizon change.
+        app.world_mut().resource_mut::<GhostPrediction>().dirty = false;
+        app.update();
+        assert!(
+            !app.world().resource::<GhostPrediction>().dirty,
+            "steady state must not re-dirty"
+        );
+        // The T22-D settings write (horizon 10 s -> 20 s) restarts the ghost.
+        app.world_mut()
+            .resource_mut::<TrajectoryConfig>()
+            .horizon_seconds = 20.0;
+        app.update();
+        assert!(
+            app.world().resource::<GhostPrediction>().dirty,
+            "horizon change must mark the forecast dirty"
+        );
     }
 }

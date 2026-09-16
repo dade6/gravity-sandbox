@@ -201,7 +201,7 @@ const GLOW_FIELDS: &[(&str, &str)] = &[
 ];
 const TRAJECTORY_FIELDS: &[(&str, &str)] = &[
     ("set_traj_history", "History Length:"),
-    ("set_traj_prediction", "Prediction Steps:"),
+    ("set_traj_prediction", "Prediction Horizon (s):"),
     ("set_traj_sample", "Sample Interval:"),
 ];
 
@@ -227,7 +227,7 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
         "set_glow_falloff" => format!("{:.2}", ctx.glow.falloff_exp),
         "set_glow_soft" => format!("{:.3}", ctx.glow.soft_edge),
         "set_traj_history" => format!("{}", ctx.trajectory.history_length),
-        "set_traj_prediction" => format!("{}", ctx.trajectory.prediction_steps),
+        "set_traj_prediction" => format!("{}", ctx.trajectory.horizon_seconds),
         "set_traj_sample" => format!("{}", ctx.trajectory.sample_interval),
         _ => String::new(),
     }
@@ -780,9 +780,14 @@ pub(crate) fn apply_settings_field(
             }
         }
         "set_traj_prediction" => {
-            let clamped = v.max(0.0) as usize;
-            if trajectory.prediction_steps != clamped {
-                trajectory.prediction_steps = clamped;
+            // T22-D (ADR 0001 Dec. 7+10): il campo è l'orizzonte in SECONDI
+            // di sim (horizon_seconds), clamp 10–3600. `prediction_steps`
+            // resta nel JSON solo per back-compat ed è ignorato dal ghost.
+            // Il dirty su cambio orizzonte è in carico a T22-E (decisione
+            // orchestrator): qui si scrive solo la risorsa.
+            let clamped = v.clamp(10.0, 3600.0);
+            if trajectory.horizon_seconds != clamped {
+                trajectory.horizon_seconds = clamped;
                 return true;
             }
         }
@@ -1084,7 +1089,7 @@ mod tests {
         ));
         assert_eq!(gl.soft_edge, 0.0);
 
-        // trajectory: history/prediction min 0, sample min 1
+        // trajectory: history min 0, horizon 10–3600 s, sample min 1
         assert!(apply_settings_field(
             "set_traj_history",
             "50",
@@ -1105,13 +1110,32 @@ mod tests {
         assert_eq!(t.history_length, 0);
         assert!(apply_settings_field(
             "set_traj_prediction",
-            "300",
+            "600",
             &mut g,
             &mut a,
             &mut gl,
             &mut t
         ));
-        assert_eq!(t.prediction_steps, 300);
+        assert_eq!(t.horizon_seconds, 600.0);
+        // T22-D: clamp orizzonte 10–3600 s
+        assert!(apply_settings_field(
+            "set_traj_prediction",
+            "5",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
+        assert_eq!(t.horizon_seconds, 10.0);
+        assert!(apply_settings_field(
+            "set_traj_prediction",
+            "9999",
+            &mut g,
+            &mut a,
+            &mut gl,
+            &mut t
+        ));
+        assert_eq!(t.horizon_seconds, 3600.0);
         assert!(apply_settings_field(
             "set_traj_sample",
             "0",

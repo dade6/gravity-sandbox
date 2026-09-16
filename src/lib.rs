@@ -96,7 +96,7 @@ mod js_bridge {
     pub static TRAJECTORY_CONFIG_SNAPSHOT: std::sync::LazyLock<Mutex<String>> =
         std::sync::LazyLock::new(|| {
             Mutex::new(
-                r#"{"trail_length":500,"prediction_steps":200,"trails_visible":true}"#.into(),
+                r#"{"trail_length":500,"prediction_steps":200,"horizon_seconds":300,"trails_visible":true}"#.into(),
             )
         });
 
@@ -202,7 +202,8 @@ pub fn get_trajectory_config() -> String {
             return cfg.clone();
         }
     }
-    r#"{"trail_length":500,"prediction_steps":200,"trails_visible":true}"#.to_string()
+    r#"{"trail_length":500,"prediction_steps":200,"horizon_seconds":300,"trails_visible":true}"#
+        .to_string()
 }
 
 /// DEBUG: legge lo snapshot dello stato interno (tool, drag, selezione, corpi).

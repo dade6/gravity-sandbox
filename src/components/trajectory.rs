@@ -42,6 +42,11 @@ impl TrajectoryHistory {
     }
 }
 
+/// Default prediction horizon in simulation seconds (ADR 0001, Dec. 7).
+pub fn default_horizon_seconds() -> f32 {
+    300.0
+}
+
 /// Global configuration for trajectory rendering.
 ///
 /// Serialised at the level level (`LevelData.trajectory`) since Ticket 21;
@@ -54,6 +59,8 @@ pub struct TrajectoryConfig {
     pub history_length: usize,
     pub prediction_steps: usize,
     pub sample_interval: usize,
+    #[serde(default = "default_horizon_seconds")]
+    pub horizon_seconds: f32,
 }
 
 impl Default for TrajectoryConfig {
@@ -63,7 +70,15 @@ impl Default for TrajectoryConfig {
             history_length: 500,
             prediction_steps: 200,
             sample_interval: 2,
+            horizon_seconds: default_horizon_seconds(),
         }
+    }
+}
+
+impl TrajectoryConfig {
+    /// Horizon converted to physics ticks (64 ticks/s), clamped 10–3600 s.
+    pub fn horizon_ticks(&self) -> usize {
+        (self.horizon_seconds.clamp(10.0, 3600.0) * 64.0) as usize
     }
 }
 
@@ -71,6 +86,98 @@ impl Default for TrajectoryConfig {
 #[derive(Resource, Default)]
 pub struct TrajectoryTickCounter(pub u64);
 
-/// Resource holding the prediction trail (RK4 positions) for the selected body.
-#[derive(Resource, Default)]
-pub struct PredictionTrail(pub Vec<Vec2>);
+/// Snapshot of one simulated body in the ghost (future) simulation
+/// (ADR 0001, Dec. 1). Plain data — no Avian components (Dec. 2).
+#[derive(Debug, Clone)]
+pub struct GhostBody {
+    pub entity: Entity,
+    pub pos: Vec2,
+    pub vel: Vec2,
+    pub mass: f32,
+    pub radius: f32,
+    pub color: Color,
+    /// False once absorbed by a perfectly-inelastic ghost merge (T22-C,
+    /// ADR 0001 Dec. 5-6). Dead ghosts exert no force, are not integrated,
+    /// and their trail stays frozen at the collision point.
+    pub alive: bool,
+}
+
+/// Ghost (future) prediction state: full N-body forecast of ALL bodies.
+///
+/// Lives outside the physical ECS (Dec. 2); integrated progressively by a
+/// system in `Update` (Dec. 1). Total invalidation via `dirty` flag (Dec. 3).
+#[derive(Debug, Resource, Default)]
+pub struct GhostPrediction {
+    pub bodies: Vec<GhostBody>,
+    /// One future trail per ghost, oldest -> newest. `VecDeque` so the
+    /// Run sliding window (T22-E, ADR 0001 Dec. 8) pops the oldest point
+    /// and pushes the newest in O(1) with constant length.
+    pub trails: Vec<VecDeque<Vec2>>,
+    pub collision_markers: Vec<(Vec2, Color)>,
+    pub dirty: bool,
+    pub computed_ticks: usize,
+    pub horizon_ticks: usize,
+    pub anchor_tick: u64,
+}
+
+impl GhostPrediction {
+    /// Total invalidation: restarts the forecast from zero (Dec. 3).
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.trails.clear();
+        self.collision_markers.clear();
+        self.computed_ticks = 0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_horizon_is_300s_19200_ticks() {
+        let cfg = TrajectoryConfig::default();
+        assert!((cfg.horizon_seconds - 300.0).abs() < f32::EPSILON);
+        assert_eq!(cfg.horizon_ticks(), 19200);
+    }
+
+    #[test]
+    fn horizon_ticks_clamps() {
+        let low = TrajectoryConfig {
+            horizon_seconds: 5.0,
+            ..TrajectoryConfig::default()
+        };
+        assert_eq!(low.horizon_ticks(), 640);
+        let high = TrajectoryConfig {
+            horizon_seconds: 9999.0,
+            ..TrajectoryConfig::default()
+        };
+        assert_eq!(high.horizon_ticks(), 230400);
+    }
+
+    #[test]
+    fn legacy_preset_without_horizon_loads_with_default() {
+        let json =
+            r#"{"enabled":true,"history_length":500,"prediction_steps":200,"sample_interval":2}"#;
+        let cfg: TrajectoryConfig = serde_json::from_str(json).expect("legacy preset must load");
+        assert!((cfg.horizon_seconds - 300.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn mark_dirty_resets() {
+        let mut pred = GhostPrediction {
+            bodies: vec![],
+            trails: vec![VecDeque::from([Vec2::ZERO])],
+            collision_markers: vec![(Vec2::ZERO, Color::WHITE)],
+            dirty: false,
+            computed_ticks: 42,
+            horizon_ticks: 19200,
+            anchor_tick: 7,
+        };
+        pred.mark_dirty();
+        assert!(pred.dirty);
+        assert!(pred.trails.is_empty());
+        assert!(pred.collision_markers.is_empty());
+        assert_eq!(pred.computed_ticks, 0);
+    }
+}
