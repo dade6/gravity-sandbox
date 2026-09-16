@@ -213,6 +213,11 @@ pub const GHOST_TICKS_PER_FRAME: usize = 256;
 
 /// Max wall-clock budget per frame chunk before a warn is logged (ms).
 /// No adaptivity: fixed chunk, just observability (T22-B scope).
+/// NOTE: wall-clock timing via `std::time::Instant` is NOT used here on
+/// purpose — `Instant::now()` panics on wasm32-unknown-unknown
+/// (white page, "Unreachable code should not be executed" in
+/// `ghost_compute_system`, v0.14.89). Fixed chunk, no timing.
+#[allow(dead_code)]
 const GHOST_CHUNK_WARN_MS: u128 = 4;
 
 /// Faithful ghost tick (ADR-4): EXACT replica of `gravity_system`
@@ -527,7 +532,6 @@ pub fn ghost_compute_system(
         physics_time.relative_speed_f64(),
     );
     let g = grav.0;
-    let t0 = std::time::Instant::now();
     let remaining = pred.horizon_ticks - pred.computed_ticks;
     let chunk = remaining.min(GHOST_TICKS_PER_FRAME);
     for _ in 0..chunk {
@@ -548,14 +552,6 @@ pub fn ghost_compute_system(
         }
     }
     pred.computed_ticks += chunk;
-    if t0.elapsed().as_millis() > GHOST_CHUNK_WARN_MS {
-        bevy::log::warn!(
-            "ghost_compute chunk of {} ticks took >{}ms (bodies={})",
-            chunk,
-            GHOST_CHUNK_WARN_MS,
-            pred.bodies.len(),
-        );
-    }
 }
 
 // ============================================================
