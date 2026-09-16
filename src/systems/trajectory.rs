@@ -337,7 +337,13 @@ pub fn ghost_snapshot_system(
 pub fn ghost_dirty_triggers(
     added: Query<Entity, Added<CelestialBody>>,
     changed_body: Query<Entity, Changed<CelestialBody>>,
-    changed_physics: Query<Entity, Or<(Changed<Transform>, Changed<LinearVelocity>)>>,
+    changed_physics: Query<
+        Entity,
+        (
+            Or<(Changed<Transform>, Changed<LinearVelocity>)>,
+            With<CelestialBody>,
+        ),
+    >,
     mut removed: RemovedComponents<CelestialBody>,
     grav: Res<GravitationalConstant>,
     sim_state: Res<SimulationState>,
@@ -366,6 +372,14 @@ pub fn ghost_dirty_triggers(
     // in Run they are pure physics noise that must NOT invalidate the sliding
     // window (bug v0.14.90: forecast wiped every frame in Run, future curves
     // vanished on Play and regrew on pause).
+    // The query is ALSO restricted to bodies (With<CelestialBody>): cameras,
+    // parallax layers and the minimap camera rewrite their Transform every
+    // frame, and `sync_sprite_z` rewrote body z unconditionally (fixed to
+    // write-on-change in firefly_bridge.rs). Without the filter + the
+    // conditional write, Changed<Transform> stayed hot while paused and the
+    // ghost restarted (snapshot + 1 chunk) every frame — computed froze at
+    // 256 ticks at any horizon, so the horizon setting had no visible effect
+    // (bug v0.14.93).
     if sim_state.paused && !changed_physics.is_empty() {
         dirty = true;
     }
@@ -1563,6 +1577,143 @@ mod ghost_tests {
         assert!(
             app.world().resource::<GhostPrediction>().dirty,
             "user edit to CelestialBody must mark the forecast dirty"
+        );
+    }
+
+    #[test]
+    fn ghost_non_body_transform_does_not_dirty_in_pause() {
+        // Regression test (bug v0.14.93): cameras, parallax layers and the
+        // minimap camera rewrite their Transform every frame. Those entities
+        // are NOT bodies, so their Changed<Transform> must NOT invalidate the
+        // forecast — otherwise the ghost restarted every frame while paused
+        // (snapshot + 1 chunk: computed froze at 256 ticks at any horizon).
+        let mut app = dirty_trigger_test_app();
+        app.world_mut().resource_mut::<SimulationState>().paused = true;
+        let body = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "B".into(),
+                    body_type: BodyType::Planet,
+                    mass: 100.0,
+                    radius: 8.0,
+                    color: [0.4, 0.6, 1.0],
+                    luminous: false,
+                },
+                Transform::default(),
+            ))
+            .id();
+        // Camera-like entity: Transform but NO CelestialBody.
+        let cam = app.world_mut().spawn(Transform::default()).id();
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<GhostPrediction>().dirty = false;
+        // Per-frame rewrite of a non-body Transform (camera/parallax pattern).
+        app.world_mut()
+            .entity_mut(cam)
+            .insert(Transform::from_xyz(5.0, 5.0, 0.0));
+        app.update();
+        assert!(
+            !app.world().resource::<GhostPrediction>().dirty,
+            "non-body Transform write must NOT invalidate the forecast"
+        );
+        // ...but a real body drag in pause MUST still invalidate.
+        app.world_mut()
+            .entity_mut(body)
+            .insert(Transform::from_xyz(1.0, 0.0, 0.0));
+        app.update();
+        assert!(
+            app.world().resource::<GhostPrediction>().dirty,
+            "body Transform change in pause must mark the forecast dirty"
+        );
+    }
+
+    #[test]
+    fn ghost_grows_past_first_chunk_with_real_writers_running() {
+        // Integration regression test (bug v0.14.93): the REAL per-frame
+        // writers run (here `sync_sprite_z`, standing in for the app's
+        // cameras/parallax/minimap too). A paused forecast must GROW past
+        // the first 256-tick chunk. Pre-fix steady state: every frame
+        // restarted (snapshot + exactly 1 chunk), so computed froze at 256
+        // ticks at ANY horizon and the horizon setting had no visible effect.
+        use crate::systems::firefly_bridge::sync_sprite_z;
+        let mut app = App::new();
+        app.init_resource::<SimulationState>()
+            .init_resource::<TrajectoryConfig>()
+            .init_resource::<TrajectoryTickCounter>()
+            .init_resource::<GravitationalConstant>()
+            .init_resource::<GhostPrediction>()
+            .insert_resource(Time::<Fixed>::default())
+            .insert_resource(Time::<Physics>::default())
+            .add_systems(
+                Update,
+                (
+                    sync_sprite_z,
+                    ghost_dirty_triggers,
+                    ghost_snapshot_system,
+                    ghost_compute_system,
+                )
+                    .chain(),
+            );
+        app.world_mut().resource_mut::<SimulationState>().paused = true;
+        // Star + ONE planet on a circular orbit (v = sqrt(G*M/r),
+        // G = 5000 = default): zero-velocity planets would fall straight
+        // into the star and merge (correct behavior, covered by the T22-C
+        // tests), and two planets perturb each other into real close
+        // encounters — so a single planet keeps this growth test
+        // collision-free by construction.
+        let bodies = [
+            ("Star", Vec2::ZERO, Vec2::ZERO, 5000.0, 30.0, true),
+            (
+                "P1",
+                Vec2::new(300.0, 0.0),
+                Vec2::new(0.0, 288.7),
+                10.0,
+                8.0,
+                false,
+            ),
+        ];
+        for (name, pos, vel, mass, radius, luminous) in bodies {
+            app.world_mut().spawn((
+                CelestialBody {
+                    name: name.into(),
+                    body_type: BodyType::Planet,
+                    mass,
+                    radius,
+                    color: [0.4, 0.6, 1.0],
+                    luminous,
+                },
+                Transform::from_xyz(pos.x, pos.y, 0.0),
+                GlobalTransform::from_xyz(pos.x, pos.y, 0.0),
+                LinearVelocity(vel),
+                Sprite {
+                    color: Color::srgba(0.5, 0.5, 0.5, 1.0),
+                    ..default()
+                },
+            ));
+        }
+        for _ in 0..6 {
+            app.update();
+        }
+        let pred = app.world().resource::<GhostPrediction>();
+        let lens: Vec<usize> = pred.trails.iter().map(|t| t.len()).collect();
+        assert_eq!(
+            pred.collision_markers.len(),
+            0,
+            "no collisions expected on circular orbits (markers={:?})",
+            pred.collision_markers
+        );
+        assert_eq!(
+            pred.computed_ticks,
+            6 * GHOST_TICKS_PER_FRAME,
+            "paused forecast must grow 256 ticks/frame (got {})",
+            pred.computed_ticks
+        );
+        assert!(
+            pred.trails
+                .iter()
+                .all(|t| t.len() == 6 * GHOST_TICKS_PER_FRAME),
+            "all trails must grow with computed ticks (lens={lens:?})"
         );
     }
 }

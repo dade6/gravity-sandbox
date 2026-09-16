@@ -476,7 +476,7 @@ fn sync_occluders(
 /// l'auto-ombra (uguaglianza stencil.g == occ.z). Con z = -y (worker) o z=0
 /// le ombre tra pianeti saltavano o l'auto-ombra oscurava tutto il disco.
 /// La stella resta a z di spawn: non riceve ombre dai pianeti.
-fn sync_sprite_z(
+pub(crate) fn sync_sprite_z(
     mut queries: ParamSet<(
         Query<(&CelestialBody, &mut Transform), With<Sprite>>,
         // stella (leggi Transform per la distanza): ParamSet obbligatorio,
@@ -507,7 +507,16 @@ fn sync_sprite_z(
         //   solo la parte dentro il cono non riceve luce (PARZIALE
         //   SPAZIALE, come richiesto).
         let d = transform.translation.truncate().distance(star_pos);
-        transform.translation.z = -d;
+        // Write ONLY on actual change: an unconditional write marks
+        // Changed<Transform> every frame even with an identical value, and
+        // that kept `ghost_dirty_triggers` hot forever while paused — the
+        // ghost restarted (snapshot + 1 chunk) every frame and never grew
+        // past 256 ticks, so the horizon setting had no visible effect
+        // (bug v0.14.93).
+        let new_z = -d;
+        if (transform.translation.z - new_z).abs() > f32::EPSILON {
+            transform.translation.z = new_z;
+        }
     }
 }
 
@@ -696,6 +705,58 @@ mod tests {
         assert!(
             z_back < z_front - 1.0,
             "il pianeta dietro deve avere z PIU' BASSO (riceve l'ombra): {z_front} vs {z_back}"
+        );
+    }
+
+    /// Conta le entity con Transform marcato Changed (sonda per il test
+    /// di idempotenza qui sotto: gira DOPO sync_sprite_z nella stessa chain).
+    #[derive(bevy::prelude::Resource, Default)]
+    struct ChangedTransformCount(usize);
+
+    fn count_changed_transform(
+        q: bevy::prelude::Query<
+            bevy::prelude::Entity,
+            bevy::prelude::Changed<bevy::prelude::Transform>,
+        >,
+        mut c: bevy::prelude::ResMut<ChangedTransformCount>,
+    ) {
+        c.0 = q.iter().count();
+    }
+
+    #[test]
+    fn sync_sprite_z_quiet_when_static() {
+        // Regression test (bug v0.14.93): con corpi fermi, dopo il primo
+        // assestamento sync_sprite_z NON deve più scrivere Transform — una
+        // scrittura incondizionata marchia Changed ogni frame e teneva
+        // `ghost_dirty_triggers` caldo in eterno (il ghost ripartiva ogni
+        // frame e non superava mai 256 tick: l'orizzonte sembrava ignorato).
+        let mut app = bevy::prelude::App::new();
+        app.init_resource::<ChangedTransformCount>().add_systems(
+            bevy::prelude::Update,
+            (sync_sprite_z, count_changed_transform).chain(),
+        );
+        {
+            let mut world = app.world_mut();
+            spawn_body(&mut world, "Star", Vec2::ZERO, 30.0, true);
+            spawn_body(&mut world, "P", Vec2::new(150.0, 0.0), 15.0, false);
+        }
+        app.update(); // primo z-write + assestamento Added/Changed di spawn
+        app.update(); // assestamento
+        app.update(); // a regime: con corpi fermi, zero scritture attese
+        assert_eq!(
+            app.world().resource::<ChangedTransformCount>().0,
+            0,
+            "corpi fermi -> sync_sprite_z non deve marcare Changed<Transform>"
+        );
+        // ...ma un vero spostamento deve ancora propagarsi (z ricalcolato).
+        app.world_mut()
+            .query::<&mut bevy::prelude::Transform>()
+            .iter_mut(app.world_mut())
+            .for_each(|mut t| t.translation.x += 10.0);
+        app.update();
+        assert!(
+            app.world().resource::<ChangedTransformCount>().0 > 0,
+            "dopo uno spostamento reale il Changed deve scattare"
         );
     }
 
