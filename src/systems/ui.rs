@@ -1265,6 +1265,8 @@ fn handle_ui_buttons(
             Without<crate::systems::settings::SettingsBtn>,
             Without<crate::systems::settings::SettingsCloseBtn>,
             Without<crate::systems::settings::SettingsToggleBtn>,
+            Without<crate::systems::camera_follow::FollowToggle>,
+            Without<crate::systems::camera_follow::FollowOption>,
         ),
     >,
     // Query separata con edge detection per i toggle (play/step/reset):

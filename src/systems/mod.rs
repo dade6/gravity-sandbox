@@ -1,4 +1,5 @@
 pub mod camera;
+pub mod camera_follow;
 pub mod firefly_bridge;
 pub mod gravity;
 pub mod keypad;

@@ -447,6 +447,7 @@ pub fn wasm_main() {
         systems::keypad::KeypadPlugin,
         systems::settings::SettingsPlugin,
         FireflyBridgePlugin,
+        systems::camera_follow::CameraFollowPlugin,
     ))
     .insert_resource(Gravity::ZERO)
     .add_systems(FixedUpdate, gravity::gravity_system)
@@ -520,6 +521,7 @@ mod tests {
             ResetPlugin,
             systems::keypad::KeypadPlugin,
             systems::settings::SettingsPlugin,
+            systems::camera_follow::CameraFollowPlugin,
         ))
         .insert_resource(Gravity::ZERO)
         .add_systems(FixedUpdate, gravity::gravity_system);

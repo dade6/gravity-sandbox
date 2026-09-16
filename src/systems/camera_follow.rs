@@ -1,0 +1,338 @@
+//! Camera follow: aggancia la camera principale a un corpo celeste.
+//!
+//! UI nativa Bevy (niente overlay HTML): un bottone "Camera: ..." in alto a
+//! sinistra sotto la toolbar apre un menu a tendina con "Libera" + tutti i
+//! corpi. Selezionando un corpo, la camera ne segue la posizione ogni frame.
+
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll};
+use bevy::prelude::*;
+use bevy::text::{FontSize, FontSource};
+
+use crate::components::celestial::CelestialBody;
+use crate::systems::camera::MainCamera;
+
+/// Risorsa: corpo agganciato (None = camera libera).
+#[derive(Default, Resource)]
+pub struct CameraFollow(pub Option<Entity>);
+
+/// Risorsa: tendina aperta/chiusa.
+#[derive(Default, Resource)]
+pub struct CameraFollowOpen(pub bool);
+
+/// Marker sul bottone toggle "Camera: ...".
+#[derive(Component)]
+pub struct FollowToggle;
+
+/// Marker sul testo del bottone toggle.
+#[derive(Component)]
+pub struct FollowLabel;
+
+/// Marker sul container della tendina.
+#[derive(Component)]
+pub struct FollowDropdown;
+
+/// Marker su ogni voce della tendina (None = "Libera").
+#[derive(Component)]
+pub struct FollowOption {
+    pub target: Option<Entity>,
+    pub name: String,
+}
+
+pub struct CameraFollowPlugin;
+
+impl Plugin for CameraFollowPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<CameraFollow>()
+            .init_resource::<CameraFollowOpen>()
+            .add_systems(Startup, spawn_camera_follow_ui)
+            .add_systems(
+                Update,
+                (
+                    toggle_follow_dropdown,
+                    select_follow_option,
+                    refresh_follow_options,
+                    update_follow_label,
+                    update_follow_dropdown_visibility,
+                    follow_camera,
+                ),
+            );
+    }
+}
+
+const TEXT_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.75);
+const BORDER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.25);
+const PANEL_BG: Color = Color::srgba(0.08, 0.08, 0.15, 0.95);
+const BTN_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
+const BTN_PRESS: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
+
+fn spawn_camera_follow_ui(mut commands: Commands) {
+    crate::mark_system("spawn_camera_follow_ui");
+    commands
+        .spawn((Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(60.0),
+            left: Val::Px(10.0),
+            width: Val::Px(200.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            ..default()
+        },))
+        .with_children(|root| {
+            // Bottone toggle
+            root.spawn((
+                Button,
+                FollowToggle,
+                Node {
+                    height: Val::Px(36.0),
+                    padding: UiRect::horizontal(Val::Px(12.0)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::FlexStart,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::px(8.0, 8.0, 8.0, 8.0),
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                BorderColor::all(BORDER_COLOR),
+            ))
+            .with_child((
+                FollowLabel,
+                Text::new("Camera: Libera"),
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(TEXT_COLOR),
+            ));
+            // Tendina (nascosta all'inizio, popolata da refresh_follow_options)
+            root.spawn((
+                FollowDropdown,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    width: Val::Percent(100.0),
+                    padding: UiRect::all(Val::Px(4.0)),
+                    row_gap: Val::Px(2.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::px(8.0, 8.0, 8.0, 8.0),
+                    display: Display::None,
+                    ..default()
+                },
+                BackgroundColor(PANEL_BG),
+                BorderColor::all(BORDER_COLOR),
+                GlobalZIndex(20),
+            ));
+        });
+}
+
+/// Click sul toggle: apre/chiude la tendina (+ feedback hover/press).
+fn toggle_follow_dropdown(
+    mut open: ResMut<CameraFollowOpen>,
+    mut query: Query<
+        (&Interaction, &mut BackgroundColor),
+        (With<FollowToggle>, Changed<Interaction>),
+    >,
+) {
+    crate::mark_system("toggle_follow_dropdown");
+    for (interaction, mut bg) in query.iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                *bg = BTN_PRESS.into();
+                open.0 = !open.0;
+            }
+            Interaction::Hovered => {
+                *bg = BTN_HOVER.into();
+            }
+            Interaction::None => {
+                *bg = if open.0 {
+                    BTN_PRESS.into()
+                } else {
+                    Color::srgba(0.0, 0.0, 0.0, 0.0).into()
+                };
+            }
+        }
+    }
+}
+
+/// Click su una voce: aggancia la camera (o libera) e chiude la tendina.
+fn select_follow_option(
+    mut follow: ResMut<CameraFollow>,
+    mut open: ResMut<CameraFollowOpen>,
+    mut query: Query<(&Interaction, &FollowOption, &mut BackgroundColor), Changed<Interaction>>,
+) {
+    crate::mark_system("select_follow_option");
+    for (interaction, option, mut bg) in query.iter_mut() {
+        match *interaction {
+            Interaction::Pressed => {
+                *bg = BTN_PRESS.into();
+                follow.0 = option.target;
+                open.0 = false;
+            }
+            Interaction::Hovered => {
+                *bg = BTN_HOVER.into();
+            }
+            Interaction::None => {
+                let is_active = follow.0 == option.target;
+                *bg = if is_active {
+                    BTN_PRESS.into()
+                } else {
+                    Color::srgba(0.0, 0.0, 0.0, 0.0).into()
+                };
+            }
+        }
+    }
+}
+
+/// Ricostruisce le voci della tendina quando i corpi cambiano
+/// (spawn/despawn/rinomina). Prima voce sempre "Libera".
+fn refresh_follow_options(
+    mut commands: Commands,
+    bodies: Query<(Entity, &CelestialBody)>,
+    dropdown: Query<Entity, With<FollowDropdown>>,
+    old_options: Query<Entity, With<FollowOption>>,
+    mut last_snapshot: Local<Vec<(Entity, String)>>,
+) {
+    crate::mark_system("refresh_follow_options");
+    let mut snapshot: Vec<(Entity, String)> =
+        bodies.iter().map(|(e, b)| (e, b.name.clone())).collect();
+    snapshot.sort_by(|a, b| a.1.cmp(&b.1));
+    if *last_snapshot == snapshot {
+        return;
+    }
+    *last_snapshot = snapshot.clone();
+    let Ok(dropdown_entity) = dropdown.single() else {
+        return;
+    };
+    for entity in old_options.iter() {
+        commands.entity(entity).despawn();
+    }
+    commands.entity(dropdown_entity).with_children(|menu| {
+        menu.spawn((
+            Button,
+            FollowOption {
+                target: None,
+                name: "Libera".to_string(),
+            },
+            Node {
+                height: Val::Px(30.0),
+                padding: UiRect::horizontal(Val::Px(10.0)),
+                align_items: AlignItems::Center,
+                width: Val::Percent(100.0),
+                border_radius: BorderRadius::px(4.0, 4.0, 4.0, 4.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+        ))
+        .with_child((
+            Text::new("Libera"),
+            TextFont {
+                font: FontSource::default(),
+                font_size: FontSize::Px(13.0),
+                ..default()
+            },
+            TextColor(TEXT_COLOR),
+        ));
+        for (entity, name) in &snapshot {
+            menu.spawn((
+                Button,
+                FollowOption {
+                    target: Some(*entity),
+                    name: name.clone(),
+                },
+                Node {
+                    height: Val::Px(30.0),
+                    padding: UiRect::horizontal(Val::Px(10.0)),
+                    align_items: AlignItems::Center,
+                    width: Val::Percent(100.0),
+                    border_radius: BorderRadius::px(4.0, 4.0, 4.0, 4.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+            ))
+            .with_child((
+                Text::new(name.clone()),
+                TextFont {
+                    font: FontSource::default(),
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+                TextColor(TEXT_COLOR),
+            ));
+        }
+    });
+}
+
+/// Etichetta del toggle: "Camera: <nome>" o "Camera: Libera".
+fn update_follow_label(
+    follow: Res<CameraFollow>,
+    bodies: Query<&CelestialBody>,
+    mut label: Query<&mut Text, With<FollowLabel>>,
+) {
+    crate::mark_system("update_follow_label");
+    if !follow.is_changed() && !bodies.is_empty() {
+        // Aggiorna anche quando un corpo viene rinominato: il check sotto
+        // confronta comunque il testo, costo trascurabile (una entity).
+    }
+    let name = follow
+        .0
+        .and_then(|e| bodies.get(e).ok().map(|b| b.name.clone()))
+        .unwrap_or_else(|| "Libera".to_string());
+    let mut short = name.clone();
+    if short.chars().count() > 14 {
+        short = format!("{}..", short.chars().take(12).collect::<String>());
+    }
+    let expected = format!("Camera: {} v", short);
+    if let Ok(mut text) = label.single_mut() {
+        if text.0 != expected {
+            text.0 = expected;
+        }
+    }
+}
+
+/// Mostra/nasconde la tendina in base a CameraFollowOpen.
+fn update_follow_dropdown_visibility(
+    open: Res<CameraFollowOpen>,
+    mut dropdown: Query<&mut Node, With<FollowDropdown>>,
+) {
+    crate::mark_system("update_follow_dropdown_visibility");
+    if !open.is_changed() {
+        return;
+    }
+    if let Ok(mut node) = dropdown.single_mut() {
+        node.display = if open.0 { Display::Flex } else { Display::None };
+    }
+}
+
+/// Ogni frame sposta la camera sul corpo agganciato (x/y, z invariata).
+/// Il pan manuale (trascina tasto destro / pan trackpad orizzontale)
+/// sgancia e restituisce la camera libera.
+fn follow_camera(
+    mut follow: ResMut<CameraFollow>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mouse_motion: Res<AccumulatedMouseMotion>,
+    scroll: Res<AccumulatedMouseScroll>,
+    mut camera_query: Query<&mut Transform, (With<Camera2d>, With<MainCamera>)>,
+    bodies: Query<&GlobalTransform>,
+) {
+    crate::mark_system("follow_camera");
+    let Some(target) = follow.0 else {
+        return;
+    };
+    // Pan manuale = sgancia (lo zoom verticale resta agganciato).
+    let right_dragging =
+        mouse_buttons.pressed(MouseButton::Right) && mouse_motion.delta.length() > 0.5;
+    let trackpad_pan = scroll.delta.x != 0.0;
+    if right_dragging || trackpad_pan {
+        follow.0 = None;
+        return;
+    }
+    let Ok(body_pos) = bodies.get(target).map(|t| t.translation()) else {
+        // Corpo cancellato: torna libera invece di restare appesa.
+        follow.0 = None;
+        return;
+    };
+    if let Ok(mut transform) = camera_query.single_mut() {
+        transform.translation.x = body_pos.x;
+        transform.translation.y = body_pos.y;
+    }
+}
