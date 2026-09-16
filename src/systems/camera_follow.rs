@@ -53,9 +53,11 @@ impl Plugin for CameraFollowPlugin {
                     refresh_follow_options,
                     update_follow_label,
                     update_follow_dropdown_visibility,
-                    follow_camera,
                 ),
-            );
+            )
+            // PostUpdate, DOPO pan/zoom (Update): lo snap vince sul pan e
+            // lo zoom resta sempre agganciato (vedi follow_camera).
+            .add_systems(PostUpdate, follow_camera);
     }
 }
 
@@ -303,27 +305,57 @@ fn update_follow_dropdown_visibility(
     }
 }
 
-/// Ogni frame sposta la camera sul corpo agganciato (x/y, z invariata).
-/// Il pan manuale (trascina tasto destro / pan trackpad orizzontale)
-/// sgancia e restituisce la camera libera.
+/// Soglia (px) oltre la quale un touch a un dito e' un drag (sgancia).
+const TOUCH_UNHOOK_PX: f32 = 10.0;
+
+/// Snap della camera sul corpo agganciato (x/y, z invariata).
+/// Gira in PostUpdate, DOPO pan/zoom (Update): mentre il follow e' attivo
+/// qualsiasi pan applicato in Update viene sovrascritto qui, cosi' lo zoom
+/// (rotella verticale, pinch) resta sempre agganciato senza jitter da
+/// ordine ambiguo dei sistemi. Solo un pan manuale VERO sgancia e torna
+/// libera: in quel caso si esce SENZA snappare e il pan dell'Update resta.
 fn follow_camera(
     mut follow: ResMut<CameraFollow>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
+    touches: Res<Touches>,
+    mut touch_origin: Local<Option<Vec2>>,
     mut camera_query: Query<&mut Transform, (With<Camera2d>, With<MainCamera>)>,
     bodies: Query<&GlobalTransform>,
 ) {
     crate::mark_system("follow_camera");
     let Some(target) = follow.0 else {
+        *touch_origin = None;
         return;
     };
-    // Pan manuale = sgancia (lo zoom verticale resta agganciato).
+    // Tasto destro + trascina = sgancia.
     let right_dragging =
         mouse_buttons.pressed(MouseButton::Right) && mouse_motion.delta.length() > 0.5;
-    let trackpad_pan = scroll.delta.x != 0.0;
-    if right_dragging || trackpad_pan {
+    // Pan trackpad = sgancia, MA solo se NON e' una gesture di zoom
+    // (stessa euristica di zoom_camera: verticale pura o pinch diagonale
+    // restano agganciate).
+    let d = scroll.delta;
+    let is_zoom_gesture = (d.x == 0.0 && d.y != 0.0) || (d.x.abs() > 1.0 && d.y.abs() > 1.0);
+    let trackpad_pan = (d.x != 0.0 || d.y != 0.0) && !is_zoom_gesture;
+    // Drag a un dito (touch) = sgancia; il tap semplice resta agganciato.
+    let mut touch_drag = false;
+    if touches.iter().count() == 1 {
+        if let Some(touch) = touches.iter().next() {
+            if touches.just_pressed(touch.id()) {
+                *touch_origin = Some(touch.position());
+            } else if let Some(origin) = *touch_origin {
+                if touch.position().distance(origin) > TOUCH_UNHOOK_PX {
+                    touch_drag = true;
+                }
+            }
+        }
+    } else {
+        *touch_origin = None;
+    }
+    if right_dragging || trackpad_pan || touch_drag {
         follow.0 = None;
+        *touch_origin = None;
         return;
     }
     let Ok(body_pos) = bodies.get(target).map(|t| t.translation()) else {
