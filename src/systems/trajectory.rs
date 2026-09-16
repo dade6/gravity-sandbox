@@ -336,14 +336,8 @@ pub fn ghost_snapshot_system(
 /// forecast restarts from zero and regrows progressively.
 pub fn ghost_dirty_triggers(
     added: Query<Entity, Added<CelestialBody>>,
-    changed: Query<
-        Entity,
-        Or<(
-            Changed<CelestialBody>,
-            Changed<LinearVelocity>,
-            Changed<Transform>,
-        )>,
-    >,
+    changed_body: Query<Entity, Changed<CelestialBody>>,
+    changed_physics: Query<Entity, Or<(Changed<Transform>, Changed<LinearVelocity>)>>,
     mut removed: RemovedComponents<CelestialBody>,
     grav: Res<GravitationalConstant>,
     sim_state: Res<SimulationState>,
@@ -361,7 +355,18 @@ pub fn ghost_dirty_triggers(
     if removed.read().count() > 0 {
         dirty = true;
     }
-    if !changed.is_empty() {
+    // User edits to body properties (mass, radius, ...) always invalidate,
+    // paused or running.
+    if !changed_body.is_empty() {
+        dirty = true;
+    }
+    // NOTE: Avian rewrites Transform/LinearVelocity EVERY physics tick, so
+    // these Changed flags are hot continuously during Run. Gating on paused:
+    // they mean user drag/edit only when paused (tools are pause-only), while
+    // in Run they are pure physics noise that must NOT invalidate the sliding
+    // window (bug v0.14.90: forecast wiped every frame in Run, future curves
+    // vanished on Play and regrew on pause).
+    if sim_state.paused && !changed_physics.is_empty() {
         dirty = true;
     }
     if grav.is_changed() {
@@ -1509,6 +1514,55 @@ mod ghost_tests {
         assert!(
             app.world().resource::<GhostPrediction>().dirty,
             "horizon change must mark the forecast dirty"
+        );
+    }
+
+    #[test]
+    fn ghost_physics_writeback_in_run_does_not_dirty() {
+        // Regression test (bug v0.14.90): Avian rewrites Transform +
+        // LinearVelocity every physics tick. Those Changed flags must NOT
+        // invalidate the forecast during Run — otherwise the sliding window
+        // re-anchors (empty trails) every frame and the future curves vanish
+        // on Play. Only real user edits (CelestialBody) dirty in Run.
+        let mut app = dirty_trigger_test_app();
+        let e = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "B".into(),
+                    body_type: BodyType::Planet,
+                    mass: 100.0,
+                    radius: 8.0,
+                    color: [0.4, 0.6, 1.0],
+                    luminous: false,
+                },
+                Transform::default(),
+                LinearVelocity(Vec2::ZERO),
+            ))
+            .id();
+        // Settle: Added/Changed triggers drain, locals latch. Default sim
+        // state is running (paused = false) — the Run case under test.
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<GhostPrediction>().dirty = false;
+        // Simulate one Avian writeback tick touching physics components.
+        app.world_mut()
+            .entity_mut(e)
+            .insert(Transform::from_xyz(1.0, 0.0, 0.0));
+        app.world_mut()
+            .entity_mut(e)
+            .insert(LinearVelocity(Vec2::new(1.0, 0.0)));
+        app.update();
+        assert!(
+            !app.world().resource::<GhostPrediction>().dirty,
+            "physics writeback in Run must NOT invalidate the forecast"
+        );
+        // A genuine user edit (body property) in Run MUST still invalidate.
+        app.world_mut().get_mut::<CelestialBody>(e).unwrap().mass = 999.0;
+        app.update();
+        assert!(
+            app.world().resource::<GhostPrediction>().dirty,
+            "user edit to CelestialBody must mark the forecast dirty"
         );
     }
 }
