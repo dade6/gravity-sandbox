@@ -17,8 +17,11 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 
 use crate::components::celestial::CelestialBody;
-use crate::components::lighting::{StarGlow, StarLightSettings};
+use crate::components::lighting::{AmbientLight, GlowCurve, StarGlow, StarLightSettings};
+use crate::components::trajectory::TrajectoryConfig;
+use crate::systems::persistence::GravitationalConstant;
 use crate::systems::selection::SelectedBody;
+use crate::systems::settings::apply_settings_field;
 use crate::systems::ui::{apply_prop_value, apply_star_prop_value, PropInput};
 
 /// Azione di un tasto del keypad
@@ -284,6 +287,13 @@ fn keypad_buttons(
     )>,
     mut settings_q: Query<&mut StarLightSettings>,
     mut glow_q: Query<&mut StarGlow>,
+    // Risorse settings globali (modale `set_*`): il keypad si apre anche per
+    // questi campi su mobile, quindi OK deve scriverle (bug v0.14.91: il testo
+    // restava nel campo ma la risorsa non cambiava mai).
+    mut grav: ResMut<GravitationalConstant>,
+    mut ambient: ResMut<AmbientLight>,
+    mut glow_curve: ResMut<GlowCurve>,
+    mut trajectory: ResMut<TrajectoryConfig>,
 ) {
     crate::mark_system("keypad_buttons");
     for (interaction, action) in buttons.iter() {
@@ -332,6 +342,23 @@ fn keypad_buttons(
                             apply_star_prop_value(prop_name, &text_value, &mut s, &mut g);
                         }
                     }
+                }
+                // Campi settings globali (modale, prefisso `set_`): gravità,
+                // ambient, curva alone, traiettorie. Senza questo ramo il
+                // valore digitato restava solo nel testo del campo e la
+                // risorsa non cambiava mai (bug v0.14.91: horizon invariato
+                // su iPhone nonostante OK). Idempotente con l'apply on
+                // focus-loss di `apply_settings_on_confirm` (secondo apply
+                // con stesso valore = no-op).
+                if prop_name.starts_with("set_") {
+                    apply_settings_field(
+                        prop_name,
+                        &text_value,
+                        &mut grav,
+                        &mut ambient,
+                        &mut glow_curve,
+                        &mut trajectory,
+                    );
                 }
                 *input_focus = InputFocus::default();
             }
