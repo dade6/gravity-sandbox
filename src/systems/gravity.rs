@@ -6,8 +6,25 @@ use crate::systems::persistence::{GravitationalConstant, SOFTENING};
 
 /// N-body gravity system.
 /// Runs in FixedUpdate to sync with Avian's physics solver.
+///
+/// Reads positions from Avian `Position` (the physics state of record):
+/// the transform tree is only propagated in PostUpdate, so at FixedUpdate
+/// time `GlobalTransform` may still hold the previous tick's positions.
+/// Every body has `Position` (`RigidBody` requires it), so no spawn path is
+/// skipped by this query.
+///
+/// Mass note (bug v0.14.100 investigation): Avian integrates ConstantForce
+/// as acceleration via `ComputedMass.inverse()`. Verified headless
+/// (`ghost_total_mass_matches_avian_computed_mass`): with explicit `Mass`
+/// present, `ComputedMass == Mass` EXACTLY (the explicit mass REPLACES the
+/// collider auto-mass — Avian's own test asserts this too). Our bodies
+/// always spawn with explicit `Mass` (== `CelestialBody.mass`, synced on
+/// edit in ui.rs), so `a = F / m_body` on both sides and the ghost's
+/// `acc / body.mass` is already the identical computation. No compensation
+/// needed — and none applied (an earlier revision pre-scaled forces by
+/// ComputedMass on a wrong auto-mass assumption; reverted).
 pub fn gravity_system(
-    query: Query<(Entity, &CelestialBody, &GlobalTransform)>,
+    query: Query<(Entity, &CelestialBody, &Position)>,
     mut force_query: Query<&mut ConstantForce>,
     grav: Res<GravitationalConstant>,
 ) {
@@ -18,7 +35,7 @@ pub fn gravity_system(
     // Collect all bodies
     let bodies: Vec<(Entity, f32, Vec2)> = query
         .iter()
-        .map(|(e, body, xform)| (e, body.mass, xform.translation().truncate()))
+        .map(|(e, body, pos)| (e, body.mass, pos.0))
         .collect();
 
     if bodies.len() < 2 {

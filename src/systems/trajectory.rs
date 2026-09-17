@@ -226,6 +226,14 @@ const GHOST_CHUNK_WARN_MS: u128 = 4;
 /// 6 frozen-force semi-implicit Euler substeps — the same 6 substeps Avian
 /// runs per tick (`SubstepCount` default 6).
 ///
+/// Mass subtlety (bug v0.14.100 investigation, CLOSED): Avian integrates
+/// ConstantForce as acceleration via `ComputedMass.inverse()`. Verified
+/// headless (`ghost_total_mass_matches_avian_computed_mass`): with explicit
+/// `Mass` present, `ComputedMass == Mass` EXACTLY (explicit mass REPLACES
+/// collider auto-mass). Our bodies always spawn with explicit `Mass`
+/// (== `CelestialBody.mass`, synced on edit), so dividing by `body.mass`
+/// here is already the identical computation the sim performs. No
+/// compensation needed.
 /// Pure function over plain data: no Avian components on ghosts (Dec. 2).
 pub fn ghost_step_tick(ghosts: &mut [GhostBody], g: f32, dt_tick: f32) {
     let n = ghosts.len();
@@ -269,6 +277,16 @@ pub fn ghost_step_tick(ghosts: &mut [GhostBody], g: f32, dt_tick: f32) {
             body.pos += body.vel * dt_sub;
         }
     }
+}
+
+/// Total inertial mass Avian uses for a body: EXPLICIT `Mass` REPLACES the
+/// collider auto-mass (verified: `ComputedMass == Mass` whenever `Mass` is
+/// present — Avian's own `mass_properties_rb_collider_with_set_mass` test
+/// asserts exactly this). `ghost_total_mass` is therefore the identity, kept
+/// as a named choke point (with its contract test below) so any future Avian
+/// change to this rule breaks loudly instead of drifting the forecast.
+pub fn ghost_total_mass(mass: f32, _radius: f32) -> f32 {
+    mass
 }
 
 /// Snapshot helper shared by `ghost_snapshot_system` and
@@ -1019,6 +1037,41 @@ mod ghost_tests {
         for (a, b) in chunked.iter().zip(bulk.iter()) {
             assert_eq!(a.pos, b.pos, "positions must coincide exactly");
             assert_eq!(a.vel, b.vel, "velocities must coincide exactly");
+        }
+    }
+
+    #[test]
+    fn ghost_total_mass_matches_avian_computed_mass() {
+        // Contract test (bug v0.14.100): `ghost_total_mass(mass, radius)` MUST
+        // equal the `ComputedMass` Avian derives for a `Collider::circle`
+        // body with explicit `Mass(mass)` and default density. If Avian ever
+        // changes its density default or circle formula, this test — not a
+        // silent forecast drift — will tell us.
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, PhysicsPlugins::default()))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 64.0,
+            )));
+        app.finish();
+        for (mass, radius) in [(8.0, 12.0), (10_000.0, 30.0), (100.0, 8.0)] {
+            let e = app
+                .world_mut()
+                .spawn((RigidBody::Dynamic, Collider::circle(radius), Mass(mass)))
+                .id();
+            app.world_mut().run_schedule(FixedPostUpdate);
+            app.world_mut().run_schedule(FixedPostUpdate);
+            let computed = app
+                .world()
+                .entity(e)
+                .get::<ComputedMass>()
+                .map(|c| c.value());
+            assert_eq!(
+                computed,
+                Some(ghost_total_mass(mass, radius)),
+                "ghost_total_mass({mass}, {radius}) must equal Avian ComputedMass"
+            );
         }
     }
 
