@@ -19,6 +19,10 @@ pub struct CameraFollow(pub Option<Entity>);
 #[derive(Default, Resource)]
 pub struct CameraFollowOpen(pub bool);
 
+/// Marker sul container radice (per riposizionamento adattivo).
+#[derive(Component)]
+pub struct FollowRoot;
+
 /// Marker sul bottone toggle "Camera: ...".
 #[derive(Component)]
 pub struct FollowToggle;
@@ -53,6 +57,7 @@ impl Plugin for CameraFollowPlugin {
                     refresh_follow_options,
                     update_follow_label,
                     update_follow_dropdown_visibility,
+                    adapt_follow_position,
                 ),
             )
             // PostUpdate, DOPO pan/zoom (Update): lo snap vince sul pan e
@@ -70,28 +75,34 @@ const BTN_PRESS: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
 fn spawn_camera_follow_ui(mut commands: Commands) {
     crate::mark_system("spawn_camera_follow_ui");
     commands
-        .spawn((Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(60.0),
-            left: Val::Px(10.0),
-            width: Val::Px(200.0),
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(4.0),
-            ..default()
-        },))
+        .spawn((
+            FollowRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(60.0),
+                left: Val::Px(12.0),
+                // Larghezza hug-content come i bottoni toolbar (niente
+                // 200px fissi): il bottone si allarga/restringe col testo.
+                width: Val::Auto,
+                max_width: Val::Vw(90.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                ..default()
+            },
+        ))
         .with_children(|root| {
-            // Bottone toggle
+            // Bottone toggle: stesse metriche dei bottoni toolbar
+            // (h 36, padding orizzontale 14, radius 8, font 14, centrato).
             root.spawn((
                 Button,
                 FollowToggle,
                 Node {
                     height: Val::Px(36.0),
-                    padding: UiRect::horizontal(Val::Px(12.0)),
+                    padding: UiRect::horizontal(Val::Px(14.0)),
                     align_items: AlignItems::Center,
-                    justify_content: JustifyContent::FlexStart,
+                    justify_content: JustifyContent::Center,
                     border: UiRect::all(Val::Px(1.0)),
                     border_radius: BorderRadius::px(8.0, 8.0, 8.0, 8.0),
-                    width: Val::Percent(100.0),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
@@ -102,7 +113,7 @@ fn spawn_camera_follow_ui(mut commands: Commands) {
                 Text::new("Camera: Libera"),
                 TextFont {
                     font: FontSource::default(),
-                    font_size: FontSize::Px(13.0),
+                    font_size: FontSize::Px(14.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),
@@ -216,8 +227,8 @@ fn refresh_follow_options(
                 name: "Libera".to_string(),
             },
             Node {
-                height: Val::Px(30.0),
-                padding: UiRect::horizontal(Val::Px(10.0)),
+                height: Val::Px(36.0),
+                padding: UiRect::horizontal(Val::Px(14.0)),
                 align_items: AlignItems::Center,
                 width: Val::Percent(100.0),
                 border_radius: BorderRadius::px(4.0, 4.0, 4.0, 4.0),
@@ -229,7 +240,7 @@ fn refresh_follow_options(
             Text::new("Libera"),
             TextFont {
                 font: FontSource::default(),
-                font_size: FontSize::Px(13.0),
+                font_size: FontSize::Px(14.0),
                 ..default()
             },
             TextColor(TEXT_COLOR),
@@ -242,8 +253,8 @@ fn refresh_follow_options(
                     name: name.clone(),
                 },
                 Node {
-                    height: Val::Px(30.0),
-                    padding: UiRect::horizontal(Val::Px(10.0)),
+                    height: Val::Px(36.0),
+                    padding: UiRect::horizontal(Val::Px(14.0)),
                     align_items: AlignItems::Center,
                     width: Val::Percent(100.0),
                     border_radius: BorderRadius::px(4.0, 4.0, 4.0, 4.0),
@@ -255,7 +266,7 @@ fn refresh_follow_options(
                 Text::new(name.clone()),
                 TextFont {
                     font: FontSource::default(),
-                    font_size: FontSize::Px(13.0),
+                    font_size: FontSize::Px(14.0),
                     ..default()
                 },
                 TextColor(TEXT_COLOR),
@@ -288,6 +299,26 @@ fn update_follow_label(
         if text.0 != expected {
             text.0 = expected;
         }
+    }
+}
+
+/// Riposizionamento adattivo: su schermi stretti la toolbar va su due
+/// righe (wrap), quindi il selettore scende sotto di essa invece di
+/// sovrapporsi alla seconda riga. Soglia 640px come convenzione mobile.
+fn adapt_follow_position(
+    windows: Query<&Window>,
+    mut root: Query<&mut Node, With<FollowRoot>>,
+    mut last_top: Local<f32>,
+) {
+    crate::mark_system("adapt_follow_position");
+    let width = windows.single().map(|w| w.width()).unwrap_or(800.0);
+    let expected = if width < 640.0 { 104.0 } else { 60.0 };
+    if *last_top == expected {
+        return;
+    }
+    *last_top = expected;
+    if let Ok(mut node) = root.single_mut() {
+        node.top = Val::Px(expected);
     }
 }
 
