@@ -824,4 +824,38 @@ mod tests {
             v4.w
         );
     }
+
+    #[test]
+    fn star_light_child_has_no_frustum_culling() {
+        // Regression test T22-FIX: la PointLight2d child della stella deve
+        // avere NoFrustumCulling, altrimenti quando la stella esce dal
+        // frustum (zoom su pianeta lontano) l'extract salta la luce
+        // (ViewVisibility false) e il pianeta resta al solo ambient ~12%.
+        // Gli occluder restano frustum-cullati: solo la luce e' esente.
+        let mut app = bevy::prelude::App::new();
+        app.add_systems(bevy::prelude::Update, spawn_star_lights);
+        {
+            let mut world = app.world_mut();
+            spawn_body(&mut world, "Star", Vec2::ZERO, 30.0, true);
+            spawn_body(&mut world, "P", Vec2::new(150.0, 0.0), 15.0, false);
+        }
+        app.update();
+        let light_entities: Vec<bevy::prelude::Entity> = app
+            .world_mut()
+            .query_filtered::<bevy::prelude::Entity, With<PointLight2d>>()
+            .iter(app.world())
+            .collect();
+        assert_eq!(
+            light_entities.len(),
+            1,
+            "una sola PointLight2d attesa (solo la stella luminosa), trovate {}",
+            light_entities.len()
+        );
+        assert!(
+            app.world()
+                .get::<bevy::camera::visibility::NoFrustumCulling>(light_entities[0])
+                .is_some(),
+            "la PointLight2d child della stella deve avere NoFrustumCulling (T22-FIX)"
+        );
+    }
 }
