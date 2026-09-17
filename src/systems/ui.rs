@@ -32,8 +32,10 @@ use bevy::ui::widget::TextScroll;
 use bevy::input_focus::InputFocus;
 use bevy::text::{EditableText, TextCursorStyle};
 
-use crate::components::celestial::CelestialBody;
+use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::lighting::{LightFalloff, StarGlow, StarLightSettings};
+use crate::systems::orbit::{self, OrbitReadiness, RefStar};
+use crate::systems::persistence::GravitationalConstant;
 use crate::systems::reset::ResetMessage;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::{PendingSteps, SimulationState, StepMessage};
@@ -60,6 +62,8 @@ impl Plugin for SandboxUIPlugin {
                 update_timeline_buttons,
                 manage_delete_dialog,
                 handle_delete_dialog_buttons,
+                handle_orbit_button,
+                update_orbit_button,
             ),
         );
     }
@@ -108,6 +112,15 @@ struct StarSection;
 /// Marker sulle righe destinate solo alle stelle (campi Luce/Glow).
 #[derive(Component)]
 struct StarField;
+
+/// Marker sul bottone "Orbita circolare" del property panel (ADR 0002).
+#[derive(Component)]
+struct OrbitBtn;
+
+/// Marker sull'etichetta del bottone "Orbita circolare" (testo aggiornato
+/// da `update_orbit_button`: azione o motivo di disabilitazione).
+#[derive(Component)]
+struct OrbitBtnLabel;
 
 // === Colori tema (solo nativo) ===
 
@@ -473,6 +486,39 @@ fn spawn_property_panel(commands: &mut Commands) {
                     ));
                 }
             }
+
+            // === Bottone "Orbita circolare" (ADR 0002): calcola la velocità
+            // per un'orbita circolare attorno alla stella più vicina e la
+            // scrive in LinearVelocity. Sempre visibile, disabilitato con
+            // motivo nei casi limite (testo aggiornato da
+            // `update_orbit_button`).
+            panel
+                .spawn((
+                    Button,
+                    OrbitBtn,
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(30.0),
+                        margin: UiRect::top(Val::Px(6.0)),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                    BorderColor::all(BORDER_COLOR),
+                ))
+                .with_child((
+                    OrbitBtnLabel,
+                    Text::new("Orbita circolare"),
+                    TextFont {
+                        font: FontSource::default(),
+                        font_size: FontSize::Px(12.0),
+                        ..default()
+                    },
+                    TextColor(TEXT_COLOR),
+                ));
 
             // === Sezioni stella (Luce / Glow): visibili solo se il corpo
             // selezionato è una stella (update_property_panel le mostra =
@@ -1390,6 +1436,171 @@ fn handle_ui_buttons(
                     *bg = Color::srgba(0.0, 0.0, 0.0, 0.0).into();
                 }
             }
+        }
+    }
+}
+
+// === Bottone "Orbita circolare" (ADR 0002) ===
+
+/// Raccoglie lo stato del bottone per il corpo selezionato.
+/// `None` = niente selezionato (il pannello è nascosto comunque).
+fn orbit_state_for_selection(
+    bodies: &[(Vec2, Vec2, f32, bool)],
+    selected_idx: Option<usize>,
+    stars: &[RefStar],
+    paused: bool,
+    g: f32,
+    softening: f32,
+) -> Option<OrbitReadiness> {
+    let (pos, vel, radius, is_star) = bodies.get(selected_idx?)?;
+    Some(orbit::orbit_readiness(
+        *pos, *vel, *radius, *is_star, stars, paused, g, softening,
+    ))
+}
+
+/// Fotografia dei corpi per il calcolo orbita: per ogni corpo
+/// (posizione, velocità, raggio, è-stella), più l'indice del selezionato
+/// e la lista delle stelle (selezionato escluso).
+///
+/// La query usa `&mut LinearVelocity` (unica query sui corpi: due query
+/// su `LinearVelocity`, una `&` e una `&mut`, sarebbero un B0001):
+/// in lettura via `iter()`, in scrittura via `get_mut()` in sequenza.
+fn collect_orbit_data(
+    selected: &SelectedBody,
+    bodies: &Query<(
+        Entity,
+        &CelestialBody,
+        &GlobalTransform,
+        &mut LinearVelocity,
+    )>,
+    out_bodies: &mut Vec<(Vec2, Vec2, f32, bool)>,
+    out_stars: &mut Vec<RefStar>,
+) -> Option<usize> {
+    out_bodies.clear();
+    out_stars.clear();
+    let mut selected_idx: Option<usize> = None;
+    for (entity, body, transform, velocity) in bodies.iter() {
+        let is_star = body.body_type == BodyType::Star;
+        let pos = transform.translation().truncate();
+        if Some(entity) == selected.0 {
+            selected_idx = Some(out_bodies.len());
+        } else if is_star {
+            out_stars.push(RefStar {
+                pos,
+                mass: body.mass,
+                radius: body.radius,
+            });
+        }
+        out_bodies.push((pos, velocity.0, body.radius, is_star));
+    }
+    selected_idx
+}
+
+/// Pressione del bottone (edge-triggered): scrive la velocità circolare in
+/// `LinearVelocity`. Solo in pausa; nei casi limite non fa nulla (il bottone
+/// mostra il motivo via `update_orbit_button`).
+///
+/// La scrittura alza `Changed<LinearVelocity>` → `ghost_dirty_triggers`
+/// invalida la previsione come per ogni edit a sim ferma (nessun hook
+/// dedicato necessario).
+fn handle_orbit_button(
+    btn_query: Query<&Interaction, (With<OrbitBtn>, Changed<Interaction>)>,
+    selected: Res<SelectedBody>,
+    grav: Res<GravitationalConstant>,
+    sim_state: Res<SimulationState>,
+    mut bodies: Query<(
+        Entity,
+        &CelestialBody,
+        &GlobalTransform,
+        &mut LinearVelocity,
+    )>,
+) {
+    crate::mark_system("handle_orbit_button");
+
+    if !btn_query.iter().any(|i| *i == Interaction::Pressed) {
+        return;
+    }
+    if !sim_state.paused {
+        return;
+    }
+    let entity = match selected.0 {
+        Some(e) => e,
+        None => return,
+    };
+    let mut flat: Vec<(Vec2, Vec2, f32, bool)> = Vec::new();
+    let mut stars: Vec<RefStar> = Vec::new();
+    let selected_idx = collect_orbit_data(&selected, &bodies, &mut flat, &mut stars);
+    match orbit_state_for_selection(
+        &flat,
+        selected_idx,
+        &stars,
+        true,
+        grav.0,
+        crate::systems::persistence::SOFTENING,
+    ) {
+        Some(OrbitReadiness::Ready { velocity }) => {
+            if let Ok((_, _, _, mut v)) = bodies.get_mut(entity) {
+                v.0 = velocity;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Aggiorna etichetta e stile del bottone: azione o motivo di
+/// disabilitazione, testo attenuato quando disabilitato.
+fn update_orbit_button(
+    selected: Res<SelectedBody>,
+    grav: Res<GravitationalConstant>,
+    sim_state: Res<SimulationState>,
+    bodies: Query<(
+        Entity,
+        &CelestialBody,
+        &GlobalTransform,
+        &mut LinearVelocity,
+    )>,
+    mut label: Query<(&mut Text, &mut TextColor), With<OrbitBtnLabel>>,
+    mut btn_bg: Query<&mut BackgroundColor, With<OrbitBtn>>,
+) {
+    crate::mark_system("update_orbit_button");
+
+    let mut flat: Vec<(Vec2, Vec2, f32, bool)> = Vec::new();
+    let mut stars: Vec<RefStar> = Vec::new();
+    let selected_idx = collect_orbit_data(&selected, &bodies, &mut flat, &mut stars);
+    let state = orbit_state_for_selection(
+        &flat,
+        selected_idx,
+        &stars,
+        sim_state.paused,
+        grav.0,
+        crate::systems::persistence::SOFTENING,
+    );
+    let (text, ready) = match state {
+        Some(OrbitReadiness::Ready { .. }) => ("Orbita circolare".to_string(), true),
+        Some(OrbitReadiness::Disabled(reason)) => (format!("Orbita: {reason}"), false),
+        None => ("Orbita circolare".to_string(), false),
+    };
+    if let Ok((mut t, mut c)) = label.single_mut() {
+        if t.0 != text {
+            t.0 = text;
+        }
+        let color = if ready {
+            TEXT_COLOR
+        } else {
+            TEXT_COLOR_READONLY
+        };
+        if c.0 != color {
+            c.0 = color;
+        }
+    }
+    if let Ok(mut bg) = btn_bg.single_mut() {
+        let color = if ready {
+            Color::srgba(0.0, 0.0, 0.0, 0.0)
+        } else {
+            BTN_DISABLED
+        };
+        if bg.0 != color {
+            bg.0 = color;
         }
     }
 }
