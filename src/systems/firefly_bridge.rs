@@ -858,4 +858,65 @@ mod tests {
             "la PointLight2d child della stella deve avere NoFrustumCulling (T22-FIX)"
         );
     }
+
+    #[test]
+    fn t23_star_light_visible_at_tight_zoom_real_numbers() {
+        // Regression test T23-TEST: il gate CPU-side di visibilità della
+        // luce deve coprire `radius + fade_width` (mirror di
+        // `mark_visible_lights` T23-FIX in
+        // vendor/bevy_firefly/src/visibility.rs e di `light_extent` in
+        // prepare.rs), NON il solo `radius`. Numeri reali del preset di
+        // Davide: stella in (63,57) con radius=100 / fade_width=7000 /
+        // Falloff::None (shader illumina fino a 7100); pianeta a ~1068
+        // (es. (216,-1000)); camera ortografica con area piccola = zoom
+        // stretto sul pianeta, stella fuori schermo.
+        // Nota harness: `mark_visible_lights` non è pilotabile headless
+        // (LightRect privata nel vendor crate), quindi il test esercita la
+        // condizione di intersezione con GLI STESSI operandi del sistema
+        // (Aabb2d luce vs Aabb2d camera). Con il gate radius-only la stessa
+        // assert FALLISCE (prova rosso/verde fatta revertendo `light_extent`
+        // a solo `radius` qui sotto: rosso; con `radius + fade_width`: verde).
+        use bevy::math::bounding::{Aabb2d, BoundingVolume, IntersectsVolume};
+
+        // Luce REALE della stella (stessi valori del preset).
+        let light = PointLight2d {
+            radius: 100.0,
+            fade_width: 7000.0,
+            falloff: Falloff::None,
+            ..default()
+        };
+        let star_pos = Vec2::new(63.0, 57.0);
+
+        // Pianeta a distanza ~1068 dalla stella (verifica di sanità sui
+        // numeri reali: sqrt(153^2 + 1057^2) ~= 1068).
+        let planet_pos = Vec2::new(216.0, -1000.0);
+        let dist = star_pos.distance(planet_pos);
+        assert!(
+            (dist - 1068.0).abs() < 2.0,
+            "i numeri reali devono dare distanza stella-pianeta ~1068, trovata {dist}"
+        );
+
+        // Camera ortografica con area piccola (zoom stretto) centrata sul
+        // pianeta: stella (63,57) fuori schermo.
+        let camera_aabb = Aabb2d::new(planet_pos, Vec2::new(320.0, 180.0));
+
+        // Gate PRE-fix (solo radius=100): scarta la luce -> IL BUG T23.
+        let old_gate = Aabb2d::new(star_pos, Vec2::splat(light.radius));
+        assert!(
+            !old_gate.intersects(&camera_aabb),
+            "sanità: col gate radius-only (100) la luce è fuori dalla camera \
+             a zoom stretto — è proprio il caso che il fix deve recuperare"
+        );
+
+        // Gate POST-fix: `pos ± (radius + fade_width)`, identica espressione
+        // di `mark_visible_lights` (T23-FIX). La luce deve risultare visibile.
+        let light_extent = light.radius + light.fade_width;
+        assert_eq!(light_extent, 7100.0, "extent reale: 100 + 7000 = 7100");
+        let fixed_gate = Aabb2d::new(star_pos, Vec2::splat(light_extent));
+        assert!(
+            fixed_gate.intersects(&camera_aabb),
+            "T23: la luce stella (extent 7100) deve intersecare la camera a \
+             zoom stretto sul pianeta (distanza ~1068 < 7100)"
+        );
+    }
 }

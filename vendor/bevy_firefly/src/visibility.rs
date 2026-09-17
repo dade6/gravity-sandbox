@@ -103,9 +103,15 @@ fn mark_visible_lights(
     for (entity, transform, light, height, mut visibility, mut visibility_timer) in &mut lights {
         let pos = transform.translation().truncate() - vec2(0.0, height.0) + light.offset.xy();
 
+        // T23-FIX: il gate CPU-side deve coprire ESATTAMENTE l'area del gate
+        // shader (`dist < radius + fade_width` con Falloff::None, vedi
+        // create_lightmap.wgsl). Lo storico `pos ± radius` scartava la luce
+        // stella (radius=100, fade_width=7000) a zoom stretto. Mirror di
+        // `light_extent` in prepare.rs (v0.14.81).
+        let light_extent = light.radius + light.fade_width;
         let light_aabb = Aabb2d {
-            min: pos - light.radius,
-            max: pos + light.radius,
+            min: pos - light_extent,
+            max: pos + light_extent,
         };
 
         for (camera_aabb, camera_rect, visible_entities) in camera_rects.iter_mut() {
@@ -121,8 +127,8 @@ fn mark_visible_lights(
                 light_rect.0 = light_rect
                     .0
                     .union(camera_rect.union_point(pos).intersect(Rect {
-                        min: pos - light.radius,
-                        max: pos + light.radius,
+                        min: pos - light_extent,
+                        max: pos + light_extent,
                     }));
             }
         }
