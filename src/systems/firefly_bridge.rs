@@ -425,6 +425,12 @@ fn spawn_star_lights(
                     // height=0 -> vedi commento su LIGHT_HEIGHT.
                     LightHeight(LIGHT_HEIGHT),
                     Transform::default(),
+                    // T22-FIX: la luce deve illuminare anche quando la stella
+                    // e' fuori dal frustum (zoom su pianeta lontano): senza
+                    // NoFrustumCulling l'extract salta la luce (ViewVisibility
+                    // false) e il pianeta resta al solo ambient ~12%.
+                    // SOLO la luce: gli occluder restano frustum-cullati.
+                    bevy::camera::visibility::NoFrustumCulling,
                 ));
             });
     }
