@@ -1716,4 +1716,272 @@ mod ghost_tests {
             "all trails must grow with computed ticks (lens={lens:?})"
         );
     }
+
+    /// End-to-end fidelity probe (bug report v0.14.94: il ghost "avanza più
+    /// in fretta del pianeta" + "errore a lungo termine"): catena ghost pura
+    /// contro il VERO solver Avian + il VERO `gravity_system`, headless.
+    ///
+    /// Misura la divergenza su 200 tick (~5 orbite): se il ghost fosse un
+    /// "ghost run deterministico della simulazione" (ADR 0001 Dec. 4), i due
+    /// resterebbero sovrapposti. Qualunque scostamento sistematico qui è la
+    /// causa radice del distacco testa-trail in Run.
+    #[test]
+    fn ghost_divergence_vs_real_avian_over_200_ticks() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+        let g = 5000.0_f32;
+        let dt = 1.0 / 64.0_f32;
+        let m_star = 500_000.0_f32;
+        let r = 300.0_f32;
+        let v_circ = (g * m_star / r).sqrt();
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .insert_resource(Gravity::ZERO)
+        .insert_resource(GravitationalConstant(g))
+        .add_systems(FixedUpdate, crate::systems::gravity::gravity_system)
+        // 1 update = esattamente 1 fixed tick (niente resto accumulato).
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 64.0,
+        )));
+        app.finish();
+
+        let spawn =
+            |world: &mut World, name: &str, pos: Vec2, vel: Vec2, mass: f32, radius: f32| {
+                world
+                    .spawn((
+                        CelestialBody {
+                            name: name.into(),
+                            body_type: BodyType::Planet,
+                            mass,
+                            radius,
+                            color: [0.5, 0.5, 0.8],
+                            luminous: false,
+                        },
+                        Transform::from_xyz(pos.x, pos.y, 0.0),
+                        Position::from_xy(pos.x, pos.y),
+                        RigidBody::Dynamic,
+                        Collider::circle(radius),
+                        Mass(mass),
+                        LinearVelocity(vel),
+                        ConstantForce(Vec2::ZERO),
+                    ))
+                    .id()
+            };
+        let mut world = app.world_mut();
+        let star = spawn(&mut world, "Star", Vec2::ZERO, Vec2::ZERO, m_star, 40.0);
+        let planet = spawn(
+            &mut world,
+            "P",
+            Vec2::new(r, 0.0),
+            Vec2::new(0.0, v_circ),
+            10.0,
+            8.0,
+        );
+        drop(world);
+
+        app.update(); // prime: avanza l'orologio, nessun tick garantito
+        let t0 = app.world().resource::<Time<Physics>>().elapsed();
+
+        // Snapshot iniziale dallo stesso stato che vedrebbe il ghost.
+        let (p0, v0) = {
+            let w = app.world();
+            (
+                w.entity(planet).get::<Position>().unwrap().0,
+                w.entity(planet).get::<LinearVelocity>().unwrap().0,
+            )
+        };
+        let (s0, sv0) = {
+            let w = app.world();
+            (
+                w.entity(star).get::<Position>().unwrap().0,
+                w.entity(star).get::<LinearVelocity>().unwrap().0,
+            )
+        };
+        let mut ghosts = vec![
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: s0,
+                vel: sv0,
+                mass: m_star,
+                radius: 40.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: p0,
+                vel: v0,
+                mass: 10.0,
+                radius: 8.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+        ];
+
+        // Ordine entità nel ghost: [star, planet] — l'indice 1 è il pianeta.
+        let k = 200_usize;
+        let mut max_dev = 0.0_f32;
+        for _ in 0..k {
+            ghost_step_tick(&mut ghosts, g, dt);
+            app.update();
+            let real = app.world().entity(planet).get::<Position>().unwrap().0;
+            let dev = (ghosts[1].pos - real).length();
+            max_dev = max_dev.max(dev);
+        }
+        let real_end = app.world().entity(planet).get::<Position>().unwrap().0;
+        let final_dev = (ghosts[1].pos - real_end).length();
+        let elapsed = app.world().resource::<Time<Physics>>().elapsed() - t0;
+        eprintln!(
+            "ghost-vs-real: ticks target={k}, physics elapsed={elapsed:?}, \
+             max_dev={max_dev:.4}, final_dev={final_dev:.4}"
+        );
+        // Sanity: devono essere girati davvero K tick fisici.
+        assert!(
+            (elapsed.as_secs_f32() - k as f32 * dt).abs() < 1e-3,
+            "devono girare esattamente {k} tick (elapsed={elapsed:?})"
+        );
+        assert!(
+            final_dev < 1.0,
+            "ghost fedele? scostamento finale {final_dev:.4} (max {max_dev:.4}) su orbita r={r}"
+        );
+    }
+
+    /// Sonda diagnostica (report utente v0.14.99: testa-trail ghost si stacca
+    /// dal pianeta dopo un paio di orbite, sim 1.0x, 2 corpi, markers 0).
+    /// Stessa catena del test sopra ma con la configurazione REALE del preset
+    /// (Sole 10000 + Alpha 8) e sull'intero orizzonte utente (1920 tick =
+    /// 30 s): misura la divergenza a intervalli per vedere SE cresce e COME
+    /// (deriva lineare di fase vs salto improvviso). Solo sanity assert sul
+    /// conteggio tick — i numeri escono su stderr per la diagnosi.
+    #[test]
+    fn ghost_divergence_user_config_over_full_horizon() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+        let g = 5000.0_f32;
+        let dt = 1.0 / 64.0_f32;
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .insert_resource(Gravity::ZERO)
+        .insert_resource(GravitationalConstant(g))
+        .add_systems(FixedUpdate, crate::systems::gravity::gravity_system)
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 64.0,
+        )));
+        app.finish();
+
+        let spawn =
+            |world: &mut World, name: &str, pos: Vec2, vel: Vec2, mass: f32, radius: f32| {
+                world
+                    .spawn((
+                        CelestialBody {
+                            name: name.into(),
+                            body_type: BodyType::Planet,
+                            mass,
+                            radius,
+                            color: [0.5, 0.5, 0.8],
+                            luminous: false,
+                        },
+                        Transform::from_xyz(pos.x, pos.y, 0.0),
+                        Position::from_xy(pos.x, pos.y),
+                        RigidBody::Dynamic,
+                        Collider::circle(radius),
+                        Mass(mass),
+                        LinearVelocity(vel),
+                        ConstantForce(Vec2::ZERO),
+                    ))
+                    .id()
+            };
+        let mut world = app.world_mut();
+        let star = spawn(
+            &mut world,
+            "Sun",
+            Vec2::new(63.372482, 57.54164),
+            Vec2::ZERO,
+            10_000.0,
+            30.0,
+        );
+        let planet = spawn(
+            &mut world,
+            "Planet Alpha",
+            Vec2::new(215.95473, -1000.0),
+            Vec2::new(-250.0, -15.0),
+            8.0,
+            12.0,
+        );
+        drop(world);
+
+        app.update();
+        let t0 = app.world().resource::<Time<Physics>>().elapsed();
+        let (p0, v0) = {
+            let w = app.world();
+            (
+                w.entity(planet).get::<Position>().unwrap().0,
+                w.entity(planet).get::<LinearVelocity>().unwrap().0,
+            )
+        };
+        let (s0, sv0) = {
+            let w = app.world();
+            (
+                w.entity(star).get::<Position>().unwrap().0,
+                w.entity(star).get::<LinearVelocity>().unwrap().0,
+            )
+        };
+        let mut ghosts = vec![
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: s0,
+                vel: sv0,
+                mass: 10_000.0,
+                radius: 30.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+            GhostBody {
+                entity: Entity::PLACEHOLDER,
+                pos: p0,
+                vel: v0,
+                mass: 8.0,
+                radius: 12.0,
+                color: Color::WHITE,
+                alive: true,
+            },
+        ];
+
+        let k = 1920_usize;
+        let mut max_dev = 0.0_f32;
+        let mut min_dist = f32::MAX;
+        for i in 1..=k {
+            ghost_step_tick(&mut ghosts, g, dt);
+            app.update();
+            let real = app.world().entity(planet).get::<Position>().unwrap().0;
+            let dev = (ghosts[1].pos - real).length();
+            max_dev = max_dev.max(dev);
+            let d = (ghosts[1].pos - ghosts[0].pos).length();
+            min_dist = min_dist.min(d);
+            if i % 240 == 0 {
+                eprintln!("tick {i}: dev={dev:.4} max_dev={max_dev:.4}");
+            }
+        }
+        let real_end = app.world().entity(planet).get::<Position>().unwrap().0;
+        let final_dev = (ghosts[1].pos - real_end).length();
+        let elapsed = app.world().resource::<Time<Physics>>().elapsed() - t0;
+        eprintln!(
+            "user-config: ticks={k}, physics elapsed={elapsed:?}, \
+             final_dev={final_dev:.4} max_dev={max_dev:.4} min_star_dist={min_dist:.2}"
+        );
+        assert!(
+            (elapsed.as_secs_f32() - k as f32 * dt).abs() < 1e-3,
+            "devono girare esattamente {k} tick (elapsed={elapsed:?})"
+        );
+    }
 }

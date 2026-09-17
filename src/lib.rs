@@ -1273,8 +1273,23 @@ fn debug_ghost_snapshot(
 ) {
     crate::mark_system("debug_ghost_snapshot");
     let trail_lens: Vec<String> = ghost.trails.iter().map(|t| t.len().to_string()).collect();
+    // Testa (punto più vecchio) e frontiera (punto più nuovo) di ogni trail:
+    // dicono SE la finestra scorre in Run (la testa avanza col pianeta) o è
+    // ferma (bug di avanzamento), cosa che le sole lunghezze non distinguono.
+    let mut heads: Vec<String> = Vec::new();
+    let mut tails: Vec<String> = Vec::new();
+    for t in ghost.trails.iter() {
+        match t.front() {
+            Some(p) => heads.push(format!("[{:.2},{:.2}]", p.x, p.y)),
+            None => heads.push("null".to_string()),
+        }
+        match t.back() {
+            Some(p) => tails.push(format!("[{:.2},{:.2}]", p.x, p.y)),
+            None => tails.push("null".to_string()),
+        }
+    }
     let json = format!(
-        r#"{{"dirty":{},"computed":{},"horizon":{},"horizon_s":{},"bodies":{},"trails":[{}],"markers":{}}}"#,
+        r#"{{"dirty":{},"computed":{},"horizon":{},"horizon_s":{},"bodies":{},"trails":[{}],"markers":{},"heads":[{}],"tails":[{}]}}"#,
         ghost.dirty,
         ghost.computed_ticks,
         ghost.horizon_ticks,
@@ -1282,6 +1297,8 @@ fn debug_ghost_snapshot(
         ghost.bodies.len(),
         trail_lens.join(","),
         ghost.collision_markers.len(),
+        heads.join(","),
+        tails.join(","),
     );
     if let Ok(mut shared) = crate::js_bridge::GHOST_DEBUG_STATE.lock() {
         *shared = json;

@@ -28,6 +28,17 @@ Progetto: sandbox di gravità N-body in Bevy 0.19 + Avian 0.7, WASM su porta
   storico è continuo; la curva del selezionato è evidenziata.
 - **Marcatore ✕** — punto di collisione previsto, dove le curve coinvolte si
   troncano; il calcolo prosegue oltre.
+- **Orbita circolare** — orbita a distanza costante dalla stella di
+  riferimento (nel senso di questa sandbox: la traiettoria che il motore
+  N-body + il ghost producono partendo dalla velocità circolare).
+- **Velocità circolare** — `v = sqrt(G·M·r / (r²+s²))`, con `G` = costante
+  gravitazionale corrente, `M` = massa della stella di riferimento,
+  `r` = distanza pianeta–stella, `s` = softening (5.0). Per `r >> s`
+  coincide con la formula scolastica `sqrt(G·M/r)`.
+- **Stella di riferimento** — la stella (`BodyType::Star`) più vicina al corpo
+  selezionato. Centro rispetto al quale si calcola la velocità circolare.
+  (Scelta manuale del centro — es. luna attorno a pianeta — rimandata a
+  sviluppo futuro.)
 
 ## Decisioni registrate (ADR)
 
@@ -35,3 +46,7 @@ Progetto: sandbox di gravità N-body in Bevy 0.19 + Avian 0.7, WASM su porta
   modello (tutti i corpi, progressivo, ghost in Resource), invalidazione totale
   con dirty flag, ghost fedele all'integratore della sim, collisioni rilevate
   con marcatore ✕ e continuazione, merge anelastico post-collisione.
+- [ADR 0002 — Bottone "orbita circolare"](docs/adr/0002-orbita-circolare.md):
+  bottone nel pannello Properties, centro = stella più vicina, verso attuale
+  conservato, solo in pausa, formula esatta con softening, disabilitato con
+  motivo nei casi limite.
