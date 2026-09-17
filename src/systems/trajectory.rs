@@ -595,6 +595,54 @@ pub fn ghost_compute_system(
 // Ghost sliding window in Run + dashed rendering (T22-E, ADR 0001 Dec. 8-9)
 // ============================================================
 
+/// Fraction of the head/planet gap closed per consumed physics tick in Run
+/// (slow re-anchor, user decision set 2026): the forecast head stays glued
+/// to the planet without jumps, while a large divergence stays visible for
+/// a while before being reabsorbed. At 1% per tick and 64 ticks/s the gap
+/// halves roughly every second: small phase drift is invisible, a real
+/// regime change stays readable for minutes.
+pub const GHOST_REANCHOR_RATE: f32 = 0.01;
+
+/// Soft re-anchor (slow correction, set 2026): translate each live ghost's
+/// whole trail AND its body position by a fraction of
+/// (real_pos - trail_head).
+///
+/// Translation preserves velocities and the trail's relative geometry — it
+/// only removes the accumulated phase offset between forecast and reality
+/// (f32 rounding + solver order differences, ~0.4 units after 8000 ticks).
+/// Dead (merged-away) trails stay frozen; collision markers are left
+/// unshifted (sparse event annotations, sub-unit drift is irrelevant).
+/// Ghosts whose entity no longer exists are skipped.
+pub fn ghost_soft_reanchor(pred: &mut GhostPrediction, real: &[(Entity, Vec2)], rate: f32) {
+    if rate <= 0.0 {
+        return;
+    }
+    for idx in 0..pred.bodies.len() {
+        if !pred.bodies[idx].alive {
+            continue;
+        }
+        let entity = pred.bodies[idx].entity;
+        let Some((_, rp)) = real.iter().find(|(e, _)| *e == entity) else {
+            continue;
+        };
+        let Some(trail) = pred.trails.get_mut(idx) else {
+            continue;
+        };
+        let Some(head) = trail.front().copied() else {
+            continue;
+        };
+        let gap = *rp - head;
+        if gap == Vec2::ZERO {
+            continue;
+        }
+        let shift = gap * rate;
+        for p in trail.iter_mut() {
+            *p += shift;
+        }
+        pred.bodies[idx].pos += shift;
+    }
+}
+
 /// Advance the sliding window by ONE consumed physics tick (Dec. 8).
 ///
 /// Drops the oldest point of every live trail (`pop_front`), integrates one
@@ -719,6 +767,21 @@ pub fn ghost_sliding_window_system(
         advanced += 1;
     }
     *last_tick = Some(last + advanced);
+    // Slow re-anchor (set 2026): translate each live trail + ghost body by
+    // the compounded fraction of the head/planet gap, so the forecast head
+    // tracks the planet without jumps. Scaled by consumed ticks (exact
+    // compounding), so the rate holds at any sim speed. Skipped when nothing
+    // advanced (no new information) or the forecast is still empty.
+    if advanced > 0 {
+        let rate = 1.0 - (1.0 - GHOST_REANCHOR_RATE).powi(advanced as i32);
+        if rate > 0.0 {
+            let real: Vec<(Entity, Vec2)> = bodies
+                .iter()
+                .map(|(e, _, xform, _)| (e, xform.translation().truncate()))
+                .collect();
+            ghost_soft_reanchor(pred.as_mut(), &real, rate);
+        }
+    }
 }
 
 /// Decimation stride for ghost rendering (Dec. 9): 1 drawn point every
@@ -2036,5 +2099,93 @@ mod ghost_tests {
             (elapsed.as_secs_f32() - k as f32 * dt).abs() < 1e-3,
             "devono girare esattamente {k} tick (elapsed={elapsed:?})"
         );
+    }
+
+    fn reanchor_pred(head: Vec2, body_pos: Vec2, vel: Vec2, alive: bool) -> GhostPrediction {
+        let mut pred = GhostPrediction::default();
+        pred.bodies = vec![GhostBody {
+            entity: Entity::PLACEHOLDER,
+            pos: body_pos,
+            vel,
+            mass: 8.0,
+            radius: 12.0,
+            color: Color::WHITE,
+            alive,
+        }];
+        let mut trail = VecDeque::new();
+        trail.push_back(head);
+        trail.push_back(head + Vec2::new(10.0, 0.0));
+        trail.push_back(head + Vec2::new(20.0, 5.0));
+        pred.trails = vec![trail];
+        pred
+    }
+
+    fn other_entity() -> Entity {
+        // An entity guaranteed distinct from PLACEHOLDER without an App.
+        let mut world = World::new();
+        let e = world.spawn_empty().id();
+        assert_ne!(e, Entity::PLACEHOLDER);
+        e
+    }
+
+    #[test]
+    fn ghost_soft_reanchor_shifts_trail_and_body_by_fraction_of_gap() {
+        // Head at origin, planet actually at (100, 0): rate 0.1 shifts every
+        // trail point AND the ghost body by (10, 0). Geometry preserved.
+        let mut pred = reanchor_pred(Vec2::ZERO, Vec2::new(5.0, 1.0), Vec2::new(1.0, 2.0), true);
+        let real = vec![(Entity::PLACEHOLDER, Vec2::new(100.0, 0.0))];
+        ghost_soft_reanchor(&mut pred, &real, 0.1);
+        let trail: Vec<Vec2> = pred.trails[0].iter().copied().collect();
+        assert_eq!(trail[0], Vec2::new(10.0, 0.0));
+        assert_eq!(trail[1], Vec2::new(20.0, 0.0));
+        assert_eq!(trail[2], Vec2::new(30.0, 5.0));
+        assert_eq!(pred.bodies[0].pos, Vec2::new(15.0, 1.0));
+        // Velocity untouched: translation must not bend the future.
+        assert_eq!(pred.bodies[0].vel, Vec2::new(1.0, 2.0));
+    }
+
+    #[test]
+    fn ghost_soft_reanchor_converges_geometrically() {
+        // Repeated application closes the gap like (1-rate)^n: after 200
+        // applications at 2% the 100-unit gap is ~1.76.
+        let mut pred = reanchor_pred(Vec2::ZERO, Vec2::ZERO, Vec2::ZERO, true);
+        let real = vec![(Entity::PLACEHOLDER, Vec2::new(100.0, 0.0))];
+        for _ in 0..200 {
+            // Simulate the planet standing still while the window slides:
+            // head tracks the shift, gap shrinks geometrically.
+            ghost_soft_reanchor(&mut pred, &real, 0.02);
+        }
+        let head = pred.trails[0].front().copied().unwrap();
+        let gap = (Vec2::new(100.0, 0.0) - head).length();
+        let expected = 100.0 * 0.98_f32.powi(200);
+        assert!(
+            (gap - expected).abs() < 1e-2,
+            "gap {gap:.4} must follow (1-rate)^n = {expected:.4}"
+        );
+    }
+
+    #[test]
+    fn ghost_soft_reanchor_skips_dead_missing_and_empty() {
+        // Dead ghost: trail frozen, body unmoved.
+        let mut pred = reanchor_pred(Vec2::ZERO, Vec2::new(5.0, 1.0), Vec2::ZERO, false);
+        let real = vec![(Entity::PLACEHOLDER, Vec2::new(100.0, 0.0))];
+        ghost_soft_reanchor(&mut pred, &real, 0.5);
+        assert_eq!(pred.trails[0].front().copied(), Some(Vec2::ZERO));
+        assert_eq!(pred.bodies[0].pos, Vec2::new(5.0, 1.0));
+        // Unknown entity: untouched.
+        let mut pred = reanchor_pred(Vec2::ZERO, Vec2::new(5.0, 1.0), Vec2::ZERO, true);
+        let real = vec![(other_entity(), Vec2::new(100.0, 0.0))];
+        ghost_soft_reanchor(&mut pred, &real, 0.5);
+        assert_eq!(pred.trails[0].front().copied(), Some(Vec2::ZERO));
+        // Zero rate: no-op.
+        let mut pred = reanchor_pred(Vec2::ZERO, Vec2::new(5.0, 1.0), Vec2::ZERO, true);
+        let real = vec![(Entity::PLACEHOLDER, Vec2::new(100.0, 0.0))];
+        ghost_soft_reanchor(&mut pred, &real, 0.0);
+        assert_eq!(pred.trails[0].front().copied(), Some(Vec2::ZERO));
+        // Empty trail: no panic, body unmoved.
+        let mut pred = reanchor_pred(Vec2::ZERO, Vec2::new(5.0, 1.0), Vec2::ZERO, true);
+        pred.trails[0].clear();
+        ghost_soft_reanchor(&mut pred, &real, 0.5);
+        assert_eq!(pred.bodies[0].pos, Vec2::new(5.0, 1.0));
     }
 }
