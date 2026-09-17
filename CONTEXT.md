@@ -31,15 +31,20 @@ Progetto: sandbox di gravità N-body in Bevy 0.19 + Avian 0.7, WASM su porta
 - **Correzione lenta** — in Run, ogni trail vivo + corpo ghost viene traslato
   di una frazione del divario testa-pianeta (1% per tick): la testa resta
   incollata senza salti, le divergenze grandi restano visibili a lungo.
-- **Orbita circolare** — orbita a distanza costante dalla stella di
-  riferimento (nel senso di questa sandbox: la traiettoria che il motore
-  N-body + il ghost producono partendo dalla velocità circolare).
-- **Velocità circolare** — `v = sqrt(G·M·r / (r²+s²))`, con `G` = costante
-  gravitazionale corrente, `M` = massa della stella di riferimento,
-  `r` = distanza pianeta–stella, `s` = softening (5.0). Per `r >> s`
-  coincide con la formula scolastica `sqrt(G·M/r)`.
+- **Orbita periodica** — orbita che si ripete uguale a ogni rivoluzione
+  attorno alla stella di riferimento (nel senso di questa sandbox: la
+  traiettoria che il motore N-body + il ghost producono partendo dalla
+  velocità periodica). Può essere circolare o ellittica.
+- **Velocità periodica** — MODULO circolare `v = sqrt(G·M·r / (r²+s²))`
+  (sempre legato, `v < v_fuga`) con DIREZIONE attuale del corpo: cerchio se
+  la direzione è perpendicolare al raggio, ellisse se obliqua. Con
+  `G` = costante gravitazionale corrente, `M` = massa della stella di
+  riferimento, `r` = distanza pianeta–stella, `s` = softening (5.0).
+  Fallback perpendicolare (senso attuale, default antiorario) solo se la
+  direzione non è valida: velocità zero, radiale pura, o periastro stimato
+  dentro la stella.
 - **Stella di riferimento** — la stella (`BodyType::Star`) più vicina al corpo
-  selezionato. Centro rispetto al quale si calcola la velocità circolare.
+  selezionato. Centro rispetto al quale si calcola la velocità periodica.
   (Scelta manuale del centro — es. luna attorno a pianeta — rimandata a
   sviluppo futuro.)
 

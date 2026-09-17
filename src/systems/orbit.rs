@@ -1,13 +1,18 @@
-//! Velocità per orbite circolari (ADR 0002).
+//! Velocità per orbite periodiche (ADR 0002, modifica set 2026).
 //!
 //! Matematica pura, niente ECS: la UI (`ui.rs`) raccoglie i dati dai corpi
-//! e chiama [`orbit_readiness`], che decide se il bottone "Orbita circolare"
+//! e chiama [`orbit_readiness`], che decide se il bottone "Orbita periodica"
 //! è pronto (e con quale velocità) oppure disabilitato (e perché).
 //!
-//! La formula è coerente con `gravity_system` (`F = G·m1·m2 / (r²+s²)`):
-//! uguagliando centripeta e gravità viene
-//! `v = sqrt(G·M·r / (r²+s²))`. Per `r >> s` coincide con la scolastica
-//! `sqrt(G·M/r)`.
+//! La formula è coerente con `gravity_system` (`F = G·m1·m2 / (r²+s²))`:
+//! il modulo è quello circolare `v = sqrt(G·M·r / (r²+s²))` — sempre legato
+//! (`v < v_fuga`) — ma la DIREZIONE è quella attuale del corpo, così ogni
+//! rivoluzione ripete la precedente anche su ellissi (non solo cerchi).
+//! Per `r >> s` il modulo coincide con la scolastica `sqrt(G·M/r)`.
+//!
+//! Fallback perpendicolare (come la vecchia circolare) solo quando la
+//! direzione attuale non dà un'orbita valida: velocità zero, radiale pura,
+//! o ellisse col periastro dentro la stella.
 use bevy::prelude::Vec2;
 
 /// Stella di riferimento candidata (posizione, massa, raggio).
@@ -33,12 +38,70 @@ pub fn circular_speed(star_mass: f32, distance: f32, g: f32, softening: f32) -> 
     (g * star_mass * distance / (distance * distance + softening * softening)).sqrt()
 }
 
+/// Vettore velocità per orbita periodica: MODULO circolare, DIREZIONE attuale.
+///
+/// Con `v = v_circ` l'orbita è sempre legata (`v_circ < v_fuga = √2·v_circ`,
+/// a meno del softening) quindi periodica; la direzione attuale decide la
+/// forma (cerchio se perpendicolare, ellisse se obliqua).
+///
+/// Fallback perpendicolare (senso attuale, default antiorario) quando la
+/// direzione non è utilizzabile:
+/// - velocità zero;
+/// - direzione (quasi) radiale: l'orbita attraverserebbe la stella;
+/// - ellisse obliqua col periastro stimato dentro la stella
+///   (`rp = r·(1−|sinφ|) < r_min`, con `φ` angolo di volo e `v = v_circ`
+///   che dà `a = r` via vis-viva).
+/// Richiede `body_pos != star_pos` (il chiamante garantisce
+/// `r >= somma raggi`, vedi [`orbit_readiness`]).
+#[allow(clippy::too_many_arguments)]
+pub fn periodic_velocity(
+    star_pos: Vec2,
+    body_pos: Vec2,
+    body_vel: Vec2,
+    star_mass: f32,
+    star_radius: f32,
+    body_radius: f32,
+    g: f32,
+    softening: f32,
+) -> Vec2 {
+    let radial = body_pos - star_pos;
+    let r = radial.length();
+    if r < 1e-6 {
+        return Vec2::ZERO;
+    }
+    let speed = circular_speed(star_mass, r, g, softening);
+    // Tangente antioraria = raggio ruotato di +90°.
+    let tangent_ccw = Vec2::new(-radial.y, radial.x) / r;
+    // Momento angolare (componente z) rispetto alla stella:
+    // > 0 antiorario, < 0 orario, == 0 radiale puro o fermo.
+    let ang = radial.x * body_vel.y - radial.y * body_vel.x;
+    let fallback = if ang < 0.0 {
+        -tangent_ccw * speed
+    } else {
+        tangent_ccw * speed
+    };
+    if body_vel.length_squared() < 1e-12 {
+        return fallback;
+    }
+    let dir = body_vel / body_vel.length();
+    let radial_unit = radial / r;
+    // |sinφ| = frazione radiale della direzione (|u·r̂|).
+    let sin_phi = (dir.dot(radial_unit)).abs();
+    // Periastro stimato con a = r (vis-viva con v = v_circ):
+    // rp = a·(1−e) = r·(1−|sinφ|).
+    let periapsis = r * (1.0 - sin_phi);
+    if periapsis < star_radius + body_radius {
+        return fallback;
+    }
+    dir * speed
+}
+
 /// Vettore velocità circolare, perpendicolare al raggio stella→corpo.
 ///
+/// Conservato per i test; `periodic_velocity` lo usa come fallback.
 /// Il verso conserva quello attuale (segno del momento angolare rispetto
 /// alla stella); se la velocità è zero o puramente radiale il default è
-/// antiorario. Richiede `body_pos != star_pos` (il chiamante garantisce
-/// `r >= somma raggi`, vedi [`orbit_readiness`]).
+/// antiorario.
 pub fn circular_velocity(
     star_pos: Vec2,
     body_pos: Vec2,
@@ -105,7 +168,16 @@ pub fn orbit_readiness(
         return OrbitReadiness::Disabled("Troppo vicino");
     }
     OrbitReadiness::Ready {
-        velocity: circular_velocity(star.pos, body_pos, body_vel, star.mass, g, softening),
+        velocity: periodic_velocity(
+            star.pos,
+            body_pos,
+            body_vel,
+            star.mass,
+            star.radius,
+            body_radius,
+            g,
+            softening,
+        ),
     }
 }
 
@@ -162,7 +234,8 @@ mod tests {
 
     #[test]
     fn radial_velocity_defaults_to_counterclockwise() {
-        // Velocità puramente radiale (in caduta verso la stella).
+        // Velocità puramente radiale (in caduta verso la stella):
+        // fallback perpendicolare antiorario.
         let r = orbit_readiness(
             Vec2::new(200.0, 0.0),
             Vec2::new(-50.0, 0.0),
@@ -175,7 +248,87 @@ mod tests {
         );
         match r {
             OrbitReadiness::Ready { velocity } => {
+                assert!(
+                    velocity.x.abs() < 1e-3,
+                    "fallback perpendicolare: {velocity}"
+                );
                 assert!(velocity.y > 0.0, "default antiorario: {velocity}");
+            }
+            OrbitReadiness::Disabled(reason) => panic!("doveva essere Ready: {reason}"),
+        }
+    }
+
+    #[test]
+    fn oblique_direction_is_preserved_with_circular_magnitude() {
+        // Direzione obliqua valida: il bottone conserva la direzione e
+        // imposta il modulo circolare (≈353.4 a r=200).
+        let current = Vec2::new(1.0, 1.0);
+        let r = orbit_readiness(
+            Vec2::new(200.0, 0.0),
+            current,
+            12.0,
+            false,
+            &sun_at_origin(),
+            true,
+            G,
+            S,
+        );
+        match r {
+            OrbitReadiness::Ready { velocity } => {
+                let want = current.normalize() * 353.44;
+                assert!(
+                    (velocity - want).length() < 0.1,
+                    "direzione conservata, modulo circolare: {velocity} vs {want}"
+                );
+            }
+            OrbitReadiness::Disabled(reason) => panic!("doveva essere Ready: {reason}"),
+        }
+    }
+
+    #[test]
+    fn steep_oblique_falls_back_to_perpendicular() {
+        // Direzione quasi radiale: il periastro stimato (r·(1−|sinφ|))
+        // cadrebbe dentro la stella (r_min = 42) → fallback perpendicolare.
+        let r = orbit_readiness(
+            Vec2::new(200.0, 0.0),
+            Vec2::new(-99.0, 14.0),
+            12.0,
+            false,
+            &sun_at_origin(),
+            true,
+            G,
+            S,
+        );
+        match r {
+            OrbitReadiness::Ready { velocity } => {
+                assert!(
+                    velocity.x.abs() < 1e-3,
+                    "fallback perpendicolare: {velocity}"
+                );
+                assert!((velocity.length() - 353.44).abs() < 0.05, "{velocity}");
+            }
+            OrbitReadiness::Disabled(reason) => panic!("doveva essere Ready: {reason}"),
+        }
+    }
+
+    #[test]
+    fn tangential_keeps_direction_and_magnitude() {
+        // Tangenziale oraria: stessa direzione, modulo circolare.
+        let r = orbit_readiness(
+            Vec2::new(200.0, 0.0),
+            Vec2::new(0.0, -100.0),
+            12.0,
+            false,
+            &sun_at_origin(),
+            true,
+            G,
+            S,
+        );
+        match r {
+            OrbitReadiness::Ready { velocity } => {
+                assert!(velocity.x.abs() < 1e-3, "{velocity}");
+                assert!((velocity.length() - 353.44).abs() < 0.05, "{velocity}");
+                assert!(velocity.y < 0.0, "verso orario conservato: {velocity}");
             }
             OrbitReadiness::Disabled(reason) => panic!("doveva essere Ready: {reason}"),
         }

@@ -1,6 +1,6 @@
-# ADR 0002 — Bottone "orbita circolare" nel pannello Properties
+# ADR 0002 — Bottone "orbita periodica" nel pannello Properties
 
-**Status:** Proposed (definito via grill-with-docs, set 2026)
+**Status:** Accepted (v0.14.102) + modifica direzione (set 2026, sotto)
 **Relates-to:** feature "velocità per orbite costanti attorno alla stella"
 
 ## Contesto
@@ -32,14 +32,30 @@ Oggi per mettere un pianeta in orbita stabile l'utente deve indovinare a mano
    ribalta mai un sistema esistente per sbaglio.
 4. **Solo in pausa**, coerente con tutto l'editing (evita di toccare
    `LinearVelocity` mentre Avian integra).
-5. **Formula esatta con softening**: `v = sqrt(G·M·r / (r²+s²))` con la `G`
-   corrente. Coincide con motore e previsione ghost; per `r >> s` è identica
-   alla scolastica `sqrt(G·M/r)`. Direzione perpendicolare al raggio
-   stella→pianeta.
+5. **Formula esatta con softening**: modulo `v = sqrt(G·M·r / (r²+s²))` con
+   la `G` corrente. Coincide con motore e previsione ghost; per `r >> s` è
+   identica alla scolastica `sqrt(G·M/r)`. Il modulo è sempre legato
+   (`v < v_fuga`) quindi l'orbita è periodica.
 6. **Bottone sempre visibile, disabilitato con motivo**: se il selezionato è
    una stella / non c'è nessuna stella in scena / `r < raggio stella + raggio
    pianeta` (anti divisione-per-zero) → disabilitato con motivo ("nessuna
    stella", "troppo vicino alla stella", ...).
+
+## Modifica set 2026 — da "circolare" a "periodica"
+
+Scopo chiarito da Davide: ogni rivoluzione deve essere uguale alla
+precedente, NON necessariamente circolare. La v0.14.102 raddrizzava sempre a
+perpendicolare (e = 0); ora il bottone ("Orbita periodica") conserva la
+DIREZIONE attuale e corregge solo il MODULO a `v_circ`:
+
+3bis. **Direzione = quella attuale** (non più raddrizzamento a
+   perpendicolare): cerchio se perpendicolare, ellisse se obliqua. Il
+   fallback perpendicolare (senso attuale, default antiorario) resta solo
+   quando la direzione non dà un'orbita valida: velocità zero, radiale pura,
+   o periastro stimato `rp = r·(1−|sinφ|) < r_stella + r_corpo` (con
+   `v = v_circ` si ha `a = r` via vis-viva, `e = |sinφ|`).
+   Funzione: `periodic_velocity` in `src/systems/orbit.rs`
+   (`circular_velocity` resta come fallback/test).
 
 ## Conseguenze
 

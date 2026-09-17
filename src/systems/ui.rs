@@ -113,11 +113,11 @@ struct StarSection;
 #[derive(Component)]
 struct StarField;
 
-/// Marker sul bottone "Orbita circolare" del property panel (ADR 0002).
+/// Marker sul bottone "Orbita periodica" del property panel (ADR 0002).
 #[derive(Component)]
 struct OrbitBtn;
 
-/// Marker sull'etichetta del bottone "Orbita circolare" (testo aggiornato
+/// Marker sull'etichetta del bottone "Orbita periodica" (testo aggiornato
 /// da `update_orbit_button`: azione o motivo di disabilitazione).
 #[derive(Component)]
 struct OrbitBtnLabel;
@@ -487,8 +487,8 @@ fn spawn_property_panel(commands: &mut Commands) {
                 }
             }
 
-            // === Bottone "Orbita circolare" (ADR 0002): calcola la velocità
-            // per un'orbita circolare attorno alla stella più vicina e la
+            // === Bottone "Orbita periodica" (ADR 0002): calcola la velocità
+            // per un'orbita che si ripete attorno alla stella più vicina e la
             // scrive in LinearVelocity. Sempre visibile, disabilitato con
             // motivo nei casi limite (testo aggiornato da
             // `update_orbit_button`).
@@ -511,7 +511,7 @@ fn spawn_property_panel(commands: &mut Commands) {
                 ))
                 .with_child((
                     OrbitBtnLabel,
-                    Text::new("Orbita circolare"),
+                    Text::new("Orbita periodica"),
                     TextFont {
                         font: FontSource::default(),
                         font_size: FontSize::Px(12.0),
@@ -1440,7 +1440,7 @@ fn handle_ui_buttons(
     }
 }
 
-// === Bottone "Orbita circolare" (ADR 0002) ===
+// === Bottone "Orbita periodica" (ADR 0002) ===
 
 /// Raccoglie lo stato del bottone per il corpo selezionato.
 /// `None` = niente selezionato (il pannello è nascosto comunque).
@@ -1496,7 +1496,7 @@ fn collect_orbit_data(
     selected_idx
 }
 
-/// Pressione del bottone (edge-triggered): scrive la velocità circolare in
+/// Pressione del bottone (edge-triggered): scrive la velocità periodica in
 /// `LinearVelocity`. Solo in pausa; nei casi limite non fa nulla (il bottone
 /// mostra il motivo via `update_orbit_button`).
 ///
@@ -1576,9 +1576,9 @@ fn update_orbit_button(
         crate::systems::persistence::SOFTENING,
     );
     let (text, ready) = match state {
-        Some(OrbitReadiness::Ready { .. }) => ("Orbita circolare".to_string(), true),
+        Some(OrbitReadiness::Ready { .. }) => ("Orbita periodica".to_string(), true),
         Some(OrbitReadiness::Disabled(reason)) => (format!("Orbita: {reason}"), false),
-        None => ("Orbita circolare".to_string(), false),
+        None => ("Orbita periodica".to_string(), false),
     };
     if let Ok((mut t, mut c)) = label.single_mut() {
         if t.0 != text {
