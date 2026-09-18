@@ -57,6 +57,36 @@ DIREZIONE attuale e corregge solo il MODULO a `v_circ`:
    Funzione: `periodic_velocity` in `src/systems/orbit.rs`
    (`circular_velocity` resta come fallback/test).
 
+## Tentativo shooting col ghost (set 2026) — ESITO NEGATIVO, scartato
+
+Problema (report Davide su v0.14.103): l'orbita calcolata si allarga di giro
+in giro invece di ripetersi. Diagnosi con sonda headless (Avian vero,
+numeri del preset Sole M=5000 + Alpha m=50 a r=200, G=5000, dt=1/64):
+
+- Il ghost replica il motore entro **0.02 unità su 456 tick**: la previsione
+  è fedele, il drift è nel motore, non nella formula.
+- La formula continua `v_circ` nel discreto (forza congelata 1x/tick + 6
+  substep Eulero ≈ Eulero esplicito) **pompa energia ogni orbita**: raggio
+  medio +27/orbita (~+13%), già 200→230 al primo giro.
+- Paesaggio (orbite segmentate per angolo vero, non finestre fisse):
+  D(f) sempre > 0 per f ∈ [0.8, 1.2] (minimo +26.9 a f≈1.0), swing minimo
+  a f=1.0. **Nessun modulo azzera il drift**: 1 parametro non può
+  soddisfare chiusura radiale + velocità insieme (2 condizioni), e il
+  pompaggio è secolare, non un offset iniziale.
+- Due ottimizzatori provati (sezione aurea su orizzonte fisso; griglia +
+  rifinitura su chiusura a 2π): il primo cade in un falso minimo che
+  precipita (f=0.70), il secondo chiude il giro 1 ma il giro 2 pompa come
+  prima. Scartati entrambi, codice rimosso (mai deployato).
+
+Conseguenza: `v_circ` + direzione attuale RESTA l'ottimo least-bad
+(swing minimo, drift minimo). Il bottone dà la velocità giusta al primo
+giro; il ghost mostra onestamente l'allargamento.
+
+Fix strutturale (NON tentato, decisione di Davide): il pompaggio sparisce
+solo riducendo il dt fisico (tick più frequenti) o rinfrescando la forza
+per-substep — tocca tick rate globale, ghost, preset e velocità sim.
+Lavoro grosso, da valutare a parte (orbite larghe pompano molto meno).
+
 ## Conseguenze
 
 - Impostare la velocità deve alzare il dirty flag delle traiettorie (come
