@@ -219,16 +219,37 @@ fn add_tool_system(
     if current_tool.0 != Tool::Add || !sim_state.paused {
         return;
     }
-    if !mouse_buttons.just_pressed(MouseButton::Left) {
-        return;
+    // Supporto mouse E touch (iPhone): la posizione del tap può venire dal
+    // cursore (mouse) oppure dal primo touch appena premuto — stesso pattern
+    // di selection_system. cursor_to_world usa solo mouse, quindi qui
+    // risolviamo la posizione logica e convertiamo via camera.
+    let mut pressed_pos: Option<Vec2> = None;
+    if mouse_buttons.just_pressed(MouseButton::Left) {
+        if let Ok(w) = windows.single() {
+            pressed_pos = w.cursor_position();
+        }
     }
+    if pressed_pos.is_none() {
+        if let Some(touch) = touches.iter_just_pressed().next() {
+            pressed_pos = Some(touch.position());
+        }
+    }
+    let cursor = match pressed_pos {
+        Some(p) => p,
+        None => return,
+    };
     // Guardia UI: click su toolbar/timeline/panel/modale → NON attraversa
     if click_hits_ui(&windows, &touches, &mouse_buttons, &camera_query, &ui_nodes) {
         return;
     }
-    let world_pos = match cursor_to_world(&windows, &camera_query) {
-        Some(p) => p,
-        None => return,
+    let world_pos = match camera_query.single() {
+        Ok((camera, camera_transform)) => {
+            match camera.viewport_to_world_2d(camera_transform, cursor) {
+                Ok(p) => p,
+                Err(_) => return,
+            }
+        }
+        Err(_) => return,
     };
     // Non spawnare sopra a un corpo esistente
     if hit_test_body(world_pos, &bodies).is_some() {
