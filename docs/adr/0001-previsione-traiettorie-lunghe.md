@@ -31,16 +31,6 @@ Fatti verificati dai sorgenti Avian 0.7.0 (registry cargo):
 
 ## Decisioni
 
-11. **Correzione lenta in Run (set 2026).** La finestra scorrevole trasla ogni
-    trail vivo + il suo corpo ghost di una frazione del divario
-    testa-pianeta (`GHOST_REANCHOR_RATE` = 1% per tick fisico, composta sui
-    tick consumati nel frame: il tasso vale a qualsiasi velocità sim). La
-    traslazione conserva velocità e geometria relativa: rimuove solo
-    l'offset di fase accumulato (arrotondamenti f32 + ordine del solver,
-    ~0.4 unità dopo 8000 tick misurati). La testa resta incollata al
-    pianeta senza salti; una divergenza grande resta visibile per minuti
-    prima di venire riassorbita. Trail morti e marker ✕ esclusi.
-
 1. **Modello: simulazione completa del futuro di TUTTI i corpi.** Il ghost è un
    clone (pos/vel/massa/raggio) di ogni corpo; ognuno tira tutti gli altri.
    Calcolo **progressivo**: un sistema in `Update` integra un "pezzo" di futuro

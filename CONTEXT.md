@@ -29,9 +29,6 @@ Progetto: sandbox di gravità N-body in Bevy 0.19 + Avian 0.7, WASM su porta
   storico è continuo; la curva del selezionato è evidenziata.
 - **Marcatore ✕** — punto di collisione previsto, dove le curve coinvolte si
   troncano; il calcolo prosegue oltre.
-- **Correzione lenta** — in Run, ogni trail vivo + corpo ghost viene traslato
-  di una frazione del divario testa-pianeta (1% per tick): la testa resta
-  incollata senza salti, le divergenze grandi restano visibili a lungo.
 - **Orbita periodica** — orbita che si ripete uguale a ogni rivoluzione
   attorno alla stella di riferimento (nel senso di questa sandbox: la
   traiettoria che il motore N-body + il ghost producono partendo dalla
