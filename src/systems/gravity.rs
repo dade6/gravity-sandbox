@@ -14,6 +14,16 @@ pub struct GravityPlugin;
 
 impl Plugin for GravityPlugin {
     fn build(&self, app: &mut App) {
+        // Niente sleeping per i corpi celesti (bug v0.14.105): Avian
+        // addormentava la stella (velocità < 0.15 per > 0.5 s → `Sleeping` →
+        // `SolverBody` rimosso → stella congelata nella sim vera), mentre il
+        // ghost — che non ha il concetto di sonno — la integrava sempre.
+        // Risultato: orbita reale periodica perfetta attorno a una stella
+        // fissa, ghost in deriva crescente (stella ghost su traiettoria
+        // quasi-rettilinea). Con `SleepingDisabled` come required component
+        // ogni `CelestialBody` resta sempre integrato — presente, passato e
+        // futuro — e sim vera e ghost vedono la stessa fisica.
+        app.register_required_components::<CelestialBody, SleepingDisabled>();
         app.add_systems(
             SubstepSchedule,
             substep_gravity_system
@@ -201,6 +211,86 @@ mod spike_tests {
         assert!(
             d.abs() < 10.0,
             "drift dimezzato vs +21.6 del vecchio path: D={d:.2}"
+        );
+    }
+
+    /// Regression test (stella congelata, bug v0.14.105): senza
+    /// `SleepingDisabled` Avian addormentava la stella (velocità < 0.15 per
+    /// oltre 0.5 s di sim → `Sleeping` → `SolverBody` rimosso → stella ferma
+    /// nella sim vera), mentre il ghost la integrava sempre → deriva
+    /// crescente della previsione (orbita reale periodica perfetta, ghost
+    /// alla deriva, trail ghost della stella quasi-rettilineo).
+    ///
+    /// Numeri utente (Sole 10000 + Alpha 8, G=5000): 3 s di sim (> 6x il
+    /// TimeToSleep di 0.5 s). La stella non deve mai dormire e deve muoversi.
+    #[test]
+    fn star_never_sleeps_with_gravity_plugin() {
+        let g = 5000.0f32;
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+        ))
+        .insert_resource(Gravity::ZERO)
+        .insert_resource(GravitationalConstant(g))
+        .add_plugins(GravityPlugin)
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 64.0,
+        )));
+        app.finish();
+        let spawn = |world: &mut World, pos: Vec2, vel: Vec2, mass: f32, radius: f32| {
+            world
+                .spawn((
+                    CelestialBody {
+                        name: "b".into(),
+                        body_type: BodyType::Planet,
+                        mass,
+                        radius,
+                        color: [0.5, 0.5, 0.8],
+                        luminous: false,
+                    },
+                    Transform::from_xyz(pos.x, pos.y, 0.0),
+                    Position::from_xy(pos.x, pos.y),
+                    RigidBody::Dynamic,
+                    Collider::circle(radius),
+                    Mass(mass),
+                    LinearVelocity(vel),
+                ))
+                .id()
+        };
+        let star_pos = Vec2::new(63.372482, 57.54164);
+        let star = spawn(app.world_mut(), star_pos, Vec2::ZERO, 10_000.0, 30.0);
+        let _planet = spawn(
+            app.world_mut(),
+            Vec2::new(215.95473, -1000.0),
+            Vec2::new(-250.0, -15.0),
+            8.0,
+            12.0,
+        );
+        // Required components: ogni corpo nasce già con SleepingDisabled.
+        assert!(
+            app.world().entity(star).contains::<SleepingDisabled>(),
+            "GravityPlugin deve dare SleepingDisabled ad ogni CelestialBody"
+        );
+        // 3 s di sim: oltre 6x il TimeToSleep (0.5 s). Prima del fix la
+        // stella si addormentava qui e restava inchiodata.
+        for _ in 0..192 {
+            app.update();
+        }
+        let w = app.world();
+        assert!(
+            w.entity(star).get::<Sleeping>().is_none(),
+            "la stella non deve mai addormentarsi"
+        );
+        assert!(
+            w.entity(star).get::<SolverBody>().is_some(),
+            "la stella deve tenere il SolverBody ( resta integrata )"
+        );
+        let moved = (w.entity(star).get::<Position>().unwrap().0 - star_pos).length();
+        assert!(
+            moved > 1e-4,
+            "la stella deve muoversi sotto l'attrazione del pianeta (mossa={moved:.6})"
         );
     }
 }

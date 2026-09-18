@@ -87,6 +87,14 @@ Fatti verificati dai sorgenti Avian 0.7.0 (registry cargo):
     Non è rimozione di feature (stessa UX, modello corretto). Il campo
     settings esistente `set_traj_prediction` viene riconvertito in secondi di
     sim (orizzonte, Dec. 7).
+11. **Niente sleeping per i corpi celesti (bug v0.14.105).** Avian
+    addormentava la stella (velocità < 0.15 per > 0.5 s → `Sleeping` →
+    `SolverBody` rimosso → stella congelata nella sim vera), mentre il ghost
+    — senza concetto di sonno — la integrava sempre: orbita reale periodica
+    perfetta attorno a stella fissa, ghost in deriva crescente. `GravityPlugin`
+    registra `SleepingDisabled` come required component di `CelestialBody`:
+    ogni corpo resta sempre integrato e sim vera e ghost vedono la stessa
+    fisica.
 
 ## Conseguenze
 
