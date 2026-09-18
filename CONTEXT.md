@@ -11,8 +11,9 @@ Progetto: sandbox di gravità N-body in Bevy 0.19 + Avian 0.7, WASM su porta
   calcolata progressivamente (un pezzo per frame). Lo stato clonato ("ghost")
   vive in una `Resource` separata: NON sono entità ECS con componenti Avian.
 - **Ghost fedele** — la previsione replica l'integratore della sim reale
-  (Euler semi-implicito, 6 substep, forza congelata per tick, dt con velocità
-  sim). Prevede la sim, errori numerici inclusi — non la fisica ideale.
+  (Euler semi-implicito, 6 substep, forza fresca a ogni substep dalle
+  posizioni correnti, dt con velocità sim). Prevede la sim, errori numerici
+  inclusi — non la fisica ideale.
 - **Dirty flag** — segnalazione "stato cambiato" → la previsione riparte da
   zero (invalidazione totale) e ricresce frame dopo frame.
 - **Merge anelastico** — alla collisione nel ghost, i due corpi si fondono:

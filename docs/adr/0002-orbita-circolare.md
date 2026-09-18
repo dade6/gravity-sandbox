@@ -87,6 +87,26 @@ solo riducendo il dt fisico (tick più frequenti) o rinfrescando la forza
 per-substep — tocca tick rate globale, ghost, preset e velocità sim.
 Lavoro grosso, da valutare a parte (orbite larghe pompano molto meno).
 
+## Fix v0.14.104 — gravità per-substep (pompaggio ELIMINATO)
+
+Il "fix strutturale" sopra si è rivelato NON grosso: Avian espone
+`SubstepSchedule` + `SolverBody` (posizioni live = `Position` +
+`delta_position`). Nuovo `substep_gravity_system` (`GravityPlugin`,
+`src/systems/gravity.rs`): kick di velocità con forza ricalcolata a ogni
+substep invece di ConstantForce congelata 1x/tick. Risultati headless
+(numeri del preset, Alpha a r=200):
+
+- drift orbita su 2 giri: **+21.6 → −0.00**, swing 30+ → 4.0;
+- ghost fedele entro 0.25 unità su 200 tick anche in regime estremo
+  (M=500000) — il ghost ora replica 6 eval/tick (`ghost_step_tick`).
+
+Lezione: i corpi addormentati (Sleeping) PERDONO `SolverBody` → la query
+con `&mut SolverBody` richiesto li escludeva e con <2 corpi il sistema
+faceva early return (gravità spenta per tutti!). Ora `Option<&mut
+SolverBody>`: gli addormentati tirano da fermi, i kick vanno solo agli
+svegli. Vecchio `gravity_system` (FixedUpdate) rimosso; `pair_force`
+formula unica per sim + ghost.
+
 ## Conseguenze
 
 - Impostare la velocità deve alzare il dirty flag delle traiettorie (come

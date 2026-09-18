@@ -5,7 +5,6 @@ use bevy::window::{Window, WindowResolution};
 use gravity_sandbox::components::debug::DebugSpawnPlugin;
 use gravity_sandbox::systems::camera::CameraControllerPlugin;
 use gravity_sandbox::systems::camera_follow::CameraFollowPlugin;
-use gravity_sandbox::systems::gravity;
 use gravity_sandbox::systems::light::LightPlugin;
 use gravity_sandbox::systems::lighting::LightingPlugin;
 use gravity_sandbox::systems::minimap::MinimapPlugin;
@@ -63,8 +62,7 @@ fn main() {
             SettingsPlugin,
             CameraFollowPlugin,
         ))
-        .add_plugins((ResetPlugin,))
-        .add_systems(FixedUpdate, gravity::gravity_system)
+        .add_plugins((ResetPlugin, systems::gravity::GravityPlugin))
         .run();
 }
 

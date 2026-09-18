@@ -14,7 +14,6 @@ pub mod version;
 use components::debug::DebugSpawnPlugin;
 use systems::camera::{CameraControllerPlugin, MainCamera};
 use systems::firefly_bridge::FireflyBridgePlugin;
-use systems::gravity;
 use systems::light::LightPlugin;
 use systems::lighting::LightingPlugin;
 use systems::minimap::MinimapPlugin;
@@ -448,9 +447,9 @@ pub fn wasm_main() {
         systems::settings::SettingsPlugin,
         FireflyBridgePlugin,
         systems::camera_follow::CameraFollowPlugin,
+        systems::gravity::GravityPlugin,
     ))
     .insert_resource(Gravity::ZERO)
-    .add_systems(FixedUpdate, gravity::gravity_system)
     .add_systems(
         Update,
         (
@@ -522,9 +521,9 @@ mod tests {
             systems::keypad::KeypadPlugin,
             systems::settings::SettingsPlugin,
             systems::camera_follow::CameraFollowPlugin,
+            systems::gravity::GravityPlugin,
         ))
-        .insert_resource(Gravity::ZERO)
-        .add_systems(FixedUpdate, gravity::gravity_system);
+        .insert_resource(Gravity::ZERO);
         // N.B.: debug_state_snapshot/apply_mobile_text_input/clear_focus_*
         // sono wasm32-only: non esistono in native
         app

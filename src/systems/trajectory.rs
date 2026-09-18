@@ -6,7 +6,7 @@ use crate::components::celestial::CelestialBody;
 use crate::components::trajectory::{
     GhostBody, GhostPrediction, TrajectoryConfig, TrajectoryHistory, TrajectoryTickCounter,
 };
-use crate::systems::persistence::{GravitationalConstant, SOFTENING};
+use crate::systems::persistence::GravitationalConstant;
 use crate::systems::selection::SelectedBody;
 use crate::systems::timeline::SimulationState;
 
@@ -220,59 +220,65 @@ pub const GHOST_TICKS_PER_FRAME: usize = 256;
 #[allow(dead_code)]
 const GHOST_CHUNK_WARN_MS: u128 = 4;
 
-/// Faithful ghost tick (ADR-4): EXACT replica of `gravity_system`
-/// (force evaluated ONCE per tick from current positions, same formula,
-/// same `dist_sq < 1.0` skip, same i<j action/reaction order) followed by
-/// 6 frozen-force semi-implicit Euler substeps — the same 6 substeps Avian
-/// runs per tick (`SubstepCount` default 6).
+/// Faithful ghost tick (ADR-4, v0.14.104): EXACT replica of
+/// `substep_gravity_system` — force re-evaluated from current positions at
+/// EVERY substep (same formula via `pair_force`, same `dist_sq < 1.0` skip,
+/// same i<j action/reaction order), each followed by one semi-implicit
+/// Euler step with `dt_tick/6` — the same 6 substeps Avian runs per tick
+/// (`SubstepCount` default 6).
 ///
-/// Mass subtlety (bug v0.14.100 investigation, CLOSED): Avian integrates
-/// ConstantForce as acceleration via `ComputedMass.inverse()`. Verified
-/// headless (`ghost_total_mass_matches_avian_computed_mass`): with explicit
-/// `Mass` present, `ComputedMass == Mass` EXACTLY (explicit mass REPLACES
+/// (Fino a v0.14.103 la forza era valutata 1x/tick e congelata per i 6
+/// substep, come il vecchio `gravity_system`+ConstantForce: pompaggio
+/// secolare +27/orbita a r=200. Ora forza fresca per-substep.)
+///
+/// Mass subtlety (bug v0.14.100 investigation, CLOSED): Avian integrates ConstantForce
+/// as acceleration via `ComputedMass.inverse()`. Verified headless
+/// (`ghost_total_mass_matches_avian_computed_mass`): with explicit `Mass`
+/// present, `ComputedMass == Mass` EXACTLY (explicit mass REPLACES
 /// collider auto-mass). Our bodies always spawn with explicit `Mass`
 /// (== `CelestialBody.mass`, synced on edit), so dividing by `body.mass`
 /// here is already the identical computation the sim performs. No
 /// compensation needed.
 /// Pure function over plain data: no Avian components on ghosts (Dec. 2).
 pub fn ghost_step_tick(ghosts: &mut [GhostBody], g: f32, dt_tick: f32) {
+    use crate::systems::gravity::pair_force;
+
     let n = ghosts.len();
     if n == 0 {
         return;
     }
-    // --- Force pass: same loop as gravity.rs ---
-    // Dead (merged-away) ghosts exert and feel no force (T22-C).
-    let mut forces = vec![Vec2::ZERO; n];
-    for i in 0..n {
-        if !ghosts[i].alive {
-            continue;
-        }
-        for j in (i + 1)..n {
-            if !ghosts[j].alive {
-                continue;
-            }
-            let delta = ghosts[j].pos - ghosts[i].pos;
-            let dist_sq = delta.length_squared();
-            if dist_sq < 1.0 {
-                continue;
-            }
-            let force_magnitude =
-                g * ghosts[i].mass * ghosts[j].mass / (dist_sq + SOFTENING * SOFTENING);
-            let direction = delta / dist_sq.sqrt();
-            let force_vec = direction * force_magnitude;
-            forces[i] += force_vec;
-            forces[j] -= force_vec;
-        }
-    }
-    // --- Integrate: 6 frozen-force semi-implicit Euler substeps ---
-    // Dead ghosts are frozen in place (T22-C).
+    // --- 6 substeps: fresh force eval + one Euler step each ---
+    // Dead (merged-away) ghosts exert and feel no force (T22-C) and are
+    // frozen in place.
     let dt_sub = dt_tick / 6.0;
-    for (body, force) in ghosts.iter_mut().zip(forces.iter()) {
-        if !body.alive {
-            continue;
+    let mut forces = vec![Vec2::ZERO; n];
+    for _ in 0..6 {
+        for f in forces.iter_mut() {
+            *f = Vec2::ZERO;
         }
-        let acc = *force / body.mass;
-        for _ in 0..6 {
+        for i in 0..n {
+            if !ghosts[i].alive {
+                continue;
+            }
+            for j in (i + 1)..n {
+                if !ghosts[j].alive {
+                    continue;
+                }
+                let delta = ghosts[j].pos - ghosts[i].pos;
+                let dist_sq = delta.length_squared();
+                if dist_sq < 1.0 {
+                    continue;
+                }
+                let force_vec = pair_force(delta, dist_sq, ghosts[i].mass, ghosts[j].mass, g);
+                forces[i] += force_vec;
+                forces[j] -= force_vec;
+            }
+        }
+        for (body, force) in ghosts.iter_mut().zip(forces.iter()) {
+            if !body.alive {
+                continue;
+            }
+            let acc = *force / body.mass;
             body.vel += acc * dt_sub;
             body.pos += body.vel * dt_sub;
         }
@@ -1835,7 +1841,7 @@ mod ghost_tests {
 
     /// End-to-end fidelity probe (bug report v0.14.94: il ghost "avanza più
     /// in fretta del pianeta" + "errore a lungo termine"): catena ghost pura
-    /// contro il VERO solver Avian + il VERO `gravity_system`, headless.
+    /// contro il VERO solver Avian + la VERA gravità per-substep, headless.
     ///
     /// Misura la divergenza su 200 tick (~5 orbite): se il ghost fosse un
     /// "ghost run deterministico della simulazione" (ADR 0001 Dec. 4), i due
@@ -1843,6 +1849,8 @@ mod ghost_tests {
     /// causa radice del distacco testa-trail in Run.
     #[test]
     fn ghost_divergence_vs_real_avian_over_200_ticks() {
+        use avian2d::dynamics::integrator::{integrate_velocities, IntegrationSystems};
+        use avian2d::dynamics::solver::schedule::SubstepSchedule;
         use bevy::time::TimeUpdateStrategy;
         use std::time::Duration;
         let g = 5000.0_f32;
@@ -1859,7 +1867,13 @@ mod ghost_tests {
         ))
         .insert_resource(Gravity::ZERO)
         .insert_resource(GravitationalConstant(g))
-        .add_systems(FixedUpdate, crate::systems::gravity::gravity_system)
+        .add_systems(
+            SubstepSchedule,
+            crate::systems::gravity::substep_gravity_system
+                .in_set(IntegrationSystems::Velocity)
+                .after(ForceSystems::ApplyLocalAcceleration)
+                .before(integrate_velocities),
+        )
         // 1 update = esattamente 1 fixed tick (niente resto accumulato).
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 64.0,
@@ -1976,6 +1990,8 @@ mod ghost_tests {
     /// conteggio tick — i numeri escono su stderr per la diagnosi.
     #[test]
     fn ghost_divergence_user_config_over_full_horizon() {
+        use avian2d::dynamics::integrator::{integrate_velocities, IntegrationSystems};
+        use avian2d::dynamics::solver::schedule::SubstepSchedule;
         use bevy::time::TimeUpdateStrategy;
         use std::time::Duration;
         let g = 5000.0_f32;
@@ -1989,7 +2005,13 @@ mod ghost_tests {
         ))
         .insert_resource(Gravity::ZERO)
         .insert_resource(GravitationalConstant(g))
-        .add_systems(FixedUpdate, crate::systems::gravity::gravity_system)
+        .add_systems(
+            SubstepSchedule,
+            crate::systems::gravity::substep_gravity_system
+                .in_set(IntegrationSystems::Velocity)
+                .after(ForceSystems::ApplyLocalAcceleration)
+                .before(integrate_velocities),
+        )
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
             1.0 / 64.0,
         )));

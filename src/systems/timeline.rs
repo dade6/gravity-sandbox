@@ -234,10 +234,10 @@ mod tests {
             bevy::transform::TransformPlugin,
             PhysicsPlugins::default(),
             TimelinePlugin,
+            crate::systems::gravity::GravityPlugin,
         ))
         .insert_resource(Gravity::ZERO)
         .insert_resource(GravitationalConstant(5000.0))
-        .add_systems(FixedUpdate, crate::systems::gravity::gravity_system)
         .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
             16,
         )))
