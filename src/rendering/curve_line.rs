@@ -16,7 +16,7 @@ pub struct CurveLineUniforms {
     /// Fraction of the cycle that is drawn (0.0–1.0).
     pub dash_ratio: f32,
     /// Reserved for future use (padding to 16-byte alignment).
-    pub _pad: [f32; 2],
+    pub _pad: Vec2,
 }
 
 impl Default for CurveLineUniforms {
@@ -24,7 +24,7 @@ impl Default for CurveLineUniforms {
         Self {
             dash_length: 40.0,
             dash_ratio: 0.55,
-            _pad: [0.0; 2],
+            _pad: Vec2::ZERO,
         }
     }
 }
@@ -55,7 +55,7 @@ impl From<&CurveLineMaterial> for CurveLineUniforms {
         Self {
             dash_length: m.dash_length,
             dash_ratio: m.dash_ratio,
-            _pad: [0.0; 2],
+            _pad: Vec2::ZERO,
         }
     }
 }
