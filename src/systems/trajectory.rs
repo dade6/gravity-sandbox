@@ -1,10 +1,14 @@
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use std::collections::VecDeque;
 
 use crate::components::celestial::CelestialBody;
 use crate::components::trajectory::{
     GhostBody, GhostPrediction, TrajectoryConfig, TrajectoryHistory, TrajectoryTickCounter,
+};
+use crate::rendering::curve_line::{
+    build_line_mesh, interpolate_trail, CurveLineMaterial, CurveLinePlugin,
 };
 use crate::systems::persistence::GravitationalConstant;
 use crate::systems::selection::SelectedBody;
@@ -197,7 +201,7 @@ impl Plugin for TrajectoryPlugin {
                 PostUpdate,
                 (
                     render_trajectories,
-                    render_ghost_predictions,
+                    render_ghost_mesh_system,
                     sync_trajectory_config_to_js,
                 ),
             );
@@ -737,38 +741,78 @@ pub fn ghost_decimation_stride(computed_ticks: usize) -> usize {
 /// Half-extent (world units) of the collision-marker X arms.
 pub const GHOST_MARKER_HALF: f32 = 7.0;
 
-/// Renders the ghost forecast in `PostUpdate` with the same `Gizmos` as the
-/// historic trail (Dec. 9 + orchestrator decisions):
-/// - one curve per ghost in its own color;
-/// - the `SelectedBody` curve more opaque + dotted at sampled points
-///   (Gizmos lines have a fixed width, so presence — not width —
-///   carries the emphasis), other curves attenuated;
-/// - FUTURE IS DASHED: alternating drawn/skipped segments; the historic
-///   trail (`render_trajectories`) stays continuous;
-/// - decimation via [`ghost_decimation_stride`];
-/// - collision markers as an X cross (two segments) in the marker color.
-pub fn render_ghost_predictions(
+/// Marker component linking a mesh entity to a ghost trail index.
+#[derive(Component)]
+pub struct GhostTrailLine {
+    pub ghost_index: usize,
+}
+
+/// Marker component for collision marker X meshes.
+#[derive(Component)]
+pub struct GhostCollisionMarker;
+
+/// Line width (world units) for ghost trajectory curves.
+const GHOST_LINE_WIDTH: f32 = 2.0;
+/// Catmull-Rom segments per control-point span.
+const GHOST_ROM_SEGMENTS: usize = 4;
+
+/// Renders the ghost forecast as **mesh-based Catmull-Rom curves** with
+/// GPU-side dashing (replaces the old Gizmos `render_ghost_predictions`).
+///
+/// Each ghost trail gets a persistent mesh entity (`Mesh2d` +
+/// `MeshMaterial2d<CurveLineMaterial>`) that is rebuilt only when the
+/// trail data changes.  Collision markers are rendered as small Gizmo X's
+/// (rare, cheap, no benefit from meshing).
+pub fn render_ghost_mesh_system(
     config: Res<TrajectoryConfig>,
     selected: Res<SelectedBody>,
     pred: Res<GhostPrediction>,
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<CurveLineMaterial>>,
+    mut q_trails: Query<(
+        Entity,
+        &GhostTrailLine,
+        &Mesh2d,
+        &MeshMaterial2d<CurveLineMaterial>,
+    )>,
+    // Collision markers still use Gizmos (rare, no mesh needed)
     mut gizmos: Gizmos,
 ) {
+    crate::mark_system("render_ghost_mesh_system");
+
     if !config.enabled {
+        // Hide all trail meshes when trajectories are off
+        for (_, _, mesh_h, mat_h) in q_trails.iter() {
+            meshes.remove(mesh_h.id());
+            materials.remove(mat_h.id());
+        }
         return;
     }
-    if pred.trails.is_empty() {
-        return;
+
+    // --- ghost trails → mesh entities ---
+    let trail_count = pred.trails.len();
+
+    // Despawn excess entities (bodies removed since last frame)
+    for (entity, trail_line, _, _) in q_trails.iter() {
+        if trail_line.ghost_index >= trail_count {
+            commands.entity(entity).despawn();
+        }
     }
-    let stride = ghost_decimation_stride(pred.computed_ticks);
+
     for (idx, trail) in pred.trails.iter().enumerate() {
         if trail.len() < 2 {
             continue;
         }
+
         let body = pred.bodies.get(idx);
-        let base = body.map(|b| b.color).unwrap_or(Color::WHITE).to_srgba();
-        let is_selected = body.map(|b| selected.0 == Some(b.entity)).unwrap_or(false);
-        // Selected: opaque; others attenuated. Dead trails (frozen at the
-        // merge point) render dimmer still — they are history, not future.
+        let base = body
+            .map(|b| b.color)
+            .unwrap_or(Color::WHITE)
+            .to_srgba();
+        let is_selected = body
+            .map(|b| selected.0 == Some(b.entity))
+            .unwrap_or(false);
         let alive = body.map(|b| b.alive).unwrap_or(true);
         let alpha = if is_selected {
             0.85
@@ -778,27 +822,47 @@ pub fn render_ghost_predictions(
             0.22
         };
         let color = Color::srgba(base.red, base.green, base.blue, alpha);
-        // Sampled indices, always including the newest point.
-        let mut sampled: Vec<Vec2> = trail.iter().step_by(stride).copied().collect();
-        if let Some(last) = trail.back() {
-            if sampled.last() != Some(last) {
-                sampled.push(*last);
+
+        // Interpolate trail through Catmull-Rom spline
+        let trail_slice: Vec<Vec2> = trail.iter().copied().collect();
+        let smooth = interpolate_trail(&trail_slice, GHOST_ROM_SEGMENTS);
+
+        // Build or update mesh
+        let new_mesh = build_line_mesh(&smooth, GHOST_LINE_WIDTH, color);
+
+        // Check if entity already exists for this index
+        let existing = q_trails
+            .iter()
+            .find(|(_, tl, _, _)| tl.ghost_index == idx);
+
+        match existing {
+            Some((entity, _, mesh_h, mat_h)) => {
+                // Replace the mesh asset entirely (avoids borrow conflict)
+                let mesh_id = mesh_h.0.id();
+                meshes.insert(mesh_id, new_mesh);
+                // Material params are static (dash_length=40, dash_ratio=0.55)
+                // — no need to update each frame.
             }
-        }
-        // Dashed: draw even segments, skip odd ones.
-        for (k, pair) in sampled.windows(2).enumerate() {
-            if k % 2 == 0 {
-                gizmos.line_2d(pair[0], pair[1], color);
-            }
-        }
-        // Selected emphasis dots at sampled points.
-        if is_selected {
-            for p in sampled.iter().step_by(2) {
-                gizmos.circle_2d(*p, 2.5, color);
+            None => {
+                // Spawn new mesh entity
+                let mesh_h = meshes.add(new_mesh);
+                let mat_h = materials.add(CurveLineMaterial {
+                    dash_length: 40.0,
+                    dash_ratio: 0.55,
+                });
+                commands.spawn((
+                    GhostTrailLine { ghost_index: idx },
+                    Mesh2d(mesh_h),
+                    MeshMaterial2d(mat_h),
+                    Transform::default(),
+                    Visibility::default(),
+                    RenderLayers::layer(1), // visible from main camera, not minimap
+                ));
             }
         }
     }
-    // Collision markers: X cross in the marker color, full opacity.
+
+    // --- collision markers (Gizmos — rare, cheap) ---
     for (pos, marker) in pred.collision_markers.iter() {
         let m = marker.to_srgba();
         let c = Color::srgba(m.red, m.green, m.blue, 1.0);

@@ -25,6 +25,7 @@ use systems::selection::SelectionPlugin;
 use systems::shadow::ShadowPlugin;
 use systems::timeline::TimelinePlugin;
 use systems::tools::ToolPlugin;
+use rendering::curve_line::CurveLinePlugin;
 use systems::trajectory::TrajectoryPlugin;
 
 use systems::ui::SandboxUIPlugin;
@@ -431,6 +432,7 @@ pub fn wasm_main() {
         SelectionPlugin,
         ToolPlugin,
         TrajectoryPlugin,
+        CurveLinePlugin,
         PersistencePlugin,
         rendering::TexturePlugin,
         PropertyEditorPlugin,
@@ -507,6 +509,7 @@ mod tests {
             SelectionPlugin,
             ToolPlugin,
             TrajectoryPlugin,
+            CurveLinePlugin,
             PersistencePlugin,
             rendering::TexturePlugin,
             PropertyEditorPlugin,
