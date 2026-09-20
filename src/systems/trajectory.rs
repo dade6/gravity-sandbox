@@ -823,11 +823,18 @@ pub fn render_ghost_mesh_system(
         };
         let color = Color::srgba(base.red, base.green, base.blue, alpha);
 
-        // Decimate BEFORE Catmull-Rom: keep ~300 control points max so
-        // the mesh stays under ~1200 vertices (600 quads × 2 tris each).
-        // Without this, a 300 s trail (19 200 points) would produce a
-        // 150 000-vertex mesh that GPU rendering chokes on.
-        let stride = ghost_decimation_stride(pred.computed_ticks).max(1);
+        // Decimate to a MAXIMUM of ~400 control points, regardless of
+        // horizon.  The old ghost_decimation_stride (computed/1500) was
+        // proportional: with 3600 s @ 64 Hz → stride 153 → only ~1500
+        // sparse points that Catmull-Rom couldn't smooth enough → straight
+        // segments.  A fixed cap keeps mesh complexity constant.
+        const MAX_CONTROL_POINTS: usize = 400;
+        let raw_len = trail.len();
+        let stride = if raw_len > MAX_CONTROL_POINTS {
+            raw_len / MAX_CONTROL_POINTS
+        } else {
+            1
+        };
         let mut decimated: Vec<Vec2> = trail.iter().step_by(stride).copied().collect();
         // Always include the last (newest) point
         if let Some(last) = trail.back() {
@@ -838,7 +845,8 @@ pub fn render_ghost_mesh_system(
         if decimated.len() < 2 {
             continue;
         }
-        let smooth = interpolate_trail(&decimated, GHOST_ROM_SEGMENTS);
+        // 6 segments per span → smooth curves even with sparse control points
+        let smooth = interpolate_trail(&decimated, 6);
 
         // Build or update mesh
         let new_mesh = build_line_mesh(&smooth, GHOST_LINE_WIDTH, color);
