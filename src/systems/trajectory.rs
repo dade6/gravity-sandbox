@@ -823,9 +823,22 @@ pub fn render_ghost_mesh_system(
         };
         let color = Color::srgba(base.red, base.green, base.blue, alpha);
 
-        // Interpolate trail through Catmull-Rom spline
-        let trail_slice: Vec<Vec2> = trail.iter().copied().collect();
-        let smooth = interpolate_trail(&trail_slice, GHOST_ROM_SEGMENTS);
+        // Decimate BEFORE Catmull-Rom: keep ~300 control points max so
+        // the mesh stays under ~1200 vertices (600 quads × 2 tris each).
+        // Without this, a 300 s trail (19 200 points) would produce a
+        // 150 000-vertex mesh that GPU rendering chokes on.
+        let stride = ghost_decimation_stride(pred.computed_ticks).max(1);
+        let mut decimated: Vec<Vec2> = trail.iter().step_by(stride).copied().collect();
+        // Always include the last (newest) point
+        if let Some(last) = trail.back() {
+            if decimated.last() != Some(last) {
+                decimated.push(*last);
+            }
+        }
+        if decimated.len() < 2 {
+            continue;
+        }
+        let smooth = interpolate_trail(&decimated, GHOST_ROM_SEGMENTS);
 
         // Build or update mesh
         let new_mesh = build_line_mesh(&smooth, GHOST_LINE_WIDTH, color);
