@@ -141,10 +141,20 @@ pub fn interpolate_trail(trail: &[Vec2], segments_per_span: usize) -> Vec<Vec2> 
 ///
 /// Each vertex carries:
 /// - **position** (Float32x3, z = 0)
-/// - **uv**       (Float32x2) — x = cumulative arc-length (for dashing), y = 0|1
+/// - **uv**       (Float32x2) — x = `uv_offset` + cumulative arc-length
+///   (for dashing), y = 0|1
 ///   (left/right edge for anti-aliasing in the fragment shader)
 /// - **color**    (Float32x4) — per-vertex RGBA (allows per-segment alpha)
-pub fn build_line_mesh(smooth_points: &[Vec2], line_width: f32, color: Color) -> Mesh {
+///
+/// `uv_offset` anchors the dash pattern in world space: pass the arc-length
+/// already consumed by the sliding window so rebuilt meshes keep the same
+/// UVs for the same points and dashes don't crawl.
+pub fn build_line_mesh(
+    smooth_points: &[Vec2],
+    line_width: f32,
+    color: Color,
+    uv_offset: f32,
+) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
     let mut colors: Vec<[f32; 4]> = Vec::new();
@@ -153,7 +163,7 @@ pub fn build_line_mesh(smooth_points: &[Vec2], line_width: f32, color: Color) ->
     let half_w = line_width * 0.5;
     let [r, g, b, a] = color.to_linear().to_f32_array();
 
-    let mut cum_len: f32 = 0.0;
+    let mut cum_len: f32 = uv_offset;
     let mut prev_pt = smooth_points[0];
 
     for (i, &pt) in smooth_points.iter().enumerate() {

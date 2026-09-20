@@ -312,6 +312,7 @@ fn take_ghost_snapshot(
     let n = snapshot.len();
     pred.bodies = snapshot;
     pred.trails = vec![VecDeque::new(); n];
+    pred.trail_arc_offset = vec![0.0; n];
     pred.collision_markers.clear();
     pred.computed_ticks = 0;
     pred.horizon_ticks = horizon_ticks;
@@ -622,12 +623,24 @@ pub fn ghost_slide_tick(pred: &mut GhostPrediction, g: f32, dt_tick: f32) {
     ghost_step_tick(&mut pred.bodies, g, dt_tick);
     ghost_check_collisions(pred);
     let growing = pred.computed_ticks < pred.horizon_ticks;
+    // Keep the arc-offset vector parallel to the trails (defensive: tests
+    // and older paths may construct predictions without it).
+    pred.trail_arc_offset
+        .resize(pred.trails.len(), 0.0);
     for idx in 0..pred.bodies.len() {
         if !pred.bodies[idx].alive {
             continue;
         }
         if let Some(trail) = pred.trails.get_mut(idx) {
             if !growing && !trail.is_empty() {
+                // Anchor the dash pattern: credit the popped segment's
+                // length so rebuilt meshes keep stable UVs for old points.
+                if trail.len() >= 2 {
+                    let popped = trail[0].distance(trail[1]);
+                    if let Some(off) = pred.trail_arc_offset.get_mut(idx) {
+                        *off += popped;
+                    }
+                }
                 trail.pop_front();
             }
             trail.push_back(pred.bodies[idx].pos);
@@ -848,8 +861,11 @@ pub fn render_ghost_mesh_system(
         // 6 segments per span → smooth curves even with sparse control points
         let smooth = interpolate_trail(&decimated, 6);
 
+        // Anchor dashes in world space: the sliding window eats the head,
+        // so restart UVs from the consumed arc-length instead of 0.
+        let uv_offset = pred.trail_arc_offset.get(idx).copied().unwrap_or(0.0);
         // Build or update mesh
-        let new_mesh = build_line_mesh(&smooth, GHOST_LINE_WIDTH, color);
+        let new_mesh = build_line_mesh(&smooth, GHOST_LINE_WIDTH, color, uv_offset);
 
         // Check if entity already exists for this index
         let existing = q_trails
@@ -1377,6 +1393,7 @@ mod ghost_tests {
         let mut pred = GhostPrediction {
             bodies: head_on_pair(),
             trails: vec![VecDeque::new(), VecDeque::new()],
+            trail_arc_offset: vec![0.0; 2],
             collision_markers: Vec::new(),
             dirty: false,
             computed_ticks: 0,
@@ -1429,6 +1446,7 @@ mod ghost_tests {
         let mut pred = GhostPrediction {
             bodies: star_planet_pair(),
             trails: vec![VecDeque::new(), VecDeque::new()],
+            trail_arc_offset: vec![0.0; 2],
             collision_markers: Vec::new(),
             dirty: false,
             computed_ticks: 0,
@@ -1481,6 +1499,7 @@ mod ghost_tests {
                 },
             ],
             trails: vec![VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            trail_arc_offset: vec![0.0; 3],
             collision_markers: Vec::new(),
             dirty: false,
             computed_ticks: 0,
@@ -1537,6 +1556,7 @@ mod ghost_tests {
                 Vec2::new(3.0, 0.0),
                 Vec2::new(4.0, 0.0),
             ])],
+            trail_arc_offset: vec![0.0],
             collision_markers: Vec::new(),
             dirty: false,
             computed_ticks: 5,
@@ -1570,6 +1590,7 @@ mod ghost_tests {
                 Vec2::new(1.0, 0.0),
                 Vec2::new(2.0, 0.0),
             ])],
+            trail_arc_offset: vec![0.0],
             collision_markers: Vec::new(),
             dirty: false,
             computed_ticks: 3,
@@ -1602,6 +1623,7 @@ mod ghost_tests {
                 ]),
                 frozen.clone(),
             ],
+            trail_arc_offset: vec![0.0; 2],
             collision_markers: Vec::new(),
             dirty: false,
             computed_ticks: 5,
@@ -1612,6 +1634,63 @@ mod ghost_tests {
         assert_eq!(pred.trails[1], frozen, "dead trail must stay frozen");
         assert!(pred.collision_markers.is_empty());
         assert_eq!(pred.trails[0].len(), 5);
+    }
+
+    #[test]
+    fn ghost_slide_tick_accumulates_arc_offset_for_dash_anchor() {
+        // Same ballistic drift as above: +1.0 x per slide tick.
+        let dt = 1.0 / 64.0;
+        let mut pred = GhostPrediction {
+            bodies: vec![drifting_body(4.0)],
+            trails: vec![VecDeque::from([
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+                Vec2::new(3.0, 0.0),
+                Vec2::new(4.0, 0.0),
+            ])],
+            trail_arc_offset: vec![0.0],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 5,
+            horizon_ticks: 5,
+            anchor_tick: 0,
+        };
+        ghost_slide_tick(&mut pred, 0.0, dt);
+        assert!(
+            (pred.trail_arc_offset[0] - 1.0).abs() < 1e-4,
+            "popped 1.0-length segment must be credited, got {}",
+            pred.trail_arc_offset[0]
+        );
+        for _ in 0..4 {
+            ghost_slide_tick(&mut pred, 0.0, dt);
+        }
+        assert!(
+            (pred.trail_arc_offset[0] - 5.0).abs() < 1e-3,
+            "5 slides must credit ~5.0 total, got {}",
+            pred.trail_arc_offset[0]
+        );
+    }
+
+    #[test]
+    fn ghost_slide_tick_growing_phase_keeps_arc_offset_zero() {
+        let dt = 1.0 / 64.0;
+        let mut pred = GhostPrediction {
+            bodies: vec![drifting_body(2.0)],
+            trails: vec![VecDeque::from([
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+            ])],
+            trail_arc_offset: vec![0.0],
+            collision_markers: Vec::new(),
+            dirty: false,
+            computed_ticks: 3,
+            horizon_ticks: 5,
+            anchor_tick: 0,
+        };
+        ghost_slide_tick(&mut pred, 0.0, dt);
+        assert_eq!(pred.trail_arc_offset[0], 0.0, "no pop → no offset");
     }
 
     #[test]

@@ -113,6 +113,12 @@ pub struct GhostPrediction {
     /// Run sliding window (T22-E, ADR 0001 Dec. 8) pops the oldest point
     /// and pushes the newest in O(1) with constant length.
     pub trails: Vec<VecDeque<Vec2>>,
+    /// Arc-length already consumed by the sliding window, per ghost.
+    /// The mesh UV restarts at 0 every rebuild, so without this the dash
+    /// pattern would slide along with the window. Adding the popped
+    /// length back keeps dashes anchored in world space: old points keep
+    /// the same UV, new points continue the sequence.
+    pub trail_arc_offset: Vec<f32>,
     pub collision_markers: Vec<(Vec2, Color)>,
     pub dirty: bool,
     pub computed_ticks: usize,
@@ -125,6 +131,7 @@ impl GhostPrediction {
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
         self.trails.clear();
+        self.trail_arc_offset.clear();
         self.collision_markers.clear();
         self.computed_ticks = 0;
     }
@@ -168,6 +175,7 @@ mod tests {
         let mut pred = GhostPrediction {
             bodies: vec![],
             trails: vec![VecDeque::from([Vec2::ZERO])],
+            trail_arc_offset: vec![0.0],
             collision_markers: vec![(Vec2::ZERO, Color::WHITE)],
             dirty: false,
             computed_ticks: 42,
