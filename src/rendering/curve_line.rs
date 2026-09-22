@@ -90,12 +90,10 @@ impl Plugin for CurveLinePlugin {
 pub fn catmull_rom(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, t: f32) -> Vec2 {
     let t2 = t * t;
     let t3 = t2 * t;
-    0.5 * (
-        2.0 * p1
-            + (-p0 + p2) * t
-            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
-    )
+    0.5 * (2.0 * p1
+        + (-p0 + p2) * t
+        + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+        + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 }
 
 /// Interpolate a trail (slice of `Vec2` points) using Catmull-Rom splines.

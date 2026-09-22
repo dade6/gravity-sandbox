@@ -12,6 +12,7 @@ pub mod systems;
 pub mod version;
 
 use components::debug::DebugSpawnPlugin;
+use rendering::curve_line::CurveLinePlugin;
 use systems::camera::{CameraControllerPlugin, MainCamera};
 use systems::firefly_bridge::FireflyBridgePlugin;
 use systems::light::LightPlugin;
@@ -25,7 +26,6 @@ use systems::selection::SelectionPlugin;
 use systems::shadow::ShadowPlugin;
 use systems::timeline::TimelinePlugin;
 use systems::tools::ToolPlugin;
-use rendering::curve_line::CurveLinePlugin;
 use systems::trajectory::TrajectoryPlugin;
 
 use systems::ui::SandboxUIPlugin;

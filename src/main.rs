@@ -62,7 +62,10 @@ fn main() {
             SettingsPlugin,
             CameraFollowPlugin,
         ))
-        .add_plugins((ResetPlugin, gravity_sandbox::systems::gravity::GravityPlugin))
+        .add_plugins((
+            ResetPlugin,
+            gravity_sandbox::systems::gravity::GravityPlugin,
+        ))
         .run();
 }
 

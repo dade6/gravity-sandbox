@@ -1,6 +1,6 @@
 use avian2d::prelude::*;
-use bevy::prelude::*;
 use bevy::camera::visibility::RenderLayers;
+use bevy::prelude::*;
 use std::collections::VecDeque;
 
 use crate::components::celestial::CelestialBody;
@@ -625,8 +625,7 @@ pub fn ghost_slide_tick(pred: &mut GhostPrediction, g: f32, dt_tick: f32) {
     let growing = pred.computed_ticks < pred.horizon_ticks;
     // Keep the arc-offset vector parallel to the trails (defensive: tests
     // and older paths may construct predictions without it).
-    pred.trail_arc_offset
-        .resize(pred.trails.len(), 0.0);
+    pred.trail_arc_offset.resize(pred.trails.len(), 0.0);
     for idx in 0..pred.bodies.len() {
         if !pred.bodies[idx].alive {
             continue;
@@ -819,13 +818,8 @@ pub fn render_ghost_mesh_system(
         }
 
         let body = pred.bodies.get(idx);
-        let base = body
-            .map(|b| b.color)
-            .unwrap_or(Color::WHITE)
-            .to_srgba();
-        let is_selected = body
-            .map(|b| selected.0 == Some(b.entity))
-            .unwrap_or(false);
+        let base = body.map(|b| b.color).unwrap_or(Color::WHITE).to_srgba();
+        let is_selected = body.map(|b| selected.0 == Some(b.entity)).unwrap_or(false);
         let alive = body.map(|b| b.alive).unwrap_or(true);
         let alpha = if is_selected {
             0.85
@@ -868,9 +862,7 @@ pub fn render_ghost_mesh_system(
         let new_mesh = build_line_mesh(&smooth, GHOST_LINE_WIDTH, color, uv_offset);
 
         // Check if entity already exists for this index
-        let existing = q_trails
-            .iter()
-            .find(|(_, tl, _, _)| tl.ghost_index == idx);
+        let existing = q_trails.iter().find(|(_, tl, _, _)| tl.ghost_index == idx);
 
         match existing {
             Some((entity, _, mesh_h, mat_h)) => {
