@@ -9,20 +9,25 @@ use rand::{Rng, SeedableRng};
 // ============================================================
 
 /// Marks a parallax layer parent entity. The `factor` determines
-/// how much the layer moves relative to the camera (0.0 = fixed
-/// in world space, 1.0 = glued to the camera).
+/// how glued the layer is to the camera:
+///
+/// - 1.0 = glued (background: barely moves on screen, "far away")
+/// - 0.3 = mostly world-fixed (foreground: drifts fast, "close")
+///
+/// Small/far stars use the highest factor, big/near stars the lowest.
 #[derive(Component)]
 pub struct ParallaxLayer {
     pub factor: f32,
 }
 
-/// Per-star data: base position inside the wrap box, the layer's
-/// parallax factor and the box half-size. The real position is
-/// recomputed every frame by `update_parallax` so the starfield
-/// wraps around the camera (infinite field, constant density).
+/// Per-star data: `uv` is the star's position as a fraction of the
+/// wrap box ([0,1) on each axis), so density stays uniform whatever
+/// the effective box size is. The real position is recomputed every
+/// frame by `update_parallax` so the starfield wraps around the
+/// camera (infinite field, constant density).
 #[derive(Component)]
 pub struct Star {
-    pub base: Vec2,
+    pub uv: Vec2,
     pub factor: f32,
     pub half: f32,
 }
@@ -67,7 +72,7 @@ struct LayerConfig {
     radius_max: f32,
     factor: f32,
     z: f32,
-    /// Full width/height of the wrap box for this layer.
+    /// Full width/height of the wrap box for this layer at zoom 1.
     /// Density = count / (box_size²). With box 1600 and 500 stars
     /// a phone viewport (~390×844 world units at scale 1) always
     /// shows ~60 stars of layer 1 alone.
@@ -75,30 +80,31 @@ struct LayerConfig {
 }
 
 const LAYERS: [LayerConfig; 3] = [
-    // Layer 1 (sfondo) — 500 gray stars, fixed in world
+    // Layer 1 (sfondo) — 500 small gray stars, glued to the camera
+    // (factor 1.0: they barely move on screen = very far away).
     LayerConfig {
         count: 500,
         radius_min: 0.5,
         radius_max: 1.5,
-        factor: 0.0,
+        factor: 1.0,
         z: -100.0,
         box_size: 1600.0,
     },
-    // Layer 2 (medio) — 200 warm/cool stars, drifts at 80% (background)
+    // Layer 2 (medio) — 200 warm/cool stars, mid drift.
     LayerConfig {
         count: 200,
         radius_min: 1.0,
         radius_max: 3.0,
-        factor: 0.2,
+        factor: 0.65,
         z: -90.0,
         box_size: 1600.0,
     },
-    // Layer 3 (primo piano) — 50 white/yellow stars, drifts at 50%
+    // Layer 3 (primo piano) — 50 big white/yellow stars, drifts most.
     LayerConfig {
         count: 50,
         radius_min: 2.0,
         radius_max: 4.0,
-        factor: 0.5,
+        factor: 0.3,
         z: -80.0,
         box_size: 1600.0,
     },
@@ -116,7 +122,7 @@ fn spawn_stars(
 ) {
     let mut rng = StdRng::seed_from_u64(seed.0);
 
-    for cfg in &LAYERS {
+    for (layer_idx, cfg) in LAYERS.iter().enumerate() {
         // Parent entity — only carries the z depth + layer marker.
         // Per-star positions are computed in world space by
         // `update_parallax` (wrapping around the camera).
@@ -130,10 +136,10 @@ fn spawn_stars(
 
         let half = cfg.box_size * 0.5;
         for _ in 0..cfg.count {
-            let base = Vec2::new(rng.gen_range(-half..half), rng.gen_range(-half..half));
+            let uv = Vec2::new(rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0));
             let radius = rng.gen_range(cfg.radius_min..cfg.radius_max);
 
-            let color = star_color(&mut rng, cfg.factor);
+            let color = star_color(&mut rng, layer_idx);
 
             // Build a circle mesh + material for this star
             let mesh = meshes.add(Circle::new(radius));
@@ -143,11 +149,11 @@ fn spawn_stars(
                 .spawn((
                     Mesh2d(mesh),
                     MeshMaterial2d::<ColorMaterial>(material),
-                    Transform::from_xyz(base.x, base.y, 0.0),
+                    Transform::from_xyz(0.0, 0.0, 0.0),
                     Visibility::default(),
                     RenderLayers::layer(1),
                     Star {
-                        base,
+                        uv,
                         factor: cfg.factor,
                         half,
                     },
@@ -157,14 +163,14 @@ fn spawn_stars(
     }
 }
 
-/// Generate a star colour based on which layer it belongs to.
-fn star_color(rng: &mut StdRng, factor: f32) -> Color {
-    // Use factor as a discriminant (they are distinct per layer)
-    if factor == 0.0 {
+/// Generate a star colour based on which layer it belongs to
+/// (0 = background, 1 = mid, 2 = foreground).
+fn star_color(rng: &mut StdRng, layer: usize) -> Color {
+    if layer == 0 {
         // Layer 1: gray-ish, opacity 0.3–0.6
         let gray = rng.gen_range(0.3..0.8);
         Color::srgb(gray, gray, gray).with_alpha(rng.gen_range(0.3..0.6))
-    } else if factor == 0.2 {
+    } else if layer == 1 {
         // Layer 2: random warm or cool hue, opacity 0.5–0.8
         let alpha = rng.gen_range(0.5..0.8);
         if rng.gen_bool(0.5) {
@@ -194,41 +200,61 @@ fn wrap_coord(v: f32, half: f32) -> f32 {
     (v + half).rem_euclid(half * 2.0) - half
 }
 
-/// Each frame, place every star in a box of `box_size` centered on
-/// the camera, drifting with the layer factor:
+/// Zoom-aware half-size of the wrap box: the designed box scaled by
+/// the camera zoom, but never smaller than the actual viewport
+/// (plus a margin for the biggest star radius). This keeps the sky
+/// fully covered at any zoom — zooming out widens the box instead
+/// of leaving voids at the edges.
+fn effective_half(base_half: f32, zoom_scale: f32, viewport_half_max: f32) -> f32 {
+    (base_half * zoom_scale).max(viewport_half_max + 4.0)
+}
+
+/// Each frame, place every star in a box centered on the camera,
+/// drifting with the layer factor:
 ///
-///   screen = base − cam·(1 − factor)   (wrapped into the box)
+///   screen = uv·size − cam·(1 − factor)   (wrapped into the box)
 ///   world  = cam + screen
 ///
-/// - factor 0.0 → world-fixed (moves full speed against the camera)
-/// - factor 0.2 → drifts at 80% (background, slower)
-/// - factor 0.5 → drifts at 50% (foreground of the background)
+/// - factor 1.0 (small/far stars) → screen = uv·size: glued to the
+///   camera, they barely move = "already very far away".
+/// - factor 0.3 (big/near stars) → drift 0.7: they sweep past fast.
 ///
-/// Wrapping keeps density constant everywhere: panning never leaves
-/// an empty void, unlike the old fixed 10_000×10_000 scatter
-/// (750 stars over 10⁸ units² ≈ 2–3 visible on a phone viewport).
+/// Positions are stored as UV fractions so density stays uniform at
+/// any effective box size (zoom-independent). Wrapping keeps density
+/// constant everywhere: panning never leaves an empty void.
 fn update_parallax(
     cameras: Query<
-        &Transform,
+        (&Transform, &Projection),
         (
             (With<Camera2d>, With<MainCamera>),
             With<Projection>,
             With<MainCamera>,
         ),
     >,
+    windows: Query<&Window>,
     mut stars: Query<(&mut Transform, &Star), Without<MainCamera>>,
 ) {
     crate::mark_system("update_parallax");
 
-    let Ok(camera) = cameras.single() else {
+    let Ok((camera, projection)) = cameras.single() else {
         return;
     };
     let cam = camera.translation;
+    let zoom_scale = match projection {
+        Projection::Orthographic(ortho) => ortho.scale,
+        _ => 1.0,
+    };
+    let viewport_half_max = windows
+        .single()
+        .map(|w| (w.width().max(w.height())) * 0.5 * zoom_scale)
+        .unwrap_or(800.0);
 
     for (mut transform, star) in stars.iter_mut() {
+        let half = effective_half(star.half, zoom_scale, viewport_half_max);
+        let size = half * 2.0;
         let drift = 1.0 - star.factor;
-        let sx = wrap_coord(star.base.x - cam.x * drift, star.half);
-        let sy = wrap_coord(star.base.y - cam.y * drift, star.half);
+        let sx = wrap_coord(star.uv.x * size - cam.x * drift, half);
+        let sy = wrap_coord(star.uv.y * size - cam.y * drift, half);
         // Parent sits at origin in x/y (only z depth), so local == world − z.
         transform.translation.x = cam.x + sx;
         transform.translation.y = cam.y + sy;
@@ -261,16 +287,37 @@ mod tests {
     }
 
     #[test]
-    fn layer0_is_world_fixed_and_layer3_drifts_half() {
-        // screen = base − cam·(1−factor), wrapped; use cam small enough
-        // to stay inside the box (no wrap interference).
+    fn far_layer_is_glued_and_near_layer_drifts() {
+        // screen = uv·size − cam·(1−factor); uv=0.5, size=1600, cam=50.
+        // L1 (factor 1.0): screen = 800 − 0 = 800 (camera-independent).
+        // L3 (factor 0.3): screen = 800 − 35 = 765 (drifts with camera).
+        let size = 1600.0;
         let half = 800.0;
-        let base = 100.0;
+        let uv = 0.5;
         let cam = 50.0;
-        let s0 = wrap_coord(base - cam * (1.0 - 0.0), half);
-        assert!((s0 - 50.0).abs() < 1e-4, "L1 screen should be 50, got {s0}");
-        let s3 = wrap_coord(base - cam * (1.0 - 0.5), half);
-        assert!((s3 - 75.0).abs() < 1e-4, "L3 screen should be 75, got {s3}");
+        let s1 = wrap_coord(uv * size - cam * (1.0 - 1.0), half);
+        assert!((s1 - 800.0).abs() < 1e-3 || (s1 + 800.0).abs() < 1e-3);
+        // Moving the camera must NOT move L1 on screen...
+        let s1b = wrap_coord(uv * size - 200.0 * (1.0 - 1.0), half);
+        assert!((s1 - s1b).abs() < 1e-4, "far layer moved: {s1} vs {s1b}");
+        // ...but MUST move L3.
+        let s3a = wrap_coord(uv * size - cam * (1.0 - 0.3), half);
+        let s3b = wrap_coord(uv * size - 200.0 * (1.0 - 0.3), half);
+        assert!(
+            (s3a - s3b).abs() > 1.0,
+            "near layer should drift: {s3a} vs {s3b}"
+        );
+    }
+
+    #[test]
+    fn effective_half_covers_viewport_at_any_zoom() {
+        // Zoomed far out: designed box (800·50) already huge — kept.
+        assert!((effective_half(800.0, 50.0, 21000.0) - 40000.0).abs() < 1e-3);
+        // Desktop window at zoom 1: viewport bigger than designed box
+        // → viewport wins so no edge voids.
+        assert!((effective_half(800.0, 1.0, 964.0) - 968.0).abs() < 1e-3);
+        // Zoomed in: box shrinks with zoom, density preserved via UV.
+        assert!((effective_half(800.0, 0.1, 96.0) - 100.0).abs() < 1e-3);
     }
 
     #[test]
