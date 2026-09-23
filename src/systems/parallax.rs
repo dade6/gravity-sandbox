@@ -217,9 +217,16 @@ fn wrap_box_axis(viewport_px: f32, zoom: f32) -> (f32, f32) {
 /// Each frame, place every star in a viewport-sized box centered on
 /// the camera, drifting with the layer factor:
 ///
-///   screen = uv·size − cam·(1 − factor)   (wrapped into the box)
+///   screen = uv·size − cam·(1 − factor)·zoom   (wrapped into the box)
 ///   world  = cam + screen
 ///   scale  = zoom (constant on-screen star size)
+///
+/// The drift term carries `·zoom` so the zoom cancels out exactly in
+/// screen pixels: screen_px = screen/zoom = uv·(viewport + margin) −
+/// cam·(1 − factor). Zooming at fixed camera leaves every star glued
+/// to its screen pixel (field breathes around the CAMERA center);
+/// without `·zoom` the cam·drift/zoom term would swell/shrink with
+/// the zoom and drag stars toward/away from the SCENE origin.
 ///
 /// - factor 1.0 (small/far stars) → drift 0: glued to the camera,
 ///   they barely move = "already very far away".
@@ -257,8 +264,8 @@ fn update_parallax(
 
     for (mut transform, star) in stars.iter_mut() {
         let drift = 1.0 - star.factor;
-        let sx = wrap_coord(star.uv.x * box_w - cam.x * drift, half_w);
-        let sy = wrap_coord(star.uv.y * box_h - cam.y * drift, half_h);
+        let sx = wrap_coord(star.uv.x * box_w - cam.x * drift * zoom, half_w);
+        let sy = wrap_coord(star.uv.y * box_h - cam.y * drift * zoom, half_h);
         // Parent sits at origin in x/y (only z depth), so local == world − z.
         transform.translation.x = cam.x + sx;
         transform.translation.y = cam.y + sy;
@@ -347,5 +354,30 @@ mod tests {
         assert!((LAYERS[0].factor - 1.0).abs() < 1e-6);
         assert!((LAYERS[2].factor - 0.7).abs() < 1e-6);
         assert!(LAYERS[0].factor > LAYERS[1].factor && LAYERS[1].factor > LAYERS[2].factor);
+    }
+
+    /// Regression: zooming at fixed off-origin camera must leave every
+    /// star glued to its screen pixel (field breathes around the CAMERA
+    /// center). Without the `·zoom` on the drift term, layers with
+    /// factor != 1 slide toward/away from the SCENE origin on zoom.
+    #[test]
+    fn zoom_leaves_screen_positions_invariant() {
+        // Mirror of `update_parallax`: screen_px = wrapped/zoom.
+        fn screen_px(uv: f32, cam: f32, factor: f32, vp_px: f32, zoom: f32) -> f32 {
+            let (size, half) = wrap_box_axis(vp_px, zoom);
+            wrap_coord(uv * size - cam * (1.0 - factor) * zoom, half) / zoom
+        }
+        // Off-origin camera: the case that visibly broke.
+        let cam = 1234.0;
+        for factor in [1.0, 0.85, 0.7] {
+            for uv in [0.05, 0.3, 0.55, 0.8, 0.97] {
+                let a = screen_px(uv, cam, factor, 390.0, 0.5);
+                let b = screen_px(uv, cam, factor, 390.0, 2.0);
+                assert!(
+                    (a - b).abs() < 1e-3,
+                    "factor {factor} uv {uv}: screen moved on zoom ({a} vs {b})"
+                );
+            }
+        }
     }
 }
