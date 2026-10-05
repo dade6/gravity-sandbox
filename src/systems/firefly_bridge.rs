@@ -919,4 +919,98 @@ mod tests {
              zoom stretto sul pianeta (distanza ~1068 < 7100)"
         );
     }
+
+    /// E2E del flusso "cambio parametro stella dal pannello" (v0.14.117
+    /// debug): il PATH REALE di apply è `apply_star_prop_value` (keypad OK e
+    /// sync live di ui.rs), che deve triggerare Changed<StarLightSettings>/
+    /// Changed<StarGlow> e i bridge `apply_star_light_settings`/
+    /// `apply_star_glow_settings` fino a PointLight2d e agli sprite glow.
+    /// Se questo test PASSA mentre Davide non riesce a cambiare i parametri,
+    /// il problema è nel layer UI/input (focus/tap/keypad), NON nella catena
+    /// di applicazione.
+    #[test]
+    fn e2e_star_param_edit_reaches_pointlight_and_glow_sprites() {
+        use crate::systems::ui::apply_star_prop_value;
+
+        let mut app = bevy::prelude::App::new();
+        app.add_systems(bevy::prelude::Update, (apply_star_light_settings, apply_star_glow_settings));
+
+        let (star, light_entity, glow_entity) = {
+            let mut world = app.world_mut();
+            let star = world
+                .spawn((
+                    CelestialBody {
+                        name: "Sun".into(),
+                        body_type: crate::components::celestial::BodyType::Star,
+                        mass: 1000.0,
+                        radius: 30.0,
+                        color: [1.0, 0.9, 0.3],
+                        luminous: true,
+                    },
+                    StarLightSettings {
+                        intensity: 5.0,
+                        radius: 100.0,
+                        falloff: LightFalloff::None,
+                        fade_width: 5000.0,
+                        ..Default::default()
+                    },
+                    StarGlow::default(),
+                    FireflyLightAttached,
+                    FireflySpriteAttached,
+                ))
+                .id();
+            let light_entity = world
+                .spawn((PointLight2d::default(), ChildOf(star)))
+                .id();
+            let glow_entity = world
+                .spawn((Sprite::default(), FireflyGlowInner, ChildOf(star)))
+                .id();
+            (star, light_entity, glow_entity)
+        };
+
+        // Frame 1: valori iniziali propagati (Changed = true allo spawn).
+        app.update();
+
+        // L'utente digita nei campi del pannello: il keypad/sync chiama
+        // apply_star_prop_value — STESSO path di ui.rs:1049 e keypad.rs:342.
+        // (clone-modify-write: non si possono tenere due Mut sullo stesso
+        // World; l'insert finale triggera Changed come farebbe il Mut.)
+        {
+            let mut world = app.world_mut();
+            let mut s = world.get::<StarLightSettings>(star).unwrap().clone();
+            let mut g = world.get::<StarGlow>(star).unwrap().clone();
+            apply_star_prop_value("light_radius", "250", &mut s, &mut g);
+            apply_star_prop_value("light_fade", "7000", &mut s, &mut g);
+            apply_star_prop_value("light_intensity", "3.5", &mut s, &mut g);
+            apply_star_prop_value("glow_brightness", "2.0", &mut s, &mut g);
+            apply_star_prop_value("glow_inner_scale", "8.0", &mut s, &mut g);
+            let mut e = world.entity_mut(star);
+            e.insert((s, g));
+        }
+
+        // Frame 2: Changed<T> triggera i bridge.
+        app.update();
+
+        let world = app.world_mut();
+        let light = world.get::<PointLight2d>(light_entity).expect("PointLight2d child");
+        assert_eq!(light.radius, 250.0, "Radius digitato deve arrivare a PointLight2d");
+        assert_eq!(light.fade_width, 7000.0, "Fade digitato deve arrivare a PointLight2d");
+        assert_eq!(light.intensity, 3.5, "Planet Light digitato deve arrivare a PointLight2d");
+        let srgba = light.color.to_srgba();
+        assert!(
+            (srgba.alpha - 2.0).abs() < 0.001,
+            "Halo Brightness (2.0) deve viaggiare nell'alpha della luce, trovato {}",
+            srgba.alpha
+        );
+
+        let glow = world.get::<Sprite>(glow_entity).expect("sprite glow inner");
+        let expected_size = 30.0 * 2.0 * 8.0; // radius * 2 * inner_scale
+        assert_eq!(
+            glow.custom_size,
+            Some(Vec2::splat(expected_size)),
+            "Glow Inner Scale digitato deve ridimensionare lo sprite glow"
+        );
+
+        println!("OK E2E: apply_star_prop_value -> PointLight2d + glow sprite propagati");
+    }
 }

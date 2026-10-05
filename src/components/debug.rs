@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use crate::components::celestial::{BodyType, CelestialBody};
 use crate::components::initial_state::InitialBodyState;
+use crate::components::lighting::{StarGlow, StarLightSettings};
 use crate::components::trajectory::TrajectoryHistory;
 
 /// Plugin che spawna corpi di test per il debug.
@@ -20,6 +21,11 @@ fn spawn_test_system(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     // --- Sole (centro) ---
+    // v0.14.117: StarLightSettings + StarGlow OBBLIGATORI anche nel fallback
+    // hardcoded — senza questi i campi Luce/Alone del pannello leggono i
+    // default e apply_star_prop_value viene ignorato in silenzio (get_mut Err
+    // su entrambi i componenti): "non riesco a cambiare i parametri della
+    // stella" su ogni device quando assets/preset.json non è servito.
     commands.spawn((
         CelestialBody {
             name: "Sun".into(),
@@ -29,6 +35,8 @@ fn spawn_test_system(
             color: [1.0, 0.9, 0.3],
             luminous: true,
         },
+        StarLightSettings::default(),
+        StarGlow::default(),
         Mesh2d(meshes.add(Circle::new(30.0))),
         MeshMaterial2d(materials.add(ColorMaterial::from_color(Color::srgb(1.0, 0.9, 0.3)))),
         Transform::from_xyz(0.0, 0.0, 0.0),
