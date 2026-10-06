@@ -1285,15 +1285,27 @@ fn debug_state_snapshot(
         bevy_firefly::extract::PREPARE_NORMAL_MISSING.load(std::sync::atomic::Ordering::Relaxed),
         bevy_firefly::extract::PREPARE_SPRITES_PROCESSED.load(std::sync::atomic::Ordering::Relaxed),
         bevy_firefly::extract::SPRITE_PHASE_ITEMS.load(std::sync::atomic::Ordering::Relaxed),
+        lh,
         vpush,
         vnoclass,
         vitems,
         vgpu,
-        lh,
         star_str,
         rects.join(","),
         parts.join(",")
     );
+    // v0.14.120: guardia di sviluppo. Se il payload non è JSON valido il badge
+    // JS entra in "🛑 DEAD" (JSON.parse fallisce 4 volte) nascondendo la causa
+    // (es. un argomento fuori ordine che finisce in una posizione numerica).
+    // In build di debug lo si sostituisce con un payload valido che la dichiara.
+    let json = if cfg!(debug_assertions) {
+        match serde_json::from_str::<serde_json::Value>(&json) {
+            Ok(_) => json,
+            Err(e) => format!(r#"{{"json_error":"{}"}}"#, e.to_string().replace('"', "'")),
+        }
+    } else {
+        json
+    };
     if let Ok(mut shared) = crate::js_bridge::DEBUG_STATE.lock() {
         *shared = json;
     }
