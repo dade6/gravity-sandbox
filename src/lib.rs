@@ -1159,6 +1159,8 @@ fn debug_state_snapshot(
         &crate::components::celestial::CelestialBody,
         &Transform,
         Option<&LinearVelocity>,
+        Option<&crate::components::lighting::StarLightSettings>,
+        Option<&crate::components::lighting::StarGlow>,
     )>,
     // Diagnostica firefly (spike v0.14.40): conta luci, occluder e sprite
     // convertite per capire se la pipeline vede la scena.
@@ -1191,7 +1193,19 @@ fn debug_state_snapshot(
         }
     }
     let mut parts = Vec::new();
-    for (e, body, tf, vel) in bodies.iter() {
+    // v0.14.118: valori LIVE della stella selezionata (StarLightSettings +
+    // StarGlow) esposti nel badge: distingue "la modifica non arriva ai
+    // componenti" da "i componenti cambiano ma la scena non reagisce".
+    let mut star_str = String::from("-");
+    for (e, body, tf, vel, sl, sg) in bodies.iter() {
+        if Some(e) == selected.0 {
+            if let (Some(s), Some(g)) = (sl, sg) {
+                star_str = format!(
+                    "{:.1},{:.0},{:.0},{:.0},{:.2}",
+                    s.intensity, s.radius, s.fade_width, s.core_boost, g.brightness
+                );
+            }
+        }
         let v = vel.map(|v| v.0).unwrap_or(Vec2::ZERO);
         parts.push(format!(
             r#"{{"id":{},"name":"{}","x":{:.2},"y":{:.2},"vx":{:.2},"vy":{:.2}}}"#,
@@ -1232,8 +1246,24 @@ fn debug_state_snapshot(
         .unwrap_or(99);
     // Altezza della luce (TopDownY): 0 = luce a terra -> pianeti piatti
     let lh = light_heights.iter().next().map(|h| h.0).unwrap_or(-1.0);
+    // v0.14.119: diagnosi "la luce non arriva nella lightmap". `vpush` =
+    // volte in cui la luce è entrata nelle VisibleEntities; `vnoclass` =
+    // frame in cui la classe PointLight2d manca nel render world (queue
+    // saltato); `vitems` = item luce accodati; `vgpu` = valoreside GPU
+    // dell'ultima luce (radius, falloff_intensity, intensity, falloff).
+    let ord = std::sync::atomic::Ordering::Relaxed;
+    let vpush = bevy_firefly::extract::LIGHTS_PUSHED_VISIBLE.load(ord);
+    let vnoclass = bevy_firefly::extract::LIGHTMAP_NO_CLASS.load(ord);
+    let vitems = bevy_firefly::extract::LIGHTMAP_QUEUE_ITEMS.load(ord);
+    let vgpu = format!(
+        "{:.0},{:.0},{:.1},{}",
+        f32::from_bits(bevy_firefly::extract::LIGHT_RADIUS_BITS.load(ord)),
+        f32::from_bits(bevy_firefly::extract::LIGHT_FI_BITS.load(ord)),
+        f32::from_bits(bevy_firefly::extract::LIGHT_INTENSITY_BITS.load(ord)),
+        bevy_firefly::extract::LIGHT_FALLOFF_MODE.load(ord),
+    );
     let json = format!(
-        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0}}},"field_rects":[{}],"bodies":[{}]}}"#,
+        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0},"vpush":{},"vnoclass":{},"vitems":{},"vgpu":"{}"}},"star":"{}","field_rects":[{}],"bodies":[{}]}}"#,
         last_system,
         frame,
         tool,
@@ -1255,7 +1285,12 @@ fn debug_state_snapshot(
         bevy_firefly::extract::PREPARE_NORMAL_MISSING.load(std::sync::atomic::Ordering::Relaxed),
         bevy_firefly::extract::PREPARE_SPRITES_PROCESSED.load(std::sync::atomic::Ordering::Relaxed),
         bevy_firefly::extract::SPRITE_PHASE_ITEMS.load(std::sync::atomic::Ordering::Relaxed),
+        vpush,
+        vnoclass,
+        vitems,
+        vgpu,
         lh,
+        star_str,
         rects.join(","),
         parts.join(",")
     );

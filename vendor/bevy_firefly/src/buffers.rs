@@ -218,6 +218,20 @@ fn prepare_lights(
             height: light.height,
         };
 
+        // v0.14.119 (diagnostica): valori lato GPU dell'ultima luce scritta.
+        // Se `fi` (falloff_intensity, che con Falloff::None trasporta
+        // fade_width) è 0, la shader usa `dist < radius` come gate -> la luce
+        // non raggiunge i pianeti (nessuna illuminazione, nessun cono).
+        {
+            use std::sync::atomic::Ordering;
+            crate::extract::LIGHT_RADIUS_BITS.store(light.radius.to_bits(), Ordering::Relaxed);
+            crate::extract::LIGHT_FI_BITS
+                .store(light.falloff_intensity.to_bits(), Ordering::Relaxed);
+            crate::extract::LIGHT_INTENSITY_BITS
+                .store(light.intensity.to_bits(), Ordering::Relaxed);
+            crate::extract::LIGHT_FALLOFF_MODE.store(light.falloff as usize, Ordering::Relaxed);
+        }
+
         let new_index =
             light_manager.set_value(&light, index.0, changed, &render_device, &render_queue);
         index.0 = Some(new_index);

@@ -274,6 +274,32 @@ pub static PREPARE_SPRITES_PROCESSED: std::sync::atomic::AtomicUsize =
 pub static SPRITE_PHASE_ITEMS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
+// ── v0.14.119: diagnosi "la luce non arriva nella lightmap" ────────────────
+// Catena: mark_visible_lights push -> extract_cameras copia le classi ->
+// queue (lights.rs) accoda l'item -> draw di create_lightmap. Questi
+// contatori localizzano il punto in cui la catena si spezza.
+/// Cumulativo: PointLight2d spinte dentro le VisibleEntities della camera.
+/// 0 = la luce non entra MAI nella VisibleEntities.
+pub static LIGHTS_PUSHED_VISIBLE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+/// Cumulativo: frame in cui la classe PointLight2d NON esiste nel render
+/// world -> il queue luci fa `continue` e non accoda nulla.
+pub static LIGHTMAP_NO_CLASS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+/// Cumulativo: item luce accodati nella LightmapPhase.
+pub static LIGHTMAP_QUEUE_ITEMS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+/// Bits f32 dell'ultimo UniformPointLight scritto (valori lato GPU).
+pub static LIGHT_RADIUS_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+pub static LIGHT_FI_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+pub static LIGHT_INTENSITY_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+/// falloff dell'ultima luce scritta: 0=inverse square, 1=linear, 2=none, 99=none mai scritta.
+pub static LIGHT_FALLOFF_MODE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(99);
+
 fn extract_lights(
     mut commands: Commands,
     lights: Extract<

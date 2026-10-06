@@ -123,6 +123,12 @@ fn mark_visible_lights(
 
                 let visible_lights = visible_entities.get_mut(TypeId::of::<PointLight2d>());
                 visible_lights.push(entity);
+                // v0.14.119 (diagnostica): la luce è entrata nelle
+                // VisibleEntities della camera. Se questo contatore resta 0,
+                // la classe PointLight2d del render world resta vuota e il
+                // queue delle luci non accoda nulla (nessuna luce in lightmap).
+                crate::extract::LIGHTS_PUSHED_VISIBLE
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                 light_rect.0 = light_rect
                     .0

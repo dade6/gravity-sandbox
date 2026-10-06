@@ -450,6 +450,10 @@ fn queue_lights(
         // panica con "Unreachable code" (trap su WASM). Niente luci = niente
         // lightmap per questa vista: skip, non crash.
         let Some(visible_lights) = visible_entities.get::<PointLight2d>() else {
+            // v0.14.119 (diagnostica): classe assente nel render world -> la
+            // luce non viene accodata e la lightmap resta senza luce.
+            crate::extract::LIGHTMAP_NO_CLASS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             continue;
         };
         for (render_entity, visible_entity) in visible_lights.iter_visible() {
@@ -465,6 +469,9 @@ fn queue_lights(
                 InputUniformIndex::default(),
                 BinnedRenderPhaseType::NonMesh,
             );
+            // v0.14.119 (diagnostica): item luce accodato nella LightmapPhase.
+            crate::extract::LIGHTMAP_QUEUE_ITEMS
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }
