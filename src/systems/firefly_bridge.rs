@@ -1089,4 +1089,112 @@ mod tests {
         );
         println!("OK: la luce child e' visibile a Bevy (Visibility + InheritedVisibility true)");
     }
+
+    /// v0.14.121: verifica END-TO-END (non solo "i componenti ci sono") che la
+    /// luce finisce davvero nelle `VisibleEntities` che Bevy ricostruisce ogni
+    /// frame e che il queue della lightmap legge via `iter_visible()`.
+    /// E' il gate esatto che si rompeva: `check_visibility_cpu_culling` di Bevy
+    /// processa solo entita' con `InheritedVisibility`, e RICOSTRUISCE le classi
+    /// a ogni frame: se la luce non e' visibile a Bevy, la classe PointLight2d
+    /// resta VUOTA (i push manuali di `mark_visible_lights` vengono persi) ->
+    /// nessun item nella lightmap -> pianeti spenti, nessun cono.
+    /// Nessuna GPU richiesta: `VisibilityPlugin` (bevy_camera) e' un plugin
+    /// puramente ECS.
+    #[test]
+    fn star_light_enters_bevy_visible_entities() {
+        use bevy::camera::visibility::VisibleEntities;
+        use std::any::TypeId;
+
+        let mut app = bevy::prelude::App::new();
+        // Solo il sistema che riempie VisibleEntities: il resto di
+        // VisibilityPlugin (calculate_bounds, skinned mesh) richiede Assets
+        // del render e non serve a questo gate.
+        app.add_systems(
+            bevy::prelude::PostUpdate,
+            bevy::camera::visibility::check_visibility_cpu_culling,
+        );
+        app.add_systems(bevy::prelude::Update, spawn_star_lights);
+
+        // Camera con le componenti che il check si aspetta (Frustum incluso:
+        // la luce ha NoFrustumCulling, quindi il test del frustum non si applica).
+        let cam = app
+            .world_mut()
+            .spawn((
+                bevy::prelude::Camera2d::default(),
+                VisibleEntities::default(),
+                bevy::prelude::Transform::default(),
+                bevy::camera::primitives::Frustum::default(),
+            ))
+            .id();
+        let star = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "Sole".into(),
+                    body_type: crate::components::celestial::BodyType::Planet,
+                    mass: 1000.0,
+                    radius: 30.0,
+                    color: [1.0, 0.9, 0.4],
+                    luminous: true,
+                },
+                Transform::default(),
+                StarLightSettings::default(),
+                StarGlow::default(),
+            ))
+            .id();
+
+        // 2 frame: spawn + propagazione/check visibilita' di Bevy.
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        let light = {
+            let mut q = world.query::<(bevy::prelude::Entity, &PointLight2d)>();
+            let found: Vec<_> = q.iter(world).map(|(e, _)| e).collect();
+            assert_eq!(found.len(), 1, "una sola luce");
+            found[0]
+        };
+        assert!(
+            world
+                .get::<ChildOf>(light)
+                .is_some_and(|p| p.parent() == star)
+        );
+        let visible = world
+            .get::<VisibleEntities>(cam)
+            .expect("la camera deve avere VisibleEntities");
+        let in_class = visible
+            .get(TypeId::of::<PointLight2d>())
+            .contains(&light);
+        assert!(
+            in_class,
+            "LA LUCE DEVE STARE nella classe PointLight2d delle VisibleEntities \
+             ricostruite da Bevy: se manca, il queue della lightmap non accoda alcun item \
+             (pianeti spenti, nessun cono) — e' la regressione v0.14.121"
+        );
+        println!("OK E2E visibilita': la luce e' nella classe PointLight2d delle VisibleEntities");
+
+        // Meccanismo della regressione: Bevy RICOSTRUISCE la classe a ogni
+        // frame, quindi un'entita' che non e' visibile a Bevy non sopravvive
+        // nella classe nemmeno se ci viene messa a mano (e' quello che fa
+        // mark_visible_lights di firefly). E' il motivo per cui la luce
+        // spariva dalla lightmap pur con un push riuscito.
+        let fantasma = app
+            .world_mut()
+            .spawn(bevy::prelude::Transform::default())
+            .id();
+        app.world_mut()
+            .get_mut::<VisibleEntities>(cam)
+            .expect("VisibleEntities sulla camera")
+            .get_mut(TypeId::of::<PointLight2d>())
+            .push(fantasma);
+        app.update();
+        let world = app.world_mut();
+        let visible = world.get::<VisibleEntities>(cam).unwrap();
+        assert!(
+            !visible.get(TypeId::of::<PointLight2d>()).contains(&fantasma),
+            "il rebuild di Bevy deve CANCELLARE i push manuali di entita' non visibili \
+             a Bevy: e' il meccanismo che faceva sparire la luce dalla lightmap"
+        );
+        println!("OK meccanismo: il push manuale di un'entita' non visibile a Bevy viene cancellato");
+    }
 }
