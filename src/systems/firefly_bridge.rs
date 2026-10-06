@@ -431,6 +431,18 @@ fn spawn_star_lights(
                     // false) e il pianeta resta al solo ambient ~12%.
                     // SOLO la luce: gli occluder restano frustum-cullati.
                     bevy::camera::visibility::NoFrustumCulling,
+                    // v0.14.121 (CAUSA del "pianeti spenti, niente coni"):
+                    // PointLight2d NON richiede Visibility/InheritedVisibility
+                    // -> il check_visibility di Bevy ignora la luce -> a fine
+                    // frame le VisibleEntities hanno la classe PointLight2d
+                    // VUOTA -> il queue firefly (iter_visible) non accoda alcun
+                    // item -> la lightmap non contiene la luce, pur con dati
+                    // GPU corretti (badge V.../.../0). Rendiamo la luce
+                    // visibile a Bevy: Visibility::Visible + InheritedVisibility
+                    // esplicita (non dipendiamo dalla propagazione, che non
+                    // ricorre su un child aggiunto dopo il genitore).
+                    Visibility::Visible,
+                    InheritedVisibility::VISIBLE,
                 ));
             });
     }
@@ -1012,5 +1024,69 @@ mod tests {
         );
 
         println!("OK E2E: apply_star_prop_value -> PointLight2d + glow sprite propagati");
+    }
+
+    /// v0.14.121 (regressione della causa "pianeti spenti, nessun cono"):
+    /// `PointLight2d` non richiede `Visibility`/`InheritedVisibility`, quindi
+    /// `check_visibility_cpu_culling` di Bevy ignora la luce: a fine frame la
+    /// classe `PointLight2d` delle `VisibleEntities` resta VUOTA (i push di
+    /// `mark_visible_lights` vengono sovrascritti dal rebuild di Bevy) e il
+    /// queue della lightmap non accoda alcun item: nessuna luce sui pianeti,
+    /// nessun cono, pur con dati GPU corretti (badge `V{push}/0/0` con
+    /// `U{radius},{fade},{intensity},{falloff}` giusti).
+    #[test]
+    fn star_light_child_is_visible_to_bevy_visibility() {
+        let mut app = bevy::prelude::App::new();
+        app.add_systems(bevy::prelude::Update, spawn_star_lights);
+        let star = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "Sole".into(),
+                    body_type: crate::components::celestial::BodyType::Planet,
+                    mass: 1000.0,
+                    radius: 30.0,
+                    color: [1.0, 0.9, 0.4],
+                    luminous: true,
+                },
+                Transform::default(),
+                StarLightSettings::default(),
+                StarGlow::default(),
+            ))
+            .id();
+        app.update();
+
+        let world = app.world_mut();
+        let mut lights: Vec<bevy::prelude::Entity> = Vec::new();
+        {
+            let mut q = world.query::<(bevy::prelude::Entity, &PointLight2d)>();
+            for (e, _) in q.iter(world) {
+                lights.push(e);
+            }
+        }
+        assert_eq!(lights.len(), 1, "deve esistere esattamente una luce child");
+        let light = lights[0];
+        assert!(
+            world.get::<ChildOf>(light).is_some_and(|p| p.parent() == star),
+            "la luce deve essere child della stella"
+        );
+        assert!(
+            world.get::<Visibility>(light).is_some(),
+            "la luce DEVE avere Visibility, altrimenti Bevy non la processa in check_visibility \
+             e la classe PointLight2d resta vuota -> nessun item nella lightmap"
+        );
+        let inherited = world
+            .get::<InheritedVisibility>(light)
+            .expect("la luce DEVE avere InheritedVisibility");
+        assert!(
+            inherited.get(),
+            "InheritedVisibility deve essere TRUE alla spawn: con false Bevy scarta la luce e la \
+             lightmap resta senza luce (pianeti spenti, nessun cono)"
+        );
+        assert!(
+            world.get::<ViewVisibility>(light).is_some(),
+            "ViewVisibility deve essere presente (richiesta dall'extract firefly)"
+        );
+        println!("OK: la luce child e' visibile a Bevy (Visibility + InheritedVisibility true)");
     }
 }

@@ -1,5 +1,5 @@
 use bevy::{
-    camera::visibility::{RenderLayers, VisibilityClass, add_visibility_class},
+    camera::visibility::{RenderLayers, Visibility, VisibilityClass, add_visibility_class},
     color::palettes::css::WHITE,
     core_pipeline::tonemapping::{DebandDither, Tonemapping},
     ecs::{
@@ -46,6 +46,15 @@ use crate::{
 #[require(
     SyncToRenderWorld,
     Transform,
+    // v0.14.121: SENZA Visibility (che a sua volta richiede
+    // InheritedVisibility + ViewVisibility) il check_visibility_cpu_culling di
+    // Bevy IGNORA la luce: le VisibleEntities della camera restano con la
+    // classe PointLight2d VUOTA (i push di mark_visible_lights vengono
+    // sovrascritti dal rebuild di Bevy) -> il queue della lightmap non accoda
+    // nulla -> nessuna luce sui pianeti e nessun cono d'ombra, con dati GPU
+    // perfetti (radius/fade/intensity corretti). Diagnosi: badge
+    // V{push}/{noclass}/{items} con items=0.
+    Visibility,
     VisibilityClass,
     ViewVisibility,
     VisibilityTimer,
