@@ -97,12 +97,12 @@ const LAYERS: [LayerConfig; 3] = [
         factor: 0.85,
         z: -499_000.0,
     },
-    // Layer 3 (primo piano) — 50 big white/yellow stars, drifts most.
+    // Layer 3 (primo piano) — 50 big white/yellow stars, glued like the rest.
     LayerConfig {
         count: 50,
         radius_min: 2.0,
         radius_max: 4.0,
-        factor: 0.7,
+        factor: 1.0,
         z: -498_000.0,
     },
 ];
@@ -304,18 +304,22 @@ mod tests {
     fn far_layer_is_glued_and_near_layer_drifts() {
         // screen = uv·size − cam·(1−factor).
         // L1 (factor 1.0): drift 0 → camera-independent (glued).
-        // L3 (factor 0.7): drift 0.3 → moves against the camera.
+        // L3 (factor 1.0): drift 0 → glued like L1.
+        // L2 (factor 0.85): drift 0.15 → moves slightly against the camera.
         let size = 1600.0;
         let half = 800.0;
         let uv = 0.3;
         let s1a = wrap_coord(uv * size - 50.0 * (1.0 - 1.0), half);
         let s1b = wrap_coord(uv * size - 200.0 * (1.0 - 1.0), half);
         assert!((s1a - s1b).abs() < 1e-4, "far layer moved: {s1a} vs {s1b}");
-        let s3a = wrap_coord(uv * size - 50.0 * (1.0 - 0.7), half);
-        let s3b = wrap_coord(uv * size - 200.0 * (1.0 - 0.7), half);
+        let s3a = wrap_coord(uv * size - 50.0 * (1.0 - 1.0), half);
+        let s3b = wrap_coord(uv * size - 200.0 * (1.0 - 1.0), half);
+        assert!((s3a - s3b).abs() < 1e-4, "L3 should be glued now: {s3a} vs {s3b}");
+        let s2a = wrap_coord(uv * size - 50.0 * (1.0 - 0.85), half);
+        let s2b = wrap_coord(uv * size - 200.0 * (1.0 - 0.85), half);
         assert!(
-            (s3a - s3b).abs() > 1.0,
-            "near layer should drift: {s3a} vs {s3b}"
+            (s2a - s2b).abs() > 1.0,
+            "mid layer should drift slightly: {s2a} vs {s2b}"
         );
     }
 
@@ -352,8 +356,8 @@ mod tests {
     #[test]
     fn factors_span_one_to_point_seven() {
         assert!((LAYERS[0].factor - 1.0).abs() < 1e-6);
-        assert!((LAYERS[2].factor - 0.7).abs() < 1e-6);
-        assert!(LAYERS[0].factor > LAYERS[1].factor && LAYERS[1].factor > LAYERS[2].factor);
+        assert!((LAYERS[2].factor - 1.0).abs() < 1e-6);
+        assert!(LAYERS[0].factor >= LAYERS[1].factor && LAYERS[1].factor <= LAYERS[2].factor);
     }
 
     /// Regression: zooming at fixed off-origin camera must leave every
@@ -369,7 +373,7 @@ mod tests {
         }
         // Off-origin camera: the case that visibly broke.
         let cam = 1234.0;
-        for factor in [1.0, 0.85, 0.7] {
+        for factor in [1.0, 0.85] {
             for uv in [0.05, 0.3, 0.55, 0.8, 0.97] {
                 let a = screen_px(uv, cam, factor, 390.0, 0.5);
                 let b = screen_px(uv, cam, factor, 390.0, 2.0);
