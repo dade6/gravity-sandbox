@@ -203,37 +203,39 @@ fn wrap_coord(v: f32, half: f32) -> f32 {
     (v + half).rem_euclid(half * 2.0) - half
 }
 
-/// World-space size of the wrap box on one axis: exactly the
-/// viewport extent at the current zoom, plus a margin (also
-/// zoom-scaled) so the wrap seam stays off-screen. Because the box
-/// is viewport-sized and camera-centered, zooming expands/contracts
-/// the field radially around the SCREEN center — never toward the
-/// scene origin.
+/// Fixed half-size (world units) of the wrap box in the normal zoom
+/// range. Inside this range star world positions are zoom-independent,
+/// so zooming spreads/gathers stars on screen exactly like the rest of
+/// the scene (screen_px = world/zoom) — while `update_parallax` keeps
+/// each star's on-screen SIZE constant via counter-scaling.
+const FIXED_HALF: f32 = 1000.0;
+
+/// World-space size of the wrap box on one axis: a fixed minimum
+/// (`FIXED_HALF`, the regime where zoom behaves like the scene) grown
+/// only as far as needed to cover the viewport at extreme zoom-out,
+/// plus a zoom-scaled margin so the wrap seam stays off-screen.
 fn wrap_box_axis(viewport_px: f32, zoom: f32) -> (f32, f32) {
-    let size = viewport_px * zoom + (MAX_STAR_RADIUS + WRAP_MARGIN) * 2.0 * zoom;
-    (size, size * 0.5)
+    let half = FIXED_HALF.max(viewport_px * 0.5 * zoom + (MAX_STAR_RADIUS + WRAP_MARGIN) * zoom);
+    (half * 2.0, half)
 }
 
-/// Each frame, place every star in a viewport-sized box centered on
-/// the camera, drifting with the layer factor:
+/// Each frame, place every star in a wrap box centered on the camera,
+/// drifting with the layer factor:
 ///
-///   screen = uv·size − cam·(1 − factor)·zoom   (wrapped into the box)
-///   world  = cam + screen
+///   world  = cam + wrap(uv·size − cam·(1 − factor)·zoom) (box-wrapped)
 ///   scale  = zoom (constant on-screen star size)
 ///
-/// The drift term carries `·zoom` so the zoom cancels out exactly in
-/// screen pixels: screen_px = screen/zoom = uv·(viewport + margin) −
-/// cam·(1 − factor). Zooming at fixed camera leaves every star glued
-/// to its screen pixel (field breathes around the CAMERA center);
-/// without `·zoom` the cam·drift/zoom term would swell/shrink with
-/// the zoom and drag stars toward/away from the SCENE origin.
+/// The box is zoom-independent in the normal range, so zooming spreads
+/// / gathers stars on screen like the rest of the scene (screen_px =
+/// world/zoom) — but each star keeps the same pixel size. The drift
+/// term carries `·zoom` so zooming never drags stars toward/away from
+/// the SCENE origin (v0.14.116): the field breathes around the CAMERA
+/// center. Past the fixed box the wrap grows with the viewport instead
+/// of leaving edge voids.
 ///
 /// - factor 1.0 (small/far stars) → drift 0: glued to the camera,
 ///   they barely move = "already very far away".
-/// - factor 0.7 (big/near stars) → drift 0.3: they sweep past faster.
-///
-/// Wrapping keeps every star on screen at any pan/zoom: panning
-/// never leaves an empty void, and zooming never leaves edge voids.
+/// - factor 0.9 (big/near stars) → drift 0.1: they sweep past faster.
 fn update_parallax(
     cameras: Query<
         (&Transform, &Projection),
@@ -337,13 +339,23 @@ mod tests {
                 vp_px * zoom
             );
             assert!((half * 2.0 - size).abs() < 1e-3);
-            // Zoom motion is camera-centered: box scales with zoom...
-            let (size2, _) = wrap_box_axis(vp_px, zoom * 2.0);
-            assert!(
-                (size2 - size * 2.0).abs() < 1e-3,
-                "box must scale linearly with zoom: {size} vs {size2}"
-            );
         }
+        // Normal range: fixed box (zoom-independent world positions →
+        // the background zooms like the scene).
+        let (a, _) = wrap_box_axis(390.0, 0.5);
+        let (b, _) = wrap_box_axis(390.0, 1.0);
+        assert!(
+            (a - b).abs() < 1e-3,
+            "box should be fixed in normal range: {a} vs {b}"
+        );
+        assert!((a - FIXED_HALF * 2.0).abs() < 1e-3);
+        // Extreme zoom-out: box grows with the viewport (no edge voids).
+        let (c, _) = wrap_box_axis(800.0, 20.0);
+        let (d, _) = wrap_box_axis(800.0, 40.0);
+        assert!(
+            (d - c * 2.0).abs() < 1e-3,
+            "grown box must scale with zoom: {c} vs {d}"
+        );
     }
 
     #[test]
@@ -364,28 +376,30 @@ mod tests {
         assert!(LAYERS[0].factor > LAYERS[1].factor && LAYERS[1].factor > LAYERS[2].factor);
     }
 
-    /// Regression: zooming at fixed off-origin camera must leave every
-    /// star glued to its screen pixel (field breathes around the CAMERA
-    /// center). Without the `·zoom` on the drift term, layers with
-    /// factor != 1 slide toward/away from the SCENE origin on zoom.
+    /// Zooming spreads/gathers stars on screen like the rest of the
+    /// scene (but star SIZE stays constant via counter-scaling): the
+    /// screen gap between two stars scales as 1/zoom.
     #[test]
-    fn zoom_leaves_screen_positions_invariant() {
+    fn zoom_spreads_stars_on_screen() {
         // Mirror of `update_parallax`: screen_px = wrapped/zoom.
         fn screen_px(uv: f32, cam: f32, factor: f32, vp_px: f32, zoom: f32) -> f32 {
             let (size, half) = wrap_box_axis(vp_px, zoom);
             wrap_coord(uv * size - cam * (1.0 - factor) * zoom, half) / zoom
         }
-        // Off-origin camera: the case that visibly broke.
-        let cam = 1234.0;
+        // Centered camera: no wrap interference, gap ratio is exact.
         for factor in [1.0, 0.95, 0.9] {
-            for uv in [0.05, 0.3, 0.55, 0.8, 0.97] {
-                let a = screen_px(uv, cam, factor, 390.0, 0.5);
-                let b = screen_px(uv, cam, factor, 390.0, 2.0);
-                assert!(
-                    (a - b).abs() < 1e-3,
-                    "factor {factor} uv {uv}: screen moved on zoom ({a} vs {b})"
-                );
-            }
+            let a0 = screen_px(0.30, 0.0, factor, 390.0, 0.5);
+            let b0 = screen_px(0.35, 0.0, factor, 390.0, 0.5);
+            let a1 = screen_px(0.30, 0.0, factor, 390.0, 2.0);
+            let b1 = screen_px(0.35, 0.0, factor, 390.0, 2.0);
+            let gap_out = (b0 - a0).abs();
+            let gap_in = (b1 - a1).abs();
+            // Zoom 0.5 -> 2.0 is 4x closer: gap must shrink ~4x.
+            let ratio = gap_out / gap_in;
+            assert!(
+                (ratio - 4.0).abs() < 1e-3,
+                "factor {factor}: gap ratio {ratio}, expected ~4"
+            );
         }
     }
 }

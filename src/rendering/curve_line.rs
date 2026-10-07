@@ -340,10 +340,7 @@ pub fn resample_adaptive(
                 cands.push((cos_a, k));
             }
         }
-        cands.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        cands.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         let mut budget = max_points.saturating_sub(out.len());
         let mut inserts: Vec<(usize, Vec2)> = Vec::new();
         for (_, k) in cands {

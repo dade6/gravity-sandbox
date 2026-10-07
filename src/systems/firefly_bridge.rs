@@ -945,7 +945,10 @@ mod tests {
         use crate::systems::ui::apply_star_prop_value;
 
         let mut app = bevy::prelude::App::new();
-        app.add_systems(bevy::prelude::Update, (apply_star_light_settings, apply_star_glow_settings));
+        app.add_systems(
+            bevy::prelude::Update,
+            (apply_star_light_settings, apply_star_glow_settings),
+        );
 
         let (star, light_entity, glow_entity) = {
             let mut world = app.world_mut();
@@ -971,9 +974,7 @@ mod tests {
                     FireflySpriteAttached,
                 ))
                 .id();
-            let light_entity = world
-                .spawn((PointLight2d::default(), ChildOf(star)))
-                .id();
+            let light_entity = world.spawn((PointLight2d::default(), ChildOf(star))).id();
             let glow_entity = world
                 .spawn((Sprite::default(), FireflyGlowInner, ChildOf(star)))
                 .id();
@@ -1004,10 +1005,21 @@ mod tests {
         app.update();
 
         let world = app.world_mut();
-        let light = world.get::<PointLight2d>(light_entity).expect("PointLight2d child");
-        assert_eq!(light.radius, 250.0, "Radius digitato deve arrivare a PointLight2d");
-        assert_eq!(light.fade_width, 7000.0, "Fade digitato deve arrivare a PointLight2d");
-        assert_eq!(light.intensity, 3.5, "Planet Light digitato deve arrivare a PointLight2d");
+        let light = world
+            .get::<PointLight2d>(light_entity)
+            .expect("PointLight2d child");
+        assert_eq!(
+            light.radius, 250.0,
+            "Radius digitato deve arrivare a PointLight2d"
+        );
+        assert_eq!(
+            light.fade_width, 7000.0,
+            "Fade digitato deve arrivare a PointLight2d"
+        );
+        assert_eq!(
+            light.intensity, 3.5,
+            "Planet Light digitato deve arrivare a PointLight2d"
+        );
         let srgba = light.color.to_srgba();
         assert!(
             (srgba.alpha - 2.0).abs() < 0.001,
@@ -1067,7 +1079,9 @@ mod tests {
         assert_eq!(lights.len(), 1, "deve esistere esattamente una luce child");
         let light = lights[0];
         assert!(
-            world.get::<ChildOf>(light).is_some_and(|p| p.parent() == star),
+            world
+                .get::<ChildOf>(light)
+                .is_some_and(|p| p.parent() == star),
             "la luce deve essere child della stella"
         );
         assert!(
@@ -1154,17 +1168,13 @@ mod tests {
             assert_eq!(found.len(), 1, "una sola luce");
             found[0]
         };
-        assert!(
-            world
-                .get::<ChildOf>(light)
-                .is_some_and(|p| p.parent() == star)
-        );
+        assert!(world
+            .get::<ChildOf>(light)
+            .is_some_and(|p| p.parent() == star));
         let visible = world
             .get::<VisibleEntities>(cam)
             .expect("la camera deve avere VisibleEntities");
-        let in_class = visible
-            .get(TypeId::of::<PointLight2d>())
-            .contains(&light);
+        let in_class = visible.get(TypeId::of::<PointLight2d>()).contains(&light);
         assert!(
             in_class,
             "LA LUCE DEVE STARE nella classe PointLight2d delle VisibleEntities \
@@ -1191,10 +1201,14 @@ mod tests {
         let world = app.world_mut();
         let visible = world.get::<VisibleEntities>(cam).unwrap();
         assert!(
-            !visible.get(TypeId::of::<PointLight2d>()).contains(&fantasma),
+            !visible
+                .get(TypeId::of::<PointLight2d>())
+                .contains(&fantasma),
             "il rebuild di Bevy deve CANCELLARE i push manuali di entita' non visibili \
              a Bevy: e' il meccanismo che faceva sparire la luce dalla lightmap"
         );
-        println!("OK meccanismo: il push manuale di un'entita' non visibile a Bevy viene cancellato");
+        println!(
+            "OK meccanismo: il push manuale di un'entita' non visibile a Bevy viene cancellato"
+        );
     }
 }
