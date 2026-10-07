@@ -21,3 +21,4 @@ Thumbs.db
 # il default distribuito è assets/preset.default.json
 assets/preset.json
 sphere_normal_generated.png
+.tls/

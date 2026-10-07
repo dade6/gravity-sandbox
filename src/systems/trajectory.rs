@@ -8,7 +8,7 @@ use crate::components::trajectory::{
     GhostBody, GhostPrediction, TrajectoryConfig, TrajectoryHistory, TrajectoryTickCounter,
 };
 use crate::rendering::curve_line::{
-    build_line_mesh, interpolate_trail, CurveLineMaterial, CurveLinePlugin,
+    build_line_mesh, interpolate_trail, resample_adaptive, CurveLineMaterial, CurveLinePlugin,
 };
 use crate::systems::persistence::GravitationalConstant;
 use crate::systems::selection::SelectedBody;
@@ -766,7 +766,13 @@ pub struct GhostCollisionMarker;
 /// Line width (world units) for ghost trajectory curves.
 const GHOST_LINE_WIDTH: f32 = 2.0;
 /// Catmull-Rom segments per control-point span.
-const GHOST_ROM_SEGMENTS: usize = 4;
+const GHOST_ROM_SEGMENTS: usize = 6;
+/// Target world-units between ghost control points (constant spatial density).
+const GHOST_ARC_SPACING: f32 = 5.0;
+/// Hard budget of ghost control points per trail (mesh cost).
+const GHOST_MAX_CONTROL_POINTS: usize = 1200;
+/// Bends sharper than this get an extra midpoint (curvature refinement).
+const GHOST_CURVE_ANGLE_DEG: f32 = 10.0;
 
 /// Renders the ghost forecast as **mesh-based Catmull-Rom curves** with
 /// GPU-side dashing (replaces the old Gizmos `render_ghost_predictions`).
@@ -830,30 +836,22 @@ pub fn render_ghost_mesh_system(
         };
         let color = Color::srgba(base.red, base.green, base.blue, alpha);
 
-        // Decimate to a MAXIMUM of ~400 control points, regardless of
-        // horizon.  The old ghost_decimation_stride (computed/1500) was
-        // proportional: with 3600 s @ 64 Hz → stride 153 → only ~1500
-        // sparse points that Catmull-Rom couldn't smooth enough → straight
-        // segments.  A fixed cap keeps mesh complexity constant.
-        const MAX_CONTROL_POINTS: usize = 400;
-        let raw_len = trail.len();
-        let stride = if raw_len > MAX_CONTROL_POINTS {
-            raw_len / MAX_CONTROL_POINTS
-        } else {
-            1
-        };
-        let mut decimated: Vec<Vec2> = trail.iter().step_by(stride).copied().collect();
-        // Always include the last (newest) point
-        if let Some(last) = trail.back() {
-            if decimated.last() != Some(last) {
-                decimated.push(*last);
-            }
-        }
+        // Adaptive resample: constant spatial density (one control point
+        // every ~GHOST_ARC_SPACING world units) + extra midpoints where the
+        // path bends more than GHOST_CURVE_ANGLE_DEG. Index-stride
+        // decimation went sparse exactly where planets move fastest (the
+        // tight bends), so Catmull-Rom cut corners on long horizons.
+        let decimated = resample_adaptive(
+            trail.len(),
+            |i| trail[i],
+            GHOST_ARC_SPACING,
+            GHOST_MAX_CONTROL_POINTS,
+            GHOST_CURVE_ANGLE_DEG,
+        );
         if decimated.len() < 2 {
             continue;
         }
-        // 6 segments per span → smooth curves even with sparse control points
-        let smooth = interpolate_trail(&decimated, 6);
+        let smooth = interpolate_trail(&decimated, GHOST_ROM_SEGMENTS);
 
         // Anchor dashes in world space: the sliding window eats the head,
         // so restart UVs from the consumed arc-length instead of 0.
