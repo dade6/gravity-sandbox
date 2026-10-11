@@ -203,20 +203,17 @@ fn wrap_coord(v: f32, half: f32) -> f32 {
     (v + half).rem_euclid(half * 2.0) - half
 }
 
-/// Fixed half-size (world units) of the wrap box in the normal zoom
-/// range. Inside this range star world positions are zoom-independent,
-/// so zooming spreads/gathers stars on screen exactly like the rest of
-/// the scene (screen_px = world/zoom) — while `update_parallax` keeps
-/// each star's on-screen SIZE constant via counter-scaling.
+/// Fixed half-size (world units) of the wrap box. Star world positions
+/// are zoom-independent, so zooming spreads/gathers stars on screen
+/// exactly like the rest of the scene (screen_px = world/zoom) — while
+/// `update_parallax` keeps each star's on-screen SIZE constant via
+/// counter-scaling. Absolute size: zooming far out may leave sky
+/// regions empty (the field is finite), like any distant object.
 const FIXED_HALF: f32 = 1000.0;
 
-/// World-space size of the wrap box on one axis: a fixed minimum
-/// (`FIXED_HALF`, the regime where zoom behaves like the scene) grown
-/// only as far as needed to cover the viewport at extreme zoom-out,
-/// plus a zoom-scaled margin so the wrap seam stays off-screen.
-fn wrap_box_axis(viewport_px: f32, zoom: f32) -> (f32, f32) {
-    let half = FIXED_HALF.max(viewport_px * 0.5 * zoom + (MAX_STAR_RADIUS + WRAP_MARGIN) * zoom);
-    (half * 2.0, half)
+/// World-space size of the wrap box on one axis: constant.
+fn wrap_box_axis() -> (f32, f32) {
+    (FIXED_HALF * 2.0, FIXED_HALF)
 }
 
 /// Each frame, place every star in a wrap box centered on the camera,
@@ -225,13 +222,11 @@ fn wrap_box_axis(viewport_px: f32, zoom: f32) -> (f32, f32) {
 ///   world  = cam + wrap(uv·size − cam·(1 − factor)·zoom) (box-wrapped)
 ///   scale  = zoom (constant on-screen star size)
 ///
-/// The box is zoom-independent in the normal range, so zooming spreads
-/// / gathers stars on screen like the rest of the scene (screen_px =
-/// world/zoom) — but each star keeps the same pixel size. The drift
-/// term carries `·zoom` so zooming never drags stars toward/away from
-/// the SCENE origin (v0.14.116): the field breathes around the CAMERA
-/// center. Past the fixed box the wrap grows with the viewport instead
-/// of leaving edge voids.
+/// The box is a constant world size: the starfield behaves like a
+/// distant object with absolute size (zooming far out may show empty
+/// sky past its edge). The drift term carries `·zoom` so zooming never
+/// drags stars toward/away from the SCENE origin (v0.14.116): the field
+/// breathes around the CAMERA center.
 ///
 /// - factor 1.0 (small/far stars) → drift 0: glued to the camera,
 ///   they barely move = "already very far away".
@@ -248,6 +243,7 @@ fn update_parallax(
     windows: Query<&Window>,
     mut stars: Query<(&mut Transform, &Star), Without<MainCamera>>,
 ) {
+    let _ = windows;
     crate::mark_system("update_parallax");
 
     let Ok((camera, projection)) = cameras.single() else {
@@ -258,11 +254,8 @@ fn update_parallax(
         Projection::Orthographic(ortho) => ortho.scale,
         _ => 1.0,
     };
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let (box_w, half_w) = wrap_box_axis(window.width(), zoom);
-    let (box_h, half_h) = wrap_box_axis(window.height(), zoom);
+    let (box_w, half_w) = wrap_box_axis();
+    let (box_h, half_h) = wrap_box_axis();
 
     for (mut transform, star) in stars.iter_mut() {
         let drift = 1.0 - star.factor;
@@ -329,33 +322,13 @@ mod tests {
     }
 
     #[test]
-    fn wrap_box_covers_viewport_at_any_zoom() {
-        // Box must always exceed the visible extent (viewport·zoom).
-        for (vp_px, zoom) in [(390.0, 0.1), (390.0, 1.0), (1920.0, 1.0), (800.0, 50.0)] {
-            let (size, half) = wrap_box_axis(vp_px, zoom);
-            assert!(
-                size > vp_px * zoom,
-                "box {size} < viewport {}",
-                vp_px * zoom
-            );
-            assert!((half * 2.0 - size).abs() < 1e-3);
-        }
-        // Normal range: fixed box (zoom-independent world positions →
-        // the background zooms like the scene).
-        let (a, _) = wrap_box_axis(390.0, 0.5);
-        let (b, _) = wrap_box_axis(390.0, 1.0);
-        assert!(
-            (a - b).abs() < 1e-3,
-            "box should be fixed in normal range: {a} vs {b}"
-        );
+    fn wrap_box_is_constant_absolute_size() {
+        // The starfield is a constant world size: same box at any zoom —
+        // zooming far out may reveal empty sky past its edge.
+        let (a, ha) = wrap_box_axis();
         assert!((a - FIXED_HALF * 2.0).abs() < 1e-3);
-        // Extreme zoom-out: box grows with the viewport (no edge voids).
-        let (c, _) = wrap_box_axis(800.0, 20.0);
-        let (d, _) = wrap_box_axis(800.0, 40.0);
-        assert!(
-            (d - c * 2.0).abs() < 1e-3,
-            "grown box must scale with zoom: {c} vs {d}"
-        );
+        assert!((ha * 2.0 - a).abs() < 1e-3);
+        // Sanity: the fixed box no longer depends on viewport/zoom args.
     }
 
     #[test]
@@ -382,16 +355,16 @@ mod tests {
     #[test]
     fn zoom_spreads_stars_on_screen() {
         // Mirror of `update_parallax`: screen_px = wrapped/zoom.
-        fn screen_px(uv: f32, cam: f32, factor: f32, vp_px: f32, zoom: f32) -> f32 {
-            let (size, half) = wrap_box_axis(vp_px, zoom);
+        fn screen_px(uv: f32, cam: f32, factor: f32, zoom: f32) -> f32 {
+            let (size, half) = wrap_box_axis();
             wrap_coord(uv * size - cam * (1.0 - factor) * zoom, half) / zoom
         }
         // Centered camera: no wrap interference, gap ratio is exact.
         for factor in [1.0, 0.95, 0.9] {
-            let a0 = screen_px(0.30, 0.0, factor, 390.0, 0.5);
-            let b0 = screen_px(0.35, 0.0, factor, 390.0, 0.5);
-            let a1 = screen_px(0.30, 0.0, factor, 390.0, 2.0);
-            let b1 = screen_px(0.35, 0.0, factor, 390.0, 2.0);
+            let a0 = screen_px(0.30, 0.0, factor, 0.5);
+            let b0 = screen_px(0.35, 0.0, factor, 0.5);
+            let a1 = screen_px(0.30, 0.0, factor, 2.0);
+            let b1 = screen_px(0.35, 0.0, factor, 2.0);
             let gap_out = (b0 - a0).abs();
             let gap_in = (b1 - a1).abs();
             // Zoom 0.5 -> 2.0 is 4x closer: gap must shrink ~4x.
