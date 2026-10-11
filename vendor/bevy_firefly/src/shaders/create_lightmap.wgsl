@@ -261,7 +261,15 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             shadow = shadow_blend(shadow, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
         }
 
-        res *= vec4f(shadow, 1);
+        // v0.14.131: le ombre dei pianeti NON oscurano lo sfondo. I pixel
+        // SENZA normal map (normal.a == 0: starfield, glow, spazio vuoto)
+        // sono sfondo emissivo infinitamente lontano, non superfici: un'ombra
+        // proiettata non può riceverla (lo stesso discriminante della
+        // separazione alone/luce v0.14.79 sopra). Solo i pianeti
+        // (CON normal map) ricevono le ombre proiettate.
+        if (normal.a != 0.0) {
+            res *= vec4f(shadow, 1);
+        }
     }
 
     // return pow(res, vec4<f32>(1.0/2.2));
