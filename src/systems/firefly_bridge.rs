@@ -203,7 +203,14 @@ fn setup_firefly_camera(
             FireflyConfig {
                 ambient_color: Color::srgb(ambient.color[0], ambient.color[1], ambient.color[2]),
                 ambient_brightness: ambient.intensity,
-                soft_shadows: true,
+                // v0.14.133: ombre NETTE (hard). Con soft_shadows la penombra
+                // della grande area light (core 45 vs pianeti 5-20) lavava via
+                // l'ombra: solo una sottile antumbra parziale, invisibile
+                // (v0.14.132: "non ci sono i coni"). Hard = cono scuro pieno a
+                // bordi netti, come i vecchi coni CPU ma calcolato nella
+                // lightmap (quindi rispetta l'esenzione delle stelle v0.14.132).
+                // Terminatori giorno/notte invariati (vengono dalle normal map).
+                soft_shadows: false,
                 // v0.14.59 (con patch vendored nella shader): z_sorting=true
                 // MA il check è ora l'UGUAGLIANZA esatta stencil.g == occ.z
                 // (body-id nel Transform.z, sync_sprite_z) -> skippata SOLO
