@@ -113,12 +113,25 @@ const LAYERS: [LayerConfig; 3] = [
 /// per-star size via `custom_size`. Same trick as the bright-planet
 /// glow (`generate_radial_glow_texture`), self-contained here to avoid
 /// cross-plugin ordering with `FireflyTextures`.
+///
+/// v0.14.135: the saturated core covers most of the quad (GLOW_CORE 0.6).
+/// Why: firefly's stencil pass (`sprite.wgsl`) writes stencil ONLY where
+/// the raw texture alpha is 1.0 — the saturated core. The shadow shader
+/// exempts background stars via stencil.g (their z ≈ -500k), so ONLY the
+/// saturated region is guaranteed shadow-free; the translucent rim can
+/// still dim slightly inside a cone. A wide core keeps the exemption on
+/// the whole perceptually-bright part (like the blown-out cores in the
+/// astrophoto reference); the rim is so faint the residual dimming is
+/// unnoticeable. (Flipping the stencil threshold instead is NOT an
+/// option: the sun's huge outer-glow quad would then write stencil g=0
+/// and z-skip every planet occluder → cones invisible near the sun.)
 const STAR_GLOW_SIZE: u32 = 64;
 /// Fraction of the texture radius that stays fully opaque (the hot core).
-const GLOW_CORE: f32 = 0.25;
-/// Quad size = star diameter × HALO_SCALE, so the saturated core matches
-/// the configured radius and the halo extends ~3 diameters out.
-const HALO_SCALE: f32 = 4.0;
+const GLOW_CORE: f32 = 0.6;
+/// Quad size = star diameter × HALO_SCALE: saturated core ≈ 1.8× the
+/// configured radius, halo extends ~1 diameter beyond (tight,
+/// photo-like: faint stars are sharp dots, only bright ones bloom).
+const HALO_SCALE: f32 = 3.0;
 
 fn star_glow_pixels() -> Vec<u8> {
     let w = STAR_GLOW_SIZE as usize;
@@ -386,10 +399,20 @@ mod tests {
         // Luminous-dot profile: saturated core, smooth falloff, zero rim.
         let px = star_glow_pixels();
         let w = STAR_GLOW_SIZE as usize;
+        let half = STAR_GLOW_SIZE as f32 / 2.0;
         let center = px[(w / 2 * w + w / 2) * 4 + 3];
         assert_eq!(center, 255, "core must be fully opaque");
         let corner = px[3];
         assert_eq!(corner, 0, "rim must fade to exactly 0");
+        // The saturated core must cover most of the quad (v0.14.135): only
+        // the saturated region writes stencil, hence only it is guaranteed
+        // shadow-exempt — the bright part of every star must be inside it.
+        let inner_x = w / 2 + (half * GLOW_CORE * 0.8) as usize;
+        let inner_a = px[(w / 2 * w + inner_x) * 4 + 3];
+        assert_eq!(
+            inner_a, 255,
+            "core must stay saturated out to 80% of GLOW_CORE"
+        );
         // Monotonic falloff along the middle row from center to edge.
         let row = w / 2;
         let mut prev = 255u8;
