@@ -265,21 +265,25 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             shadow = shadow_blend(shadow, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
         }
 
-        // v0.14.132 (supersede v0.14.131): le ombre dei pianeti oscurano
-        // l'alone e lo spazio vuoto — il cono RESTA visibile — ma NON i
-        // nuclei delle stelle di sfondo. Lo stencil pass di firefly
+        // v0.14.134 (supersede v0.14.132): le ombre dei pianeti oscurano
+        // l'alone e lo spazio vuoto — il cono RESTA visibile — ma MAI le
+        // stelle di sfondo (nucleo + alone). Lo stencil pass di firefly
         // (`sprite.wgsl`) campiona la texture GREZZA, ignorando la tinta:
-        // il nucleo saturo della texture scrive stencil.a = 1 con normal
-        // dummy (b == 0.1, nessuno NormalMap sulle stelle). Quindi:
-        // - sprite opaco + normal dummy = stella emissiva (nucleo sfondo,
-        //   disco stella) -> salta l'ombra, resta luminosa;
-        // - tutto il resto (pianeti con normal map, alone, spazio vuoto,
-        //   aloni semi-trasparenti con stencil 0) -> ombra applicata.
-        // Il gate v0.14.131 (`normal.a != 0`) era sbagliato in entrambe le
-        // direzioni: toglieva l'ombra all'alone (cono invisibile) ma la
-        // teneva sui nuclei (stelle oscurate).
-        var is_unlit_sprite = stencil.a > 0.1 && normal.b == f32(f16(0.1));
-        if (!is_unlit_sprite) {
+        // solo il nucleo saturo scrive stencil.a = 1, l'alone esterno
+        // resta stencil 0 come lo spazio vuoto — per questo il gate
+        // v0.14.132 (solo nuclei) scuriva comunque un po' le stelle.
+        // Discriminante robusto: la z dello sprite (stencil.g). Lo
+        // starfield vive a z ≈ -500k (parallax.rs), i pianeti a
+        // z = -distanza e la stella a z = 0. Quindi:
+        // - stencil.g < -100000 = stella di sfondo (tutto il quad) ->
+        //   salta l'ombra del tutto;
+        // - sprite opaco + normal dummy = disco stella emissivo ->
+        //   salta l'ombra, resta luminoso;
+        // - tutto il resto (pianeti, alone stella, spazio vuoto) ->
+        //   ombra applicata, cono visibile.
+        var is_background_star = stencil.g < -100000.0;
+        var is_emissive_core = stencil.a > 0.1 && normal.b == f32(f16(0.1));
+        if (!is_background_star && !is_emissive_core) {
             res *= vec4f(shadow, 1);
         }
     }
