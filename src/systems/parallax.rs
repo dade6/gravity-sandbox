@@ -80,26 +80,27 @@ struct LayerConfig {
 // The starfield must live far behind any plausible planet: -500k is
 // inside the custom far plane (±1e6, see `main_camera_projection`).
 const LAYERS: [LayerConfig; 3] = [
-    // Layer 1 (sfondo) — 500 small gray stars, glued to the camera
+    // Layer 1 (sfondo) — 12500 small gray stars, glued to the camera
     // (factor 1.0: they barely move on screen = very far away).
+    // Density preserved from the 2000×2000 box (500 stars): 25x area → 25x count.
     LayerConfig {
-        count: 500,
+        count: 12500,
         radius_min: 0.5,
         radius_max: 1.5,
         factor: 1.0,
         z: -500_000.0,
     },
-    // Layer 2 (medio) — 200 warm/cool stars, slight drift.
+    // Layer 2 (medio) — 5000 warm/cool stars, slight drift.
     LayerConfig {
-        count: 200,
+        count: 5000,
         radius_min: 1.0,
         radius_max: 3.0,
         factor: 0.95,
         z: -499_000.0,
     },
-    // Layer 3 (primo piano) — 50 big white/yellow stars, drifts slightly more.
+    // Layer 3 (primo piano) — 1250 big white/yellow stars, drifts slightly more.
     LayerConfig {
-        count: 50,
+        count: 1250,
         radius_min: 2.0,
         radius_max: 4.0,
         factor: 0.9,
@@ -107,11 +108,12 @@ const LAYERS: [LayerConfig; 3] = [
     },
 ];
 
-/// Biggest star radius across layers (screen px at zoom 1).
-const MAX_STAR_RADIUS: f32 = 4.0;
-/// Extra wrap margin beyond the viewport (world units at zoom 1),
-/// so stars pop in/out off-screen instead of at the edge.
-const WRAP_MARGIN: f32 = 8.0;
+/// Asset sharing: with ~19k stars, one mesh + one material per star
+/// would mean ~38k GPU assets. Instead each layer pre-builds a small
+/// palette of quantized meshes (radius steps) and materials (color
+/// variants); stars share handles, so batching still works.
+const RADIUS_STEPS: usize = 8;
+const COLOR_VARIANTS: usize = 16;
 
 // ============================================================
 // Spawning
@@ -137,17 +139,33 @@ fn spawn_stars(
             ))
             .id();
 
+        // Pre-build shared asset palettes for this layer: quantized
+        // radii × color variants (see RADIUS_STEPS/COLOR_VARIANTS).
+        let mut mesh_palette = Vec::with_capacity(RADIUS_STEPS);
+        for s in 0..RADIUS_STEPS {
+            let t = if RADIUS_STEPS > 1 {
+                s as f32 / (RADIUS_STEPS - 1) as f32
+            } else {
+                0.0
+            };
+            let radius = cfg.radius_min + (cfg.radius_max - cfg.radius_min) * t;
+            mesh_palette.push(meshes.add(Circle::new(radius)));
+        }
+        let mut mat_palette = Vec::with_capacity(COLOR_VARIANTS);
+        for _ in 0..COLOR_VARIANTS {
+            mat_palette
+                .push(materials.add(ColorMaterial::from_color(star_color(&mut rng, layer_idx))));
+        }
+
         for _ in 0..cfg.count {
             let uv = Vec2::new(rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0));
-            let radius = rng.gen_range(cfg.radius_min..cfg.radius_max);
 
-            let color = star_color(&mut rng, layer_idx);
-
+            // Share assets: pick a pre-built mesh + material at random.
             // Mesh radius is baked at zoom-1 size; `update_parallax`
             // counter-scales the transform by the zoom so the on-screen
             // size stays constant.
-            let mesh = meshes.add(Circle::new(radius));
-            let material = materials.add(ColorMaterial::from_color(color));
+            let mesh = mesh_palette[rng.gen_range(0..RADIUS_STEPS)].clone();
+            let material = mat_palette[rng.gen_range(0..COLOR_VARIANTS)].clone();
 
             commands
                 .spawn((
@@ -321,6 +339,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn density_preserved_after_box_growth() {
+        // Box grew 2000×2000 → 10000×10000 (25x area); counts scaled
+        // 25x (500/200/50 → 12500/5000/1250) to keep density identical.
+        let old_area = 2000.0 * 2000.0;
+        let new_area = FIXED_HALF * 2.0 * (FIXED_HALF * 2.0);
+        assert!((new_area / old_area - 25.0).abs() < 1e-6);
+        let old_counts = [500.0, 200.0, 50.0];
+        for (i, cfg) in LAYERS.iter().enumerate() {
+            let old_density = old_counts[i] / old_area;
+            let new_density = cfg.count as f32 / new_area;
+            assert!(
+                (old_density - new_density).abs() < 1e-9,
+                "layer {i}: density changed ({} vs {})",
+                old_density,
+                new_density
+            );
+        }
+    }
     #[test]
     fn wrap_box_is_constant_absolute_size() {
         // The starfield is a constant world size: same box at any zoom —
