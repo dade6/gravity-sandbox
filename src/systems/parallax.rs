@@ -107,24 +107,53 @@ const LAYERS: [LayerConfig; 3] = [
     },
 ];
 
-/// Asset sharing: with ~19k stars, one mesh + one material per star
-/// would mean ~38k GPU assets. Instead each layer pre-builds a small
-/// palette of quantized meshes (radius steps) and materials (color
-/// variants); stars share handles, so batching still works.
-const RADIUS_STEPS: usize = 8;
-const COLOR_VARIANTS: usize = 16;
+/// Luminous-star glow texture: white RGB, alpha = saturated core +
+/// soft falloff to exactly 0 at the rim (no hard disc edge on black).
+/// One shared handle for all ~19k stars; per-star tint via Sprite color,
+/// per-star size via `custom_size`. Same trick as the bright-planet
+/// glow (`generate_radial_glow_texture`), self-contained here to avoid
+/// cross-plugin ordering with `FireflyTextures`.
+const STAR_GLOW_SIZE: u32 = 64;
+/// Fraction of the texture radius that stays fully opaque (the hot core).
+const GLOW_CORE: f32 = 0.25;
+/// Quad size = star diameter × HALO_SCALE, so the saturated core matches
+/// the configured radius and the halo extends ~3 diameters out.
+const HALO_SCALE: f32 = 4.0;
+
+fn star_glow_pixels() -> Vec<u8> {
+    let w = STAR_GLOW_SIZE as usize;
+    let half = STAR_GLOW_SIZE as f32 / 2.0;
+    let mut pixels = Vec::with_capacity(w * w * 4);
+    for y in 0..w {
+        for x in 0..w {
+            let dx = x as f32 + 0.5 - half;
+            let dy = y as f32 + 0.5 - half;
+            let d = (dx * dx + dy * dy).sqrt() / half; // 0 centre → 1 rim
+            let a = if d <= GLOW_CORE {
+                1.0
+            } else {
+                let t = ((d - GLOW_CORE) / (1.0 - GLOW_CORE)).min(1.0);
+                (1.0 - t).powf(2.0)
+            };
+            pixels.extend_from_slice(&[255u8, 255u8, 255u8, (a * 255.0) as u8]);
+        }
+    }
+    pixels
+}
 
 // ============================================================
 // Spawning
 // ============================================================
 
-fn spawn_stars(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    seed: Res<StarSeed>,
-) {
+fn spawn_stars(mut commands: Commands, mut images: ResMut<Assets<Image>>, seed: Res<StarSeed>) {
     let mut rng = StdRng::seed_from_u64(seed.0);
+
+    // One shared luminous-dot texture for the whole starfield.
+    let glow = images.add(crate::rendering::textures::build_image(
+        star_glow_pixels(),
+        STAR_GLOW_SIZE,
+        STAR_GLOW_SIZE,
+    ));
 
     for (layer_idx, cfg) in LAYERS.iter().enumerate() {
         // Parent entity — only carries the z depth + layer marker.
@@ -138,37 +167,23 @@ fn spawn_stars(
             ))
             .id();
 
-        // Pre-build shared asset palettes for this layer: quantized
-        // radii × color variants (see RADIUS_STEPS/COLOR_VARIANTS).
-        let mut mesh_palette = Vec::with_capacity(RADIUS_STEPS);
-        for s in 0..RADIUS_STEPS {
-            let t = if RADIUS_STEPS > 1 {
-                s as f32 / (RADIUS_STEPS - 1) as f32
-            } else {
-                0.0
-            };
-            let radius = cfg.radius_min + (cfg.radius_max - cfg.radius_min) * t;
-            mesh_palette.push(meshes.add(Circle::new(radius)));
-        }
-        let mut mat_palette = Vec::with_capacity(COLOR_VARIANTS);
-        for _ in 0..COLOR_VARIANTS {
-            mat_palette
-                .push(materials.add(ColorMaterial::from_color(star_color(&mut rng, layer_idx))));
-        }
-
         for _ in 0..cfg.count {
             let uv = Vec2::new(rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0));
-
-            // Share assets: pick a pre-built mesh + material at random.
-            // Meshes keep world size: zoom scales on-screen size like
-            // everything else in the scene.
-            let mesh = mesh_palette[rng.gen_range(0..RADIUS_STEPS)].clone();
-            let material = mat_palette[rng.gen_range(0..COLOR_VARIANTS)].clone();
+            let radius = rng.gen_range(cfg.radius_min..cfg.radius_max);
+            // Luminous dot: hot saturated core (≈ configured radius) +
+            // soft halo fading out. Tint = layer color (photo: faint
+            // pinpricks mostly white, few blue/warm). World-sized quad:
+            // zoom scales size like the rest of the scene.
+            let color = star_color(&mut rng, layer_idx);
 
             commands
                 .spawn((
-                    Mesh2d(mesh),
-                    MeshMaterial2d::<ColorMaterial>(material),
+                    Sprite {
+                        image: glow.clone(),
+                        color,
+                        custom_size: Some(Vec2::splat(radius * 2.0 * HALO_SCALE)),
+                        ..default()
+                    },
                     Transform::from_xyz(0.0, 0.0, 0.0),
                     Visibility::default(),
                     RenderLayers::layer(1),
@@ -353,6 +368,27 @@ mod tests {
                 old_density,
                 new_density
             );
+        }
+    }
+    #[test]
+    fn star_glow_is_hot_core_soft_edge() {
+        // Luminous-dot profile: saturated core, smooth falloff, zero rim.
+        let px = star_glow_pixels();
+        let w = STAR_GLOW_SIZE as usize;
+        let center = px[(w / 2 * w + w / 2) * 4 + 3];
+        assert_eq!(center, 255, "core must be fully opaque");
+        let corner = px[3];
+        assert_eq!(corner, 0, "rim must fade to exactly 0");
+        // Monotonic falloff along the middle row from center to edge.
+        let row = w / 2;
+        let mut prev = 255u8;
+        for x in (w / 2)..w {
+            let a = px[(row * w + x) * 4 + 3];
+            assert!(
+                a <= prev,
+                "halo must fall off monotonically (x={x}: {a} > {prev})"
+            );
+            prev = a;
         }
     }
     #[test]
