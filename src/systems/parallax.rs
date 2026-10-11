@@ -209,7 +209,7 @@ fn wrap_coord(v: f32, half: f32) -> f32 {
 /// `update_parallax` keeps each star's on-screen SIZE constant via
 /// counter-scaling. Absolute size: zooming far out may leave sky
 /// regions empty (the field is finite), like any distant object.
-const FIXED_HALF: f32 = 1000.0;
+const FIXED_HALF: f32 = 5000.0;
 
 /// World-space size of the wrap box on one axis: constant.
 fn wrap_box_axis() -> (f32, f32) {
