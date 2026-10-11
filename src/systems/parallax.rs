@@ -66,9 +66,8 @@ impl Plugin for ParallaxPlugin {
 
 struct LayerConfig {
     count: usize,
-    /// Screen-constant star radius range (world units at zoom 1;
-    /// `update_parallax` counter-scales by the zoom so stars keep
-    /// the same pixel size at any zoom).
+    /// Star radius range in world units (zoom scales on-screen size
+    /// like the rest of the scene).
     radius_min: f32,
     radius_max: f32,
     factor: f32,
@@ -161,9 +160,8 @@ fn spawn_stars(
             let uv = Vec2::new(rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0));
 
             // Share assets: pick a pre-built mesh + material at random.
-            // Mesh radius is baked at zoom-1 size; `update_parallax`
-            // counter-scales the transform by the zoom so the on-screen
-            // size stays constant.
+            // Meshes keep world size: zoom scales on-screen size like
+            // everything else in the scene.
             let mesh = mesh_palette[rng.gen_range(0..RADIUS_STEPS)].clone();
             let material = mat_palette[rng.gen_range(0..COLOR_VARIANTS)].clone();
 
@@ -222,11 +220,10 @@ fn wrap_coord(v: f32, half: f32) -> f32 {
 }
 
 /// Fixed half-size (world units) of the wrap box. Star world positions
-/// are zoom-independent, so zooming spreads/gathers stars on screen
-/// exactly like the rest of the scene (screen_px = world/zoom) — while
-/// `update_parallax` keeps each star's on-screen SIZE constant via
-/// counter-scaling. Absolute size: zooming far out may leave sky
-/// regions empty (the field is finite), like any distant object.
+/// and sizes are zoom-independent, so zooming spreads/gathers stars on
+/// screen AND scales their size exactly like the rest of the scene.
+/// Absolute size: zooming far out may leave sky regions empty (the
+/// field is finite), like any distant object.
 const FIXED_HALF: f32 = 5000.0;
 
 /// World-space size of the wrap box on one axis: constant.
@@ -238,7 +235,7 @@ fn wrap_box_axis() -> (f32, f32) {
 /// drifting with the layer factor:
 ///
 ///   world  = cam + wrap(uv·size − cam·(1 − factor)·zoom) (box-wrapped)
-///   scale  = zoom (constant on-screen star size)
+///   scale  = 1 (star size zooms with the scene like everything else)
 ///
 /// The box is a constant world size: the starfield behaves like a
 /// distant object with absolute size (zooming far out may show empty
@@ -280,11 +277,11 @@ fn update_parallax(
         let sx = wrap_coord(star.uv.x * box_w - cam.x * drift * zoom, half_w);
         let sy = wrap_coord(star.uv.y * box_h - cam.y * drift * zoom, half_h);
         // Parent sits at origin in x/y (only z depth), so local == world − z.
+        // No counter-scaling: star meshes keep world size, so zoom scales
+        // their on-screen size like everything else in the scene.
         transform.translation.x = cam.x + sx;
         transform.translation.y = cam.y + sy;
-        // Counter-scale the baked mesh radius: world radius r·zoom
-        // renders at r·zoom/zoom = r screen px at any zoom.
-        transform.scale = Vec3::splat(zoom);
+        transform.scale = Vec3::ONE;
     }
 }
 
@@ -386,9 +383,9 @@ mod tests {
         assert!(LAYERS[0].factor > LAYERS[1].factor && LAYERS[1].factor > LAYERS[2].factor);
     }
 
-    /// Zooming spreads/gathers stars on screen like the rest of the
-    /// scene (but star SIZE stays constant via counter-scaling): the
-    /// screen gap between two stars scales as 1/zoom.
+    /// Zooming spreads/gathers stars on screen AND scales their size like
+    /// the rest of the scene: the screen gap between two stars scales as
+    /// 1/zoom, and so does each star's on-screen radius.
     #[test]
     fn zoom_spreads_stars_on_screen() {
         // Mirror of `update_parallax`: screen_px = wrapped/zoom.
