@@ -154,12 +154,16 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             // Patch v0.14.79 (Ticket 20): SEPARAZIONE alone/luce pianeti.
             // - Pixel CON normal map (pianeti, normal.a > 0) -> light.intensity
             //   (Planet Light dal pannello).
-            // - Pixel SENZA normal map (normal.a == 0: sfondo/starfield, glow
-            //   semi-trasparenti, coni d'ombra) -> `halo` (Halo Brightness,
-            //   trasportato dall'alpha del colore della luce).
+            // - Pixel SENZA normal map (normal.a == 0: alone, spazio vuoto,
+            //   aloni di stelle) -> `halo` (Halo Brightness, trasportato
+            //   dall'alpha del colore della luce).
+            // - Sprite opachi SENZA normal map (normal dummy b == 0.1:
+            //   nuclei delle stelle di sfondo, dischi delle stelle) ->
+            //   `halo` come lo sfondo (sono emissivi, mai toccati da
+            //   Planet Light). v0.14.132.
             // Così il disco di luce attorno alla stella risponde a Halo
             // Brightness e MAI a Planet Light.
-            let surface = select(light.intensity, halo, normal.a == 0.0);
+            let surface = select(light.intensity, halo, normal.a == 0.0 || normal.b == f32(f16(0.1)));
             res = vec4f(light_color.xyz, 0) * surface * angle_multi * normal_multi * falloff(x, light.falloff, light.falloff_intensity);
         }
 
@@ -261,13 +265,21 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             shadow = shadow_blend(shadow, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
         }
 
-        // v0.14.131: le ombre dei pianeti NON oscurano lo sfondo. I pixel
-        // SENZA normal map (normal.a == 0: starfield, glow, spazio vuoto)
-        // sono sfondo emissivo infinitamente lontano, non superfici: un'ombra
-        // proiettata non può riceverla (lo stesso discriminante della
-        // separazione alone/luce v0.14.79 sopra). Solo i pianeti
-        // (CON normal map) ricevono le ombre proiettate.
-        if (normal.a != 0.0) {
+        // v0.14.132 (supersede v0.14.131): le ombre dei pianeti oscurano
+        // l'alone e lo spazio vuoto — il cono RESTA visibile — ma NON i
+        // nuclei delle stelle di sfondo. Lo stencil pass di firefly
+        // (`sprite.wgsl`) campiona la texture GREZZA, ignorando la tinta:
+        // il nucleo saturo della texture scrive stencil.a = 1 con normal
+        // dummy (b == 0.1, nessuno NormalMap sulle stelle). Quindi:
+        // - sprite opaco + normal dummy = stella emissiva (nucleo sfondo,
+        //   disco stella) -> salta l'ombra, resta luminosa;
+        // - tutto il resto (pianeti con normal map, alone, spazio vuoto,
+        //   aloni semi-trasparenti con stencil 0) -> ombra applicata.
+        // Il gate v0.14.131 (`normal.a != 0`) era sbagliato in entrambe le
+        // direzioni: toglieva l'ombra all'alone (cono invisibile) ma la
+        // teneva sui nuclei (stelle oscurate).
+        var is_unlit_sprite = stencil.a > 0.1 && normal.b == f32(f16(0.1));
+        if (!is_unlit_sprite) {
             res *= vec4f(shadow, 1);
         }
     }

@@ -199,29 +199,40 @@ fn spawn_stars(mut commands: Commands, mut images: ResMut<Assets<Image>>, seed: 
 
 /// Generate a star colour based on which layer it belongs to
 /// (0 = background, 1 = mid, 2 = foreground).
+///
+/// Colors are ALWAYS opaque (alpha 1.0): faintness is baked into dark
+/// RGB instead of translucency. Rationale: firefly's stencil pass
+/// (`sprite.wgsl`) samples the raw texture alpha, IGNORING the sprite
+/// tint — the saturated texture core already writes stencil.a = 1 with
+/// a dummy normal (no NormalMap on stars). Opaque tint keeps the main
+/// pass consistent with the stencil pass, so the v0.14.132 shader gate
+/// (unlit-sprite exemption) reliably recognizes star cores. On the
+/// pure-black sky opaque-dark looks identical to translucent-bright.
 fn star_color(rng: &mut StdRng, layer: usize) -> Color {
     if layer == 0 {
-        // Layer 1: gray-ish, opacity 0.3–0.6
+        // Layer 1: faint gray pinpricks.
         let gray = rng.gen_range(0.3..0.8);
-        Color::srgb(gray, gray, gray).with_alpha(rng.gen_range(0.3..0.6))
+        let dim = rng.gen_range(0.3..0.6);
+        Color::srgb(gray * dim, gray * dim, gray * dim)
     } else if layer == 1 {
-        // Layer 2: random warm or cool hue, opacity 0.5–0.8
-        let alpha = rng.gen_range(0.5..0.8);
+        // Layer 2: random warm or cool hue, mid brightness.
+        let dim = rng.gen_range(0.5..0.8);
         if rng.gen_bool(0.5) {
             // Warm hues: red-orange-yellow
             let r = rng.gen_range(0.6..1.0);
             let g = rng.gen_range(0.2..0.6);
-            Color::srgb(r, g, 0.0).with_alpha(alpha)
+            Color::srgb(r * dim, g * dim, 0.0)
         } else {
             // Cool hues: blue-purple
             let b = rng.gen_range(0.6..1.0);
             let g = rng.gen_range(0.2..0.5);
-            Color::srgb(0.0, g, b).with_alpha(alpha)
+            Color::srgb(0.0, g * dim, b * dim)
         }
     } else {
-        // Layer 3: white/yellow, opacity 0.7–1.0
+        // Layer 3: bright white/yellow.
         let warmth = rng.gen_range(0.8..1.0);
-        Color::srgb(warmth, warmth * 0.9, warmth * 0.6).with_alpha(rng.gen_range(0.7..1.0))
+        let dim = rng.gen_range(0.7..1.0);
+        Color::srgb(warmth * dim, warmth * 0.9 * dim, warmth * 0.6 * dim)
     }
 }
 
@@ -390,6 +401,40 @@ mod tests {
             );
             prev = a;
         }
+    }
+    /// Star colors are opaque with baked-in dimming (v0.14.132): alpha
+    /// must stay 1.0 so the main pass matches firefly's stencil pass
+    /// (which ignores tint), and L3 must stay brighter than L1.
+    #[test]
+    fn star_colors_are_opaque_with_baked_brightness() {
+        let mut rng = StdRng::seed_from_u64(42);
+        for layer in 0..3 {
+            for _ in 0..50 {
+                let c = star_color(&mut rng, layer);
+                let s = c.to_srgba();
+                assert!(
+                    (s.alpha - 1.0).abs() < 1e-6,
+                    "layer {layer}: star tint must be opaque (alpha={})",
+                    s.alpha
+                );
+            }
+        }
+        // Brightness ordering across layers (sample means).
+        let mut rng = StdRng::seed_from_u64(7);
+        let mean = |layer: usize, rng: &mut StdRng| -> f32 {
+            let mut acc = 0.0;
+            for _ in 0..200 {
+                let s = star_color(rng, layer).to_srgba();
+                acc += s.red + s.green + s.blue;
+            }
+            acc / 200.0
+        };
+        let m0 = mean(0, &mut rng);
+        let m2 = mean(2, &mut rng);
+        assert!(
+            m2 > m0 * 2.0,
+            "L3 should be much brighter than L1 ({m2} vs {m0})"
+        );
     }
     #[test]
     fn wrap_box_is_constant_absolute_size() {
