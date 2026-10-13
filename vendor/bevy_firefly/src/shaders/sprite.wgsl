@@ -75,7 +75,18 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     var color = textureSample(sprite_texture, sprite_sampler, in.uv);
     var normal = textureSample(normal_texture, sprite_sampler, in.uv);
     
-    if color.a >= 1.0 {
+    // v0.14.137: gli sprite dello starfield (SpriteHeight = sentinella
+    // NEGATIVA, vedi STARFIELD_HEIGHT in parallax.rs) scrivono lo stencil
+    // su TUTTO il proprio quad, anche dove la texture e' semitrasparente.
+    // Perche': la shader delle ombre identifica lo starfield dalla sua z
+    // (stencil.g ~= -500k) ed esenta quei pixel; senza stencil l'alone
+    // esterno (alpha < 1) restava "spazio vuoto" e il cono d'ombra dei
+    // pianeti lo spegneva. Gli sprite normali (pianeti, glow della stella)
+    // mantengono la soglia storica alpha >= 1.0.
+    let is_starfield = in.height < 0.0;
+    let writes_stencil = if is_starfield { color.a > 0.004 } else { color.a >= 1.0 };
+
+    if writes_stencil {
         // stencil come da crate (alpha = 1.0: presenza sprite)
         res.stencil = vec4<f32>(in.y, in.z, in.height, 1.0);
     }
@@ -83,7 +94,10 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
         res.stencil = vec4<f32>(0, 0, 0, 0);
     }
 
-    if color.a >= 1.0 {
+    // Lo starfield NON scrive la normal map: resta "pixel senza
+    // superficie" per la lightmap (riceve Halo Brightness, mai Planet
+    // Light), comportamento identico a prima.
+    if color.a >= 1.0 && !is_starfield {
         if normal_dummy == 1 {
             res.normal = vec4<f32>(0, 0, f32(f16(0.1)), 1.0);
         }

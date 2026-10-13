@@ -1,6 +1,7 @@
 use crate::systems::camera::MainCamera;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
+use bevy_firefly::prelude::SpriteHeight;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -107,68 +108,38 @@ const LAYERS: [LayerConfig; 3] = [
     },
 ];
 
-/// Luminous-star glow textures. TWO shared textures for the whole field:
+/// Luminous-star glow texture: a small saturated core plus a soft radial
+/// bloom fading to exactly 0 at the rim (no hard disc edge on black).
+/// ONE shared handle for the whole field; per-star tint via the Sprite
+/// color, per-star size via `custom_size`.
 ///
-/// 1. **Core** (`star_core_pixels`): a small saturated disc that stops
-///    abruptly at `CORE_EDGE` of the quad, tinted per star. Its purpose
-///    is the SHADOW EXEMPTION: firefly's stencil pass (`sprite.wgsl`)
-///    writes stencil ONLY where the raw texture alpha is exactly 1.0, and
-///    the shadow shader exempts background stars via stencil.g (their
-///    z ≈ -500k). Everything that must never dim needs to be inside this
-///    saturated disc — and nothing else needs to be, because the bloom
-///    below carries the visible glow.
-/// 2. **Bloom** (`star_bloom_pixels`): the wide soft halo that makes the
-///    star look LUMINOUS, with alpha = (1-t)² fading to 0 at the rim.
-///    Its alpha is < 1 everywhere, so it writes no stencil and therefore
-///    rides along with the star's own glow look — inside a planet's cone
-///    it dims like any other lit-background pixel, which is correct
-///    (the cone darkens the halo the shadow falls on).
-///
-/// Why not one texture: a single texture either makes the saturated
-/// (stencil-writing) part wide — killing the glow, since the halo would
-/// be squeezed into the remaining sliver — or narrow, leaving the halo
-/// un-exempt and dimmed by cones. Two textures give both properties.
-///
-/// Flipping firefly's stencil threshold instead is NOT an option: the
-/// sun's huge outer-glow quad would then write stencil g ≈ 0 and z-skip
-/// every planet occluder → cones invisible near the sun.
+/// The whole quad writes firefly's stencil (see `STARFIELD_HEIGHT` below)
+/// so the shadow shader exempts the starfield — recognized by its z
+/// (`stencil.g ≈ -500k`) — core AND halo. That is what stops a planet's
+/// shadow cone from switching a background star off.
 const STAR_GLOW_SIZE: u32 = 64;
-/// Fraction of the CORE quad's radius that is saturated.
-const GLOW_CORE: f32 = 0.85;
-/// Core quad size = star diameter × this. Saturated disc radius ≈ 0.85
-/// × 1.5 × radius ≈ 1.3× the configured radius: covers the whole bright
-/// dot, tight enough to leave the bloom visible around it.
-const CORE_SCALE: f32 = 1.5;
-/// Bloom quad size = star diameter × this (the halo extends ~2
-/// diameters past the dot, like the bloom in the astrophoto reference).
+/// Fraction of the quad radius that is fully saturated (the hot core).
+const GLOW_CORE: f32 = 0.2;
+/// Exponent of the `(1 - t)^k` bloom falloff. Deliberately BELOW 1: sprite
+/// alpha blending renders `tint × tex.a × tex.a`, so a gentle curve is
+/// what keeps the halo above the sky's brightness (a steep curve would
+/// leave a faint dark ring instead of a glow).
+const GLOW_FALLOFF_EXP: f32 = 0.7;
+/// Quad size = star diameter × this: the halo reaches ~2 diameters past
+/// the dot, like the bloom in the astrophoto reference.
 const HALO_SCALE: f32 = 5.0;
+/// Sentinella `SpriteHeight` che dice alla shader sprite di firefly (vendored)
+/// "questo è uno sprite dello starfield": scrive lo stencil su tutto il quad
+/// e nessuna normal map. Negativa per non collidere MAI con le altezze reali
+/// (pianeti 0, disco stella 1000).
+const STARFIELD_HEIGHT: f32 = -999.0;
+/// Luminanza (sRGB) sotto la quale una stella NON si distingue dal cielo: lo
+/// sfondo è lavato dall'alone del sole (Halo Brightness ~1), quindi una tinta
+/// più scura dello sfondo fa apparire la stella come un puntino NERO. Le tinte
+/// stanno tutte sopra questa soglia.
+const SKY_WASH_REFERENCE: f32 = 0.9;
 
-fn star_core_pixels() -> Vec<u8> {
-    let w = STAR_GLOW_SIZE as usize;
-    let half = STAR_GLOW_SIZE as f32 / 2.0;
-    let mut pixels = Vec::with_capacity(w * w * 4);
-    for y in 0..w {
-        for x in 0..w {
-            let dx = x as f32 + 0.5 - half;
-            let dy = y as f32 + 0.5 - half;
-            let d = (dx * dx + dy * dy).sqrt() / half; // 0 centre → 1 rim
-            let a = if d <= GLOW_CORE {
-                1.0
-            } else {
-                // 1px-ish antialias band so the disc edge is not jagged,
-                // then exactly 0 (no stencil outside the saturated disc).
-                let t = ((d - GLOW_CORE) / (1.0 - GLOW_CORE)).min(1.0);
-                (1.0 - t).max(0.0)
-            };
-            pixels.extend_from_slice(&[255u8, 255u8, 255u8, (a * 255.0) as u8]);
-        }
-    }
-    pixels
-}
-
-/// Soft radial bloom: alpha (1-t)² from the centre to exactly 0 at the
-/// rim (never 1.0, so it writes no stencil and stays a pure visual glow).
-fn star_bloom_pixels() -> Vec<u8> {
+fn star_glow_pixels() -> Vec<u8> {
     let w = STAR_GLOW_SIZE as usize;
     let half = STAR_GLOW_SIZE as f32 / 2.0;
     let mut pixels = Vec::with_capacity(w * w * 4);
@@ -177,7 +148,12 @@ fn star_bloom_pixels() -> Vec<u8> {
             let dx = x as f32 + 0.5 - half;
             let dy = y as f32 + 0.5 - half;
             let d = ((dx * dx + dy * dy).sqrt() / half).min(1.0);
-            let a = (1.0 - d).powf(2.0);
+            let a = if d <= GLOW_CORE {
+                1.0
+            } else {
+                let t = (d - GLOW_CORE) / (1.0 - GLOW_CORE);
+                (1.0 - t).powf(GLOW_FALLOFF_EXP)
+            };
             pixels.extend_from_slice(&[255u8, 255u8, 255u8, (a * 255.0) as u8]);
         }
     }
@@ -191,15 +167,10 @@ fn star_bloom_pixels() -> Vec<u8> {
 fn spawn_stars(mut commands: Commands, mut images: ResMut<Assets<Image>>, seed: Res<StarSeed>) {
     let mut rng = StdRng::seed_from_u64(seed.0);
 
-    // Two shared luminous-star textures: saturated core (shadow-exempt)
-    // and soft bloom (the visible glow). See their generators above.
-    let core_tex = images.add(crate::rendering::textures::build_image(
-        star_core_pixels(),
-        STAR_GLOW_SIZE,
-        STAR_GLOW_SIZE,
-    ));
-    let bloom_tex = images.add(crate::rendering::textures::build_image(
-        star_bloom_pixels(),
+    // One shared luminous-star texture for the whole field (see its
+    // generator above): per-star tint + size come from the Sprite.
+    let glow_tex = images.add(crate::rendering::textures::build_image(
+        star_glow_pixels(),
         STAR_GLOW_SIZE,
         STAR_GLOW_SIZE,
     ));
@@ -219,18 +190,22 @@ fn spawn_stars(mut commands: Commands, mut images: ResMut<Assets<Image>>, seed: 
         for _ in 0..cfg.count {
             let uv = Vec2::new(rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0));
             let radius = rng.gen_range(cfg.radius_min..cfg.radius_max);
-            // Luminous dot = TWO shared sprites at the SAME spot:
-            //  - bloom (wide, soft, alpha < 1): the visible glow;
-            //  - core (small, saturated): the stencil-writing disc that
-            //    the shadow shader exempts via stencil.g (z ≈ -500k).
-            // Order matters only visually; both are tinted per star. The
-            // star entity itself is the wrapper carrying `Star` (its
-            // children follow it in x/y since update_parallax writes only
-            // the parent transform).
+            // One sprite per star, sharing the single glow texture. Tint =
+            // layer colour (HDR: brighter than the sun-washed sky, so the
+            // star reads as a light source and not as a dark speck).
+            // `SpriteHeight(STARFIELD_HEIGHT)` marks it for firefly's
+            // sprite shader: whole-quad stencil, no normal map.
             let color = star_color(&mut rng, layer_idx);
 
-            let star_entity = commands
+            commands
                 .spawn((
+                    Sprite {
+                        image: glow_tex.clone(),
+                        color,
+                        custom_size: Some(Vec2::splat(radius * 2.0 * HALO_SCALE)),
+                        ..default()
+                    },
+                    SpriteHeight(STARFIELD_HEIGHT),
                     Transform::from_xyz(0.0, 0.0, 0.0),
                     Visibility::default(),
                     RenderLayers::layer(1),
@@ -239,33 +214,7 @@ fn spawn_stars(mut commands: Commands, mut images: ResMut<Assets<Image>>, seed: 
                         factor: cfg.factor,
                     },
                 ))
-                .set_parent_in_place(parent_id)
-                .id();
-
-            commands.entity(star_entity).with_children(|parent| {
-                parent.spawn((
-                    Sprite {
-                        image: bloom_tex.clone(),
-                        color,
-                        custom_size: Some(Vec2::splat(radius * 2.0 * HALO_SCALE)),
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, 0.0, 0.0),
-                    Visibility::default(),
-                    RenderLayers::layer(1),
-                ));
-                parent.spawn((
-                    Sprite {
-                        image: core_tex.clone(),
-                        color,
-                        custom_size: Some(Vec2::splat(radius * 2.0 * CORE_SCALE)),
-                        ..default()
-                    },
-                    Transform::from_xyz(0.0, 0.0, 0.001),
-                    Visibility::default(),
-                    RenderLayers::layer(1),
-                ));
-            });
+                .set_parent_in_place(parent_id);
         }
     }
 }
@@ -273,39 +222,43 @@ fn spawn_stars(mut commands: Commands, mut images: ResMut<Assets<Image>>, seed: 
 /// Generate a star colour based on which layer it belongs to
 /// (0 = background, 1 = mid, 2 = foreground).
 ///
-/// Colors are ALWAYS opaque (alpha 1.0): faintness is baked into dark
-/// RGB instead of translucency. Rationale: firefly's stencil pass
-/// (`sprite.wgsl`) samples the raw texture alpha, IGNORING the sprite
-/// tint — the saturated texture core already writes stencil.a = 1 with
-/// a dummy normal (no NormalMap on stars). Opaque tint keeps the main
-/// pass consistent with the stencil pass, so the v0.14.132 shader gate
-/// (unlit-sprite exemption) reliably recognizes star cores. On the
-/// pure-black sky opaque-dark looks identical to translucent-bright.
+/// Tints are OPAQUE (alpha 1.0) and in HDR (values > 1): the sky is washed
+/// by the sun's halo (Halo Brightness ~1), so a dim tint renders DARKER
+/// than the sky and the "star" looks like a black speck — that is exactly
+/// how the field stopped looking luminous. Staying above
+/// `SKY_WASH_REFERENCE` in every layer keeps the stars as light sources;
+/// the camera is `Hdr` and tonemaps, so >1 saturates to a bright dot
+/// (like the blown-out cores in the astrophoto reference).
 fn star_color(rng: &mut StdRng, layer: usize) -> Color {
-    if layer == 0 {
-        // Layer 1: faint gray pinpricks.
-        let gray = rng.gen_range(0.3..0.8);
-        let dim = rng.gen_range(0.3..0.6);
-        Color::srgb(gray * dim, gray * dim, gray * dim)
-    } else if layer == 1 {
-        // Layer 2: random warm or cool hue, mid brightness.
-        let dim = rng.gen_range(0.5..0.8);
-        if rng.gen_bool(0.5) {
-            // Warm hues: red-orange-yellow
-            let r = rng.gen_range(0.6..1.0);
-            let g = rng.gen_range(0.2..0.6);
-            Color::srgb(r * dim, g * dim, 0.0)
-        } else {
-            // Cool hues: blue-purple
-            let b = rng.gen_range(0.6..1.0);
-            let g = rng.gen_range(0.2..0.5);
-            Color::srgb(0.0, g * dim, b * dim)
+    match layer {
+        0 => {
+            // Layer 1: small, faint — cool white-blue pinpricks.
+            let b = rng.gen_range(1.1..1.9);
+            let cool = rng.gen_range(0.86..0.96);
+            Color::srgb(b * cool, b * cool, b)
         }
-    } else {
-        // Layer 3: bright white/yellow.
-        let warmth = rng.gen_range(0.8..1.0);
-        let dim = rng.gen_range(0.7..1.0);
-        Color::srgb(warmth * dim, warmth * 0.9 * dim, warmth * 0.6 * dim)
+        1 => {
+            // Layer 2: mid — warm or cool hue.
+            let b = rng.gen_range(1.5..2.5);
+            if rng.gen_bool(0.5) {
+                // Warm: red-orange-yellow
+                let g = rng.gen_range(0.62..0.80);
+                let bl = rng.gen_range(0.30..0.50);
+                Color::srgb(b, b * g, b * bl)
+            } else {
+                // Cool: blue-white
+                let r = rng.gen_range(0.70..0.86);
+                let g = rng.gen_range(0.80..0.92);
+                Color::srgb(b * r, b * g, b)
+            }
+        }
+        _ => {
+            // Layer 3: big, bright — white to warm yellow (Vega-like).
+            let b = rng.gen_range(2.2..3.4);
+            let warm = rng.gen_range(0.90..1.0);
+            let bl = rng.gen_range(0.70..0.88);
+            Color::srgb(b, b * warm, b * bl)
+        }
     }
 }
 
@@ -455,89 +408,95 @@ mod tests {
         }
     }
     #[test]
-    fn star_core_is_saturated_with_clean_edge() {
-        // The core's job: saturated where the star is bright (so firefly's
-        // stencil writes and the shadow exemption applies), then 0.
-        let px = star_core_pixels();
+    fn star_glow_has_saturated_core_and_soft_bloom() {
+        // Two properties at once: a saturated core (the bright dot) and a
+        // gradual bloom that fades to exactly 0 at the rim.
+        let px = star_glow_pixels();
         let w = STAR_GLOW_SIZE as usize;
         let half = STAR_GLOW_SIZE as f32 / 2.0;
         let center = px[(w / 2 * w + w / 2) * 4 + 3];
         assert_eq!(center, 255, "core centre must be fully opaque");
-        let corner = px[3];
-        assert_eq!(corner, 0, "core must be 0 outside the disc");
-        // Saturated well inside GLOW_CORE, and monotonic to the rim.
+        assert_eq!(px[3], 0, "glow must fade to exactly 0 at the rim");
+        // Saturated well inside GLOW_CORE...
         let inner_x = w / 2 + (half * GLOW_CORE * 0.8) as usize;
         assert_eq!(
             px[(w / 2 * w + inner_x) * 4 + 3],
             255,
             "core must stay saturated out to 80% of GLOW_CORE"
         );
+        // ...and the bloom must still be bright where the ring artifact
+        // would appear: sprite blending renders tint × a², so a steep
+        // curve would make the halo DARKER than the washed sky.
         let row = w / 2;
         let mut prev = 255u8;
         for x in (w / 2)..w {
             let a = px[(row * w + x) * 4 + 3];
-            assert!(a <= prev, "core edge must be monotonic (x={x})");
+            assert!(a <= prev, "glow must fall off monotonically (x={x})");
             prev = a;
         }
+        let mid_x = w / 2 + (half * 0.5) as usize;
+        let mid_a = px[(row * w + mid_x) * 4 + 3] as f32 / 255.0;
+        assert!(
+            mid_a > 0.5,
+            "bloom must stay bright at half radius (a={mid_a}) — a steep \
+             curve would leave a dark ring on the lit sky"
+        );
     }
 
+    /// The whole point of the v0.14.137 star look: every star must be
+    /// BRIGHTER than the sun-washed sky, otherwise it renders as a dark
+    /// speck instead of a luminous point. Opaque alpha is required too
+    /// (the tint, not translucency, carries the brightness).
     #[test]
-    fn star_bloom_is_soft_and_never_saturated() {
-        // The bloom is the visible glow: it must fade smoothly and NEVER
-        // reach alpha 1.0, otherwise it would write stencil and the sun's
-        // huge glow quad would z-skip planet occluders (cones vanish).
-        let px = star_bloom_pixels();
-        let w = STAR_GLOW_SIZE as usize;
-        let center = px[(w / 2 * w + w / 2) * 4 + 3];
-        assert!(center < 255, "bloom must never be fully opaque");
-        assert!(center > 200, "bloom centre must still be nearly saturated");
-        assert_eq!(px[3], 0, "bloom must fade to exactly 0 at the rim");
-        let row = w / 2;
-        let mut prev = center;
-        for x in (w / 2)..w {
-            let a = px[(row * w + x) * 4 + 3];
-            assert!(a <= prev, "bloom must fall off monotonically (x={x})");
-            prev = a;
-        }
-        // The bloom is visible around the core: at the core edge (0.85 of
-        // the SQUARE) the bloom still has meaningful alpha.
-        let edge_x = w / 2 + (STAR_GLOW_SIZE as f32 / 2.0 * GLOW_CORE) as usize;
-        let at_edge = px[(row * w + edge_x) * 4 + 3];
-        assert!(at_edge > 4, "bloom must still glow at the core edge");
-    }
-    /// Star colors are opaque with baked-in dimming (v0.14.132): alpha
-    /// must stay 1.0 so the main pass matches firefly's stencil pass
-    /// (which ignores tint), and L3 must stay brighter than L1.
-    #[test]
-    fn star_colors_are_opaque_with_baked_brightness() {
+    fn star_tints_outshine_the_washed_sky() {
         let mut rng = StdRng::seed_from_u64(42);
+        let mut faintest = f32::MAX;
         for layer in 0..3 {
-            for _ in 0..50 {
-                let c = star_color(&mut rng, layer);
-                let s = c.to_srgba();
+            for _ in 0..200 {
+                let s = star_color(&mut rng, layer).to_srgba();
                 assert!(
                     (s.alpha - 1.0).abs() < 1e-6,
                     "layer {layer}: star tint must be opaque (alpha={})",
                     s.alpha
                 );
+                let peak = s.red.max(s.green).max(s.blue);
+                faintest = faintest.min(peak);
             }
         }
-        // Brightness ordering across layers (sample means).
+        assert!(
+            faintest > SKY_WASH_REFERENCE,
+            "faintest star tint ({faintest}) must outshine the washed sky \
+             ({SKY_WASH_REFERENCE})"
+        );
+        // Layer brightness ordering must survive (depth cue).
         let mut rng = StdRng::seed_from_u64(7);
-        let mean = |layer: usize, rng: &mut StdRng| -> f32 {
+        let peak_mean = |layer: usize, rng: &mut StdRng| -> f32 {
             let mut acc = 0.0;
             for _ in 0..200 {
                 let s = star_color(rng, layer).to_srgba();
-                acc += s.red + s.green + s.blue;
+                acc += s.red.max(s.green).max(s.blue);
             }
             acc / 200.0
         };
-        let m0 = mean(0, &mut rng);
-        let m2 = mean(2, &mut rng);
+        let m0 = peak_mean(0, &mut rng);
+        let m1 = peak_mean(1, &mut rng);
+        let m2 = peak_mean(2, &mut rng);
         assert!(
-            m2 > m0 * 2.0,
-            "L3 should be much brighter than L1 ({m2} vs {m0})"
+            m0 < m1 && m1 < m2,
+            "layer brightness must increase with depth ({m0} / {m1} / {m2})"
         );
+    }
+
+    /// Guards the contract with the vendored sprite shader: the starfield
+    /// sprite must carry the NEGATIVE sentinel height (whole-quad stencil
+    /// → shadow exemption) and never a real height (which would break the
+    /// z-skip logic for planets).
+    #[test]
+    fn starfield_height_sentinel_is_negative_and_unique() {
+        assert!(STARFIELD_HEIGHT < 0.0);
+        // Real heights in the project: planets 0.0, star disc +1000.
+        assert_ne!(STARFIELD_HEIGHT, 0.0);
+        assert_ne!(STARFIELD_HEIGHT, 1000.0);
     }
     #[test]
     fn wrap_box_is_constant_absolute_size() {
