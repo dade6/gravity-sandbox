@@ -76,7 +76,10 @@ impl Default for StarSeed {
 /// Shared textures for the sky (built once at startup).
 #[derive(Resource)]
 struct StarfieldTextures {
-    glow: Handle<Image>,
+    /// Flat hard-edged disc: the dust (most stars).
+    dot: Handle<Image>,
+    /// Disc + soft halo + 4-point diffraction cross: the rare big stars.
+    spike: Handle<Image>,
     galaxy: Handle<Image>,
 }
 
@@ -191,26 +194,6 @@ const GALAXY_SIZE_MAX: f32 = 150.0;
 // Textures
 // ============================================================
 
-/// Luminous-star glow texture: a small saturated core plus a soft radial
-/// bloom fading to exactly 0 at the rim (no hard disc edge on black).
-/// ONE shared handle for the whole field; per-star tint via the Sprite
-/// color, per-star size via `custom_size`.
-///
-/// The whole quad writes firefly's stencil (see `STARFIELD_HEIGHT` below)
-/// so the shadow shader exempts the starfield — recognized by its z
-/// (`stencil.g ≈ -500k`) — core AND halo. That is what stops a planet's
-/// shadow cone from switching a background star off.
-const STAR_GLOW_SIZE: u32 = 64;
-/// Fraction of the quad radius that is fully saturated (the hot core).
-const GLOW_CORE: f32 = 0.2;
-/// Exponent of the `(1 - t)^k` bloom falloff. Deliberately BELOW 1: sprite
-/// alpha blending renders `tint × tex.a × tex.a`, so a gentle curve is
-/// what keeps the halo above the sky's brightness (a steep curve would
-/// leave a faint dark ring instead of a glow).
-const GLOW_FALLOFF_EXP: f32 = 0.7;
-/// Quad size = star diameter × this: the halo reaches ~2 diameters past
-/// the dot, like the bloom in the astrophoto reference.
-const HALO_SCALE: f32 = 5.0;
 /// Sentinella `SpriteHeight` che dice alla shader sprite di firefly (vendored)
 /// "questo è uno sprite dello starfield": scrive lo stencil su tutto il quad
 /// e nessuna normal map. Negativa per non collidere MAI con le altezze reali
@@ -222,21 +205,89 @@ const STARFIELD_HEIGHT: f32 = -999.0;
 /// stanno tutte sopra questa soglia.
 const SKY_WASH_REFERENCE: f32 = 0.9;
 
-fn star_glow_pixels() -> Vec<u8> {
-    let w = STAR_GLOW_SIZE as usize;
-    let half = STAR_GLOW_SIZE as f32 / 2.0;
+// ---- Texture delle stelle (look "Cargo Space" / foto di riferimento) ----
+//
+// Il campo è BIMODALE, come nell'articolo e nella foto di Sirio:
+//  * la polvere (la grande maggioranza) è fatta di PUNTINI PIATTI: un disco
+//    saturo con bordo netto, nessun alone -> legge come punto netto e piccolo;
+//  * le poche stelle grandi hanno un disco saturo + alone morbido + CROCE DI
+//    DIFFRAZIONE a 4 punte, come i vetri dei telescopi (e come Sirio nella
+//    foto che ha ispirato il look).
+// Entrambe condividono la stessa tinta per stella (`Sprite::color`) e la
+// sentinella SpriteHeight, quindi valgono le stesse regole su stencil e ombre.
+
+const STAR_TEX_SIZE: u32 = 64;
+/// Quad del puntino = diametro × questo: il disco coincide con il raggio
+/// dichiarato, bordo netto.
+const DOT_SCALE: f32 = 1.0;
+/// Il disco saturo occupa questa frazione del raggio del quad (il resto è
+/// alone/croce): con SPIKE_SCALE 3.2 il nucleo resta ≈ il raggio dichiarato.
+const SPIKE_CORE: f32 = 0.18;
+/// Quad della stella grande = diametro × questo (spazio per alone + croce).
+const SPIKE_SCALE: f32 = 3.2;
+/// Esponente del falloff dell'alone (nucleo -> bordo). Qui > 1: l'alone deve
+/// essere STRETTO, perché lo spazio esterno lo devono occupare le punte: un
+/// alone "grasso" affoga la croce e ogni stella grossa torna un blob.
+const SPIKE_BLOOM_EXP: f32 = 1.6;
+/// Larghezza della croce (frazione del raggio del quad): ~1px sullo schermo
+/// per le stelle grandi (quad ~25px). Più sottile sfarfalla e sparisce.
+const SPIKE_WIDTH: f32 = 0.080;
+/// Intensità delle punte (piene: sono la firma della stella grande).
+const SPIKE_STRENGTH: f32 = 0.8;
+/// Decadimento delle punte verso il bordo: LENTO (< 1) così i bracci
+/// arrivano lunghi fino al bordo del quad, come nella foto di Sirio.
+const SPIKE_TAPER_EXP: f32 = 0.5;
+
+/// Puntino piatto: disco saturo con bordo netto (1px di antialiasing).
+fn star_dot_pixels() -> Vec<u8> {
+    let w = STAR_TEX_SIZE as usize;
+    let half = STAR_TEX_SIZE as f32 / 2.0;
+    let aa = 1.5 / half;
     let mut pixels = Vec::with_capacity(w * w * 4);
     for y in 0..w {
         for x in 0..w {
             let dx = x as f32 + 0.5 - half;
             let dy = y as f32 + 0.5 - half;
-            let d = ((dx * dx + dy * dy).sqrt() / half).min(1.0);
-            let a = if d <= GLOW_CORE {
+            let d = (dx * dx + dy * dy).sqrt() / half;
+            let a = if d <= 1.0 - aa {
                 1.0
             } else {
-                let t = (d - GLOW_CORE) / (1.0 - GLOW_CORE);
-                (1.0 - t).powf(GLOW_FALLOFF_EXP)
+                ((1.0 - d) / aa).clamp(0.0, 1.0)
             };
+            pixels.extend_from_slice(&[255u8, 255u8, 255u8, (a * 255.0) as u8]);
+        }
+    }
+    pixels
+}
+
+/// Stella grande: nucleo saturo + alone morbido + croce di diffrazione a 4
+/// punte. Le punte sfumano verso il bordo (le "spikes" lunghe della foto),
+/// e la loro ampiezza è costante in unità normalizzate, così non si assottigliano
+/// all'aumentare del raggio.
+fn star_spike_pixels() -> Vec<u8> {
+    let w = STAR_TEX_SIZE as usize;
+    let half = STAR_TEX_SIZE as f32 / 2.0;
+    let mut pixels = Vec::with_capacity(w * w * 4);
+    for y in 0..w {
+        for x in 0..w {
+            let ax = (x as f32 + 0.5 - half) / half;
+            let ay = (y as f32 + 0.5 - half) / half;
+            let d = (ax * ax + ay * ay).sqrt().min(1.0);
+            // Nucleo + alone.
+            let bloom = if d <= SPIKE_CORE {
+                1.0
+            } else {
+                let t = (d - SPIKE_CORE) / (1.0 - SPIKE_CORE);
+                (1.0 - t).powf(SPIKE_BLOOM_EXP)
+            };
+            // Croce: due lobi gaussiani lungo X e Y, che si attenuano con la
+            // distanza dal centro (il massimo è al centro, come nella realtà).
+            // Il decadimento è LENTO (SPIKE_TAPER_EXP < 1) così le punte
+            // restano più luminose dell'alone verso il bordo del quad.
+            let taper = (1.0 - d).powf(SPIKE_TAPER_EXP);
+            let gauss = |o: f32| (-(o * o) / (SPIKE_WIDTH * SPIKE_WIDTH)).exp();
+            let spike = SPIKE_STRENGTH * taper * gauss(ay).max(gauss(ax));
+            let a = bloom.max(spike).clamp(0.0, 1.0);
             pixels.extend_from_slice(&[255u8, 255u8, 255u8, (a * 255.0) as u8]);
         }
     }
@@ -297,38 +348,46 @@ pub fn seed_for(base: u64, layer: u8, grid: IVec2) -> u64 {
 // ============================================================
 
 fn setup_starfield(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let glow = images.add(crate::rendering::textures::build_image(
-        star_glow_pixels(),
-        STAR_GLOW_SIZE,
-        STAR_GLOW_SIZE,
+    let dot = images.add(crate::rendering::textures::build_image(
+        star_dot_pixels(),
+        STAR_TEX_SIZE,
+        STAR_TEX_SIZE,
+    ));
+    let spike = images.add(crate::rendering::textures::build_image(
+        star_spike_pixels(),
+        STAR_TEX_SIZE,
+        STAR_TEX_SIZE,
     ));
     let galaxy = images.add(crate::rendering::textures::build_image(
         galaxy_pixels(),
         GALAXY_TEX_SIZE,
         GALAXY_TEX_SIZE,
     ));
-    commands.insert_resource(StarfieldTextures { glow, galaxy });
+    commands.insert_resource(StarfieldTextures { dot, spike, galaxy });
 }
 
 // ============================================================
 // Star look
 // ============================================================
 
-/// Radius + HDR tint of one star. Most stars are small pinpricks; a few per
-/// sector are much bigger AND brighter — the "bigger stars with a
-/// randomized size" of the article, and what makes a field read as a real
-/// sky (a couple of bright stars among many faint ones).
-fn star_look(rng: &mut StdRng, layer: usize) -> (f32, Color) {
+/// Radius + HDR tint of one star, plus whether it is one of the rare BIG
+/// ones. Most stars are small pinpricks; a few per sector are much bigger
+/// AND brighter — the article's "bigger stars with a randomized size", and
+/// what makes a field read as a real sky. The big/small split also decides
+/// the TEXTURE: dust = flat dot, big = halo + 4-point diffraction cross.
+fn star_look(rng: &mut StdRng, layer: usize) -> (f32, Color, bool) {
     let cfg = &LAYERS[layer];
     if rng.gen_bool(cfg.big_chance) {
         (
             rng.gen_range(cfg.radius_mid..cfg.radius_max),
             star_color(rng, layer, 1.3),
+            true,
         )
     } else {
         (
             rng.gen_range(cfg.radius_min..cfg.radius_mid),
             star_color(rng, layer, 1.0),
+            false,
         )
     }
 }
@@ -428,16 +487,24 @@ fn spawn_sector(
 
     commands.entity(root).with_children(|parent| {
         for _ in 0..cfg.stars {
-            let (radius, color) = star_look(&mut rng, layer as usize);
+            let (radius, color, is_big) = star_look(&mut rng, layer as usize);
             let pos = Vec2::new(
                 rng.gen_range(0.0..SECTOR_SIZE),
                 rng.gen_range(0.0..SECTOR_SIZE),
             );
+            // Bimodal look: dust is a flat dot the size of its radius; the
+            // big ones get the halo + diffraction cross, with the quad
+            // scaled so the saturated core still matches the radius.
+            let (image, quad_scale) = if is_big {
+                (textures.spike.clone(), SPIKE_SCALE)
+            } else {
+                (textures.dot.clone(), DOT_SCALE)
+            };
             parent.spawn((
                 Sprite {
-                    image: textures.glow.clone(),
+                    image,
                     color,
-                    custom_size: Some(Vec2::splat(radius * 2.0 * HALO_SCALE)),
+                    custom_size: Some(Vec2::splat(radius * 2.0 * quad_scale)),
                     ..default()
                 },
                 // Marks it for firefly's sprite shader: whole-quad stencil,
@@ -778,8 +845,13 @@ mod tests {
         let total = 2000;
         let mut big = 0;
         for _ in 0..total {
-            let (radius, color) = star_look(&mut rng, 0);
+            let (radius, color, is_big) = star_look(&mut rng, 0);
             assert!(radius >= cfg.radius_min && radius <= cfg.radius_max);
+            assert_eq!(
+                is_big,
+                radius > cfg.radius_mid,
+                "the big/small flag must agree with the radius band"
+            );
             if radius > cfg.radius_mid {
                 big += 1;
                 let s = color.to_srgba();
@@ -822,39 +894,73 @@ mod tests {
     }
 
     #[test]
-    fn star_glow_has_saturated_core_and_soft_bloom() {
-        // Two properties at once: a saturated core (the bright dot) and a
-        // gradual bloom that fades to exactly 0 at the rim.
-        let px = star_glow_pixels();
-        let w = STAR_GLOW_SIZE as usize;
-        let half = STAR_GLOW_SIZE as f32 / 2.0;
-        let center = px[(w / 2 * w + w / 2) * 4 + 3];
-        assert_eq!(center, 255, "core centre must be fully opaque");
-        assert_eq!(px[3], 0, "glow must fade to exactly 0 at the rim");
-        // Saturated well inside GLOW_CORE...
-        let inner_x = w / 2 + (half * GLOW_CORE * 0.8) as usize;
-        assert_eq!(
-            px[(w / 2 * w + inner_x) * 4 + 3],
-            255,
-            "core must stay saturated out to 80% of GLOW_CORE"
-        );
-        // ...and the bloom must still be bright where the ring artifact
-        // would appear: sprite blending renders tint × a², so a steep
-        // curve would make the halo DARKER than the washed sky.
+    fn star_dot_is_flat_with_a_hard_edge() {
+        // The dust look: a saturated disc that stays at full alpha all the
+        // way out and then drops to 0 — no halo, so it reads as a crisp
+        // pinprick instead of a fuzzy blob.
+        let px = star_dot_pixels();
+        let w = STAR_TEX_SIZE as usize;
+        let half = STAR_TEX_SIZE as f32 / 2.0;
         let row = w / 2;
-        let mut prev = 255u8;
-        for x in (w / 2)..w {
-            let a = px[(row * w + x) * 4 + 3];
-            assert!(a <= prev, "glow must fall off monotonically (x={x})");
-            prev = a;
-        }
-        let mid_x = w / 2 + (half * 0.5) as usize;
-        let mid_a = px[(row * w + mid_x) * 4 + 3] as f32 / 255.0;
-        assert!(
-            mid_a > 0.5,
-            "bloom must stay bright at half radius (a={mid_a}) — a steep \
-             curve would leave a dark ring on the lit sky"
+        let center = px[(row * w + w / 2) * 4 + 3];
+        assert_eq!(center, 255, "dot centre must be fully opaque");
+        assert_eq!(px[3], 0, "outside the disc the alpha must be 0");
+        // Flat: half radius and 80% radius are the same full alpha.
+        let half_x = row + (half * 0.5) as usize;
+        let far_x = row + (half * 0.8) as usize;
+        assert_eq!(
+            px[(row * w + half_x) * 4 + 3],
+            255,
+            "dot must be flat at r/2"
         );
+        assert_eq!(
+            px[(row * w + far_x) * 4 + 3],
+            255,
+            "dot must be flat at 0.8r"
+        );
+        // Hard edge: the corner of the quad is empty, the rim is not.
+        assert_eq!(px[(0 * w + 0) * 4 + 3], 0, "corner must be empty");
+    }
+
+    #[test]
+    fn spike_texture_has_a_four_point_cross() {
+        // The big-star look: a saturated core, a soft halo AND — the point
+        // of the whole thing — a 4-point diffraction cross that beats the
+        // halo along the axes (otherwise it drowns in the glow).
+        let px = star_spike_pixels();
+        let w = STAR_TEX_SIZE as usize;
+        let half = STAR_TEX_SIZE as f32 / 2.0;
+        let c = w / 2;
+        let at = |x: usize, y: usize| px[(y * w + x) * 4 + 3] as f32 / 255.0;
+        assert_eq!(at(c, c), 1.0, "core centre must be fully opaque");
+        assert_eq!(px[3], 0, "halo must fade to exactly 0 at the rim");
+        // Along the axis at 0.7r vs the diagonal at the same radius.
+        let r = half * 0.7;
+        let diag = r / std::f32::consts::SQRT_2;
+        let on_axis = at(c + r as usize, c);
+        let on_diagonal = at(c + diag as usize, c + diag as usize);
+        assert!(
+            on_axis > on_diagonal * 1.15,
+            "the cross must stand out from the halo (axis {on_axis} vs diagonal {on_diagonal})"
+        );
+        // The spikes must survive to the outer part of the quad.
+        let outer = at(c + (half * 0.9) as usize, c);
+        assert!(
+            outer > 0.2,
+            "spike must still be visible at 0.9r (a={outer})"
+        );
+        // And the halo must still be there for the off-axis directions.
+        let halo = at(c + (half * 0.35) as usize, c);
+        assert!(halo > 0.5, "halo must stay bright near the core (a={halo})");
+        // Vertically symmetric: the cross has four arms, not two.
+        let h_arm = at(c + r as usize, c);
+        let v_arm = at(c, c + r as usize);
+        assert!(
+            (h_arm - v_arm).abs() < 0.06,
+            "the cross must be symmetric (h {h_arm} vs v {v_arm})"
+        );
+        let v = at(c, c + (half * 0.8) as usize);
+        assert!(v > 0.2, "the vertical arm must exist too (a={v})");
     }
 
     #[test]
@@ -886,7 +992,7 @@ mod tests {
         let mut faintest = f32::MAX;
         for layer in 0..LAYERS.len() {
             for _ in 0..200 {
-                let (_, color) = star_look(&mut rng, layer);
+                let (_, color, _) = star_look(&mut rng, layer);
                 let s = color.to_srgba();
                 assert!(
                     (s.alpha - 1.0).abs() < 1e-6,
@@ -915,7 +1021,7 @@ mod tests {
         let peak_mean = |layer: usize, rng: &mut StdRng| -> f32 {
             let mut acc = 0.0;
             for _ in 0..200 {
-                let (_, color) = star_look(rng, layer);
+                let (_, color, _) = star_look(rng, layer);
                 let s = color.to_srgba();
                 acc += s.red.max(s.green).max(s.blue);
             }
