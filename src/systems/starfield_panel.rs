@@ -66,14 +66,17 @@ pub struct StarfieldResetBtn;
 // Etichette in italiano e nome del parametro fra parentesi: il nome è quello
 // del codice, così si può chiedere una modifica chiamandolo per nome.
 
-/// (chiave, etichetta) dei 7 campi comuni ai tre layer.
+/// (chiave, etichetta) dei campi comuni ai tre layer. La gamma di dimensione
+/// copre TUTTO (polvere → stelle grandi) e la parallasse ha la sua
+/// oscillazione: ogni layer è un cielo completo, non "il livello delle piccole".
 const LAYER_FIELDS: &[(&str, &str)] = &[
-    ("factor", "Parallasse (1 = incollato alla camera):"),
+    ("factor", "Parallasse media (1 = incollato alla camera):"),
+    ("spread", "Oscillazione parallasse (± per stella):"),
     ("stars", "Stelle per settore (densità):"),
-    ("rmin", "Raggio minimo (piccole):"),
-    ("rmid", "Raggio medio (soglia grandi):"),
-    ("rmax", "Raggio massimo (grandi):"),
-    ("big", "Quota stelle grandi (0-1):"),
+    ("rmin", "Dimensione minima (polvere):"),
+    ("rmax", "Dimensione massima (grandi):"),
+    ("sizepow", "Sbilanciamento dimensioni (>1 = più piccole):"),
+    ("big", "Quota stelle con alone+croce (0-1):"),
     ("bright", "Luminosità (1 = riferimento):"),
 ];
 
@@ -81,31 +84,34 @@ const LAYER_FIELDS: &[(&str, &str)] = &[
 fn layer_key_at(layer_no: usize, field: &str) -> &'static str {
     // Le stringhe sono statiche e poche: la tabella evita allocazioni nel
     // percorso di spawn del pannello.
-    const KEYS: [[&str; 7]; 3] = [
+    const KEYS: [[&str; 8]; 3] = [
         [
             "set_sf_l1_factor",
+            "set_sf_l1_spread",
             "set_sf_l1_stars",
             "set_sf_l1_rmin",
-            "set_sf_l1_rmid",
             "set_sf_l1_rmax",
+            "set_sf_l1_sizepow",
             "set_sf_l1_big",
             "set_sf_l1_bright",
         ],
         [
             "set_sf_l2_factor",
+            "set_sf_l2_spread",
             "set_sf_l2_stars",
             "set_sf_l2_rmin",
-            "set_sf_l2_rmid",
             "set_sf_l2_rmax",
+            "set_sf_l2_sizepow",
             "set_sf_l2_big",
             "set_sf_l2_bright",
         ],
         [
             "set_sf_l3_factor",
+            "set_sf_l3_spread",
             "set_sf_l3_stars",
             "set_sf_l3_rmin",
-            "set_sf_l3_rmid",
             "set_sf_l3_rmax",
+            "set_sf_l3_sizepow",
             "set_sf_l3_big",
             "set_sf_l3_bright",
         ],
@@ -639,7 +645,10 @@ mod tests {
                 shown,
                 "campo {key} instabile nel round-trip"
             );
-            // ...e un valore DIVERSO cambia davvero il parametro.
+            // ...e un valore DIVERSO cambia davvero il parametro. Si confronta
+            // il TUNING, non la stringa mostrata: il campo è arrotondato a 2-3
+            // decimali, quindi una differenza piccola non si vede nel testo.
+            let before = t.clone();
             let current: f32 = shown.parse().expect("il campo mostra un numero");
             let changed = current * 0.5 + 0.123;
             let changed_txt = format!("{changed:.4}");
@@ -648,11 +657,7 @@ mod tests {
                     apply_starfield_field(key, &changed_txt, &mut t),
                     "campo {key}: valore diverso non applicato"
                 );
-                assert_ne!(
-                    starfield_field_value(key, &t),
-                    shown,
-                    "campo {key}: valore diverso ma invariato"
-                );
+                assert_ne!(t, before, "campo {key}: valore diverso ma tuning invariato");
             }
             t = StarfieldTuning::default();
         }
@@ -705,7 +710,7 @@ mod tests {
                 .query_filtered::<Entity, With<PropInput>>()
                 .iter(world)
                 .count(),
-            35,
+            38,
             "tutti i campi del pannello devono esistere"
         );
     }
@@ -715,8 +720,8 @@ mod tests {
         let keys = all_field_keys();
         assert_eq!(
             keys.len(),
-            35,
-            "21 di layer + 7 forma + 3 galassie + 4 settori"
+            38,
+            "24 di layer (8 × 3) + 7 forma + 3 galassie + 4 settori"
         );
         let mut seen = std::collections::HashSet::new();
         for key in keys {

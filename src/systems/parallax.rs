@@ -54,6 +54,19 @@ pub struct StarSector {
 #[derive(Component)]
 pub struct Star;
 
+/// Parallasse PER STELLA: una stella non si muove col fattore del layer ma con
+/// il suo. `base` è la posizione in spazio-base del layer (dentro il settore),
+/// `factor` la sua parallasse e `layer_factor` quella del settore che la
+/// contiene; la posizione locale è `base + cam·(factor − layer_factor)`, così
+/// il mondo vale `base + cam·factor` — la stella scivola dentro il settore
+/// mentre la camera si sposta, come se fosse a una profondità sua.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct StarDrift {
+    pub base: Vec2,
+    pub factor: f32,
+    pub layer_factor: f32,
+}
+
 /// Marker on a distant galaxy / nebula sprite (the "weenie").
 #[derive(Component)]
 pub struct Galaxy;
@@ -113,10 +126,17 @@ impl Plugin for ParallaxPlugin {
             .add_systems(Startup, setup_starfield)
             // L'ordine conta: applicare il tuning (che rigenera le texture e
             // butta giù i settori) PRIMA di streammare, così il nuovo cielo
-            // compare nello stesso frame in cui si conferma un valore.
+            // compare nello stesso frame in cui si conferma un valore. Il
+            // drift per stella viene per ultimo (le stelle nuove esistono
+            // solo dopo il sync dei comandi).
             .add_systems(
                 Update,
-                (refresh_starfield_on_tuning_change, stream_starfield).chain(),
+                (
+                    refresh_starfield_on_tuning_change,
+                    stream_starfield,
+                    update_star_drift,
+                )
+                    .chain(),
             );
     }
 }
@@ -125,26 +145,37 @@ impl Plugin for ParallaxPlugin {
 // Tuning — ogni parametro dello sfondo, regolabile a caldo
 // ============================================================
 
-/// Tunables of ONE layer. `z` is deliberately NOT here: the render depth is
-/// structural (a layer must always sit behind every planet, see
-/// `sync_sprite_z`), not an aesthetic knob.
+/// Tunables of ONE layer.
+///
+/// Ogni layer è un cielo COMPLETO: contiene sia polvere (puntini piatti) sia
+/// stelle grandi (alone + croce), con dimensione, colore e parallasse che
+/// variano stella per stella. I layer si distinguono per DENSITÀ e per la
+/// profondità media (parallasse), non per il tipo di stella — "il livello
+/// delle piccole" e "il livello delle grandi" è sbagliato: in cielo le stelle
+/// grandi stanno a tutte le distanze. `z` non è qui: la profondità di render
+/// è strutturale (vedi `LAYER_Z`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LayerTuning {
     /// Stars generated in every sector of this layer. Density is what
     /// matters (`stars / sector_size²`), so resizing the sectors requires
     /// rescaling this.
     pub stars: u32,
-    /// Radius range of the many small stars (world units).
+    /// Estremo PICCOLO della gamma di dimensione (la polvere).
     pub radius_min: f32,
-    pub radius_mid: f32,
-    /// Radius range of the few big stars.
+    /// Estremo GRANDE della gamma (le stelle più grandi del layer).
     pub radius_max: f32,
-    /// Probability that a given star is one of the big ones (0..1).
-    /// f32 come tutto il resto del tuning: un f64 causerebbe un falso
-    /// "cambiato" a ogni round-trip del pannello (0.12_f32 != 0.12_f64).
+    /// Sbilanciamento della distribuzione delle dimensioni: > 1 concentra le
+    /// stelle verso `radius_min` (tanta polvere, poche stelle grandi).
+    pub size_power: f32,
+    /// Quota di stelle che riceve alone + croce di diffrazione (0..1). Sono
+    /// sempre le più grandi della gamma.
     pub big_chance: f32,
-    /// 1.0 = glued to the camera (infinitely far), lower = nearer.
+    /// Parallasse MEDIA del layer (1.0 = incollato alla camera).
     pub factor: f32,
+    /// Oscillazione della parallasse attorno a `factor`, stella per stella
+    /// (0 = tutte alla stessa profondità). È ciò che evita che un layer sia
+    /// "a una sola distanza": nel cielo le stelle hanno profondità diverse.
+    pub factor_spread: f32,
     /// Multiplier on this layer's HDR tints (1.0 = reference look).
     pub brightness: f32,
 }
@@ -203,36 +234,43 @@ pub(crate) const LAYER_Z: [f32; 3] = [-500_000.0, -499_000.0, -498_000.0];
 /// Stars per 1000×1000 sector = 1.25e-4 / 5e-5 / 1.3e-5 per unit², i.e. the
 /// density of the previous 10000×10000 box (12500 / 5000 / 1250 stars), so
 /// swapping the finite box for streamed sectors does not change the look.
+///
+/// Le gamme di dimensione si SOVRAPPONGONO (tutti i layer hanno polvere E
+/// stelle grandi): il layer lontano è denso di polvere, quello vicino è più
+/// rado ma con stelle mediamente più grandi e brillanti.
 impl Default for StarfieldTuning {
     fn default() -> Self {
         Self {
             layers: [
                 LayerTuning {
                     stars: 125,
-                    radius_min: 0.5,
-                    radius_mid: 0.95,
-                    radius_max: 1.5,
-                    big_chance: 0.12,
+                    radius_min: 0.30,
+                    radius_max: 2.4,
+                    size_power: 2.2,
+                    big_chance: 0.05,
                     factor: 1.0,
+                    factor_spread: 0.02,
                     brightness: 1.0,
                 },
                 LayerTuning {
                     stars: 50,
-                    radius_min: 1.0,
-                    radius_mid: 1.8,
+                    radius_min: 0.40,
                     radius_max: 3.0,
-                    big_chance: 0.12,
+                    size_power: 2.0,
+                    big_chance: 0.07,
                     factor: 0.95,
-                    brightness: 1.0,
+                    factor_spread: 0.04,
+                    brightness: 1.2,
                 },
                 LayerTuning {
                     stars: 13,
-                    radius_min: 2.0,
-                    radius_mid: 2.8,
+                    radius_min: 0.55,
                     radius_max: 4.0,
-                    big_chance: 0.15,
+                    size_power: 1.8,
+                    big_chance: 0.12,
                     factor: 0.9,
-                    brightness: 1.0,
+                    factor_spread: 0.06,
+                    brightness: 1.45,
                 },
             ],
             sector_size: 1000.0,
@@ -457,69 +495,93 @@ fn refresh_starfield_on_tuning_change(
 // Star look
 // ============================================================
 
-/// Radius + HDR tint of one star, plus whether it is one of the rare BIG
-/// ones. Most stars are small pinpricks; a few per sector are much bigger
-/// AND brighter — the article's "bigger stars with a randomized size", and
-/// what makes a field read as a real sky. The big/small split also decides
-/// the TEXTURE: dust = flat dot, big = halo + 4-point diffraction cross.
-fn star_look(rng: &mut StdRng, layer: usize, t: &StarfieldTuning) -> (f32, Color, bool) {
+/// Come appare UNA stella: dimensione, tinta, se ha alone+croce, e la SUA
+/// parallasse.
+#[derive(Clone, Copy, Debug)]
+struct StarSpec {
+    radius: f32,
+    color: Color,
+    is_big: bool,
+    factor: f32,
+}
+
+/// Estrae una stella dalla gamma del layer.
+///
+/// Regola di fondo: la gamma di dimensione copre TUTTO, da polvere a stella
+/// grande, e `size_power` decide quanto è sbilanciata verso il piccolo (nel
+/// cielo vero: tanta polvere, poche stelle grandi). `big_chance` non sceglie
+/// una classe a parte: decide quante stelle ricevono alone + croce, e quelle
+/// stanno sempre in cima alla gamma.
+///
+/// OGNI stella ha inoltre la sua parallasse (`factor` ± `factor_spread`) e la
+/// sua tinta (`payload` di temperatura pesato), così un layer non è mai "a una
+/// sola distanza e un solo colore".
+///
+/// Il NUMERO di estrazioni RNG è FISSO (7) qualunque siano i parametri: così
+/// cambiare dimensione/colore/parallasse dal pannello NON sposta le stelle
+/// (le posizioni vengono estratte dopo), e il confronto A/B è possibile.
+fn star_look(rng: &mut StdRng, layer: usize, t: &StarfieldTuning) -> StarSpec {
     let cfg = &t.layers[layer];
-    if rng.gen_bool(cfg.big_chance as f64) {
-        (
-            rng.gen_range(cfg.radius_mid..cfg.radius_max),
-            star_color(rng, layer, 1.3, cfg.brightness),
-            true,
-        )
+    let rmin = cfg.radius_min.max(0.01);
+    let rmax = cfg.radius_max.max(rmin + 0.05);
+    // 7 estrazioni, sempre nello stesso ordine.
+    let u = rng.gen_range(0.0f32..1.0);
+    let big_roll = rng.gen_bool(cfg.big_chance.clamp(0.0, 1.0) as f64);
+    let level_jitter = rng.gen_range(0.9f32..1.1);
+    let pick = rng.gen_range(0.0f32..1.0);
+    let j1 = rng.gen_range(0.0f32..1.0);
+    let j2 = rng.gen_range(0.0f32..1.0);
+    let factor_jitter = rng.gen_range(-1.0f32..1.0);
+
+    let mut size_norm = u.powf(cfg.size_power.clamp(0.05, 8.0));
+    if big_roll {
+        // Le stelle con croce stanno in cima alla gamma di dimensione.
+        size_norm = size_norm.max(0.72);
+    }
+    let radius = rmin * (rmax / rmin).powf(size_norm);
+    let level = cfg.brightness * (1.05 + 1.5 * size_norm) * level_jitter;
+    let color = star_color(pick, j1.max(j2), level);
+    let factor = if cfg.factor_spread > 0.0 {
+        (cfg.factor + factor_jitter * cfg.factor_spread).clamp(0.0, 1.0)
     } else {
-        (
-            rng.gen_range(cfg.radius_min..cfg.radius_mid),
-            star_color(rng, layer, 1.0, cfg.brightness),
-            false,
-        )
+        cfg.factor
+    };
+    StarSpec {
+        radius,
+        color,
+        is_big: big_roll,
+        factor,
     }
 }
 
-/// Generate a star colour based on which layer it belongs to
-/// (0 = background, 1 = mid, 2 = foreground), scaled by `boost`.
+/// Tinta HDR di una stella, data una temperatura pesata (`pick`), un
+/// parametro di saturazione (`sat`) e la luminanza (`level`).
 ///
-/// Tints are OPAQUE (alpha 1.0) and in HDR (values > 1): the sky is washed
-/// by the sun's halo (Halo Brightness ~1), so a dim tint renders DARKER
-/// than the sky and the "star" looks like a black speck — that is exactly
-/// how the field stopped looking luminous. Staying above
-/// `SKY_WASH_REFERENCE` in every layer keeps the stars as light sources;
-/// the camera is `Hdr` and tonemaps, so >1 saturates to a bright dot
-/// (like the blown-out cores in the astrophoto reference).
-fn star_color(rng: &mut StdRng, layer: usize, boost: f32, brightness: f32) -> Color {
-    let boost = boost * brightness;
-    match layer {
-        0 => {
-            // Layer 1: small, faint — cool white-blue pinpricks.
-            let b = rng.gen_range(1.1..1.9) * boost;
-            let cool = rng.gen_range(0.86..0.96);
-            Color::srgb(b * cool, b * cool, b)
-        }
-        1 => {
-            // Layer 2: mid — warm or cool hue.
-            let b = rng.gen_range(1.5..2.5) * boost;
-            if rng.gen_bool(0.5) {
-                // Warm: red-orange-yellow
-                let g = rng.gen_range(0.62..0.80);
-                let bl = rng.gen_range(0.30..0.50);
-                Color::srgb(b, b * g, b * bl)
-            } else {
-                // Cool: blue-white
-                let r = rng.gen_range(0.70..0.86);
-                let g = rng.gen_range(0.80..0.92);
-                Color::srgb(b * r, b * g, b)
-            }
-        }
-        _ => {
-            // Layer 3: big, bright — white to warm yellow (Vega-like).
-            let b = rng.gen_range(2.2..3.4) * boost;
-            let warm = rng.gen_range(0.90..1.0);
-            let bl = rng.gen_range(0.70..0.88);
-            Color::srgb(b, b * warm, b * bl)
-        }
+/// Le tinte sono OPACHE (alpha 1.0) e in HDR: il cielo è lavato dall'alone
+/// del sole (Halo Brightness ~1), quindi una tinta più scura dello sfondo
+/// rende la stella un puntino NERO — è esattamente così che il campo aveva
+/// smesso di sembrare luminoso. Il canale più alto vale sempre `level`, che
+/// resta sopra `SKY_WASH_REFERENCE` (test: `star_tints_outshine_the_washed_sky`).
+///
+/// La temperatura NON dipende dal layer (una stella blu può essere vicina o
+/// lontana): la distribuzione è quella reale — molte fredde/blu-bianche,
+/// parecchie bianche, poche gialle, rare arancioni.
+fn star_color(pick: f32, sat: f32, level: f32) -> Color {
+    // sat 0..1 → 0.90..1.10 sulla saturazione (variazione di colore).
+    let s = 0.90 + 0.20 * sat.clamp(0.0, 1.0);
+    let cool = |k: f32| (k * s).clamp(0.0, 1.0);
+    if pick < 0.45 {
+        // Blu-bianco (le più comuni).
+        Color::srgb(level * cool(0.84), level * cool(0.91), level)
+    } else if pick < 0.80 {
+        // Bianco.
+        Color::srgb(level, level * cool(0.96), level * cool(0.92))
+    } else if pick < 0.95 {
+        // Giallo-caldo.
+        Color::srgb(level, level * cool(0.80), level * cool(0.55))
+    } else {
+        // Arancione-rossa (le più rare).
+        Color::srgb(level, level * cool(0.68), level * cool(0.42))
     }
 }
 
@@ -577,32 +639,42 @@ fn spawn_sector(
 
     commands.entity(root).with_children(|parent| {
         for _ in 0..cfg.stars {
-            let (radius, color, is_big) = star_look(&mut rng, li, t);
-            let pos = Vec2::new(
+            let spec = star_look(&mut rng, li, t);
+            // Posizione in spazio-base del layer: il settore è solo un
+            // contenitore, la stella ha una parallasse propria (StarDrift).
+            let base = Vec2::new(
                 rng.gen_range(0.0..t.sector_size),
                 rng.gen_range(0.0..t.sector_size),
             );
             // Bimodal look: dust is a flat dot the size of its radius; the
             // big ones get the halo + diffraction cross, with the quad
             // scaled so the saturated core still matches the radius.
-            let (image, quad_scale) = if is_big {
+            let (image, quad_scale) = if spec.is_big {
                 (textures.spike.clone(), t.spike_scale)
             } else {
                 (textures.dot.clone(), t.dot_scale)
             };
+            // Posizionata già corretta al frame di spawn (i comandi sono
+            // deferred: senza questo la cella nuova lampeggerebbe).
+            let local = base + cam * (spec.factor - cfg.factor);
             parent.spawn((
                 Sprite {
                     image,
-                    color,
-                    custom_size: Some(Vec2::splat(radius * 2.0 * quad_scale)),
+                    color: spec.color,
+                    custom_size: Some(Vec2::splat(spec.radius * 2.0 * quad_scale)),
                     ..default()
                 },
                 // Marks it for firefly's sprite shader: whole-quad stencil,
                 // no normal map (see STARFIELD_HEIGHT).
                 SpriteHeight(STARFIELD_HEIGHT),
-                Transform::from_xyz(pos.x, pos.y, 0.0),
+                Transform::from_xyz(local.x, local.y, 0.0),
                 Visibility::default(),
                 RenderLayers::layer(1),
+                StarDrift {
+                    base,
+                    factor: spec.factor,
+                    layer_factor: cfg.factor,
+                },
                 Star,
             ));
         }
@@ -814,10 +886,11 @@ pub(crate) fn starfield_field_value(key: &str, t: &StarfieldTuning) -> String {
         let l = &t.layers[li];
         return match field {
             "factor" => format!("{:.3}", l.factor),
+            "spread" => format!("{:.3}", l.factor_spread),
             "stars" => format!("{}", l.stars),
             "rmin" => format!("{:.2}", l.radius_min),
-            "rmid" => format!("{:.2}", l.radius_mid),
             "rmax" => format!("{:.2}", l.radius_max),
+            "sizepow" => format!("{:.2}", l.size_power),
             "big" => format!("{:.2}", l.big_chance),
             "bright" => format!("{:.2}", l.brightness),
             _ => String::new(),
@@ -856,29 +929,23 @@ pub(crate) fn apply_starfield_field(key: &str, text: &str, t: &mut StarfieldTuni
     if let Some((li, field)) = layer_key(stripped) {
         // Copio i valori PRIMA di mutare: `t.layers[li]` e `t` non possono
         // essere presi in prestito insieme.
-        let (mut rmin, mut rmid, mut rmax) = (
-            t.layers[li].radius_min,
-            t.layers[li].radius_mid,
-            t.layers[li].radius_max,
-        );
+        let (mut rmin, mut rmax) = (t.layers[li].radius_min, t.layers[li].radius_max);
         match field {
             "factor" => t.layers[li].factor = v.clamp(0.0, 1.0),
+            "spread" => t.layers[li].factor_spread = v.clamp(0.0, 0.25),
             "stars" => t.layers[li].stars = v.max(0.0) as u32,
-            "rmin" => rmin = v.clamp(0.1, 20.0),
-            "rmid" => rmid = v.clamp(0.1, 20.0),
+            "rmin" => rmin = v.clamp(0.05, 10.0),
             "rmax" => rmax = v.clamp(0.1, 20.0),
+            "sizepow" => t.layers[li].size_power = v.clamp(0.3, 6.0),
             "big" => t.layers[li].big_chance = v.clamp(0.0, 1.0),
             "bright" => t.layers[li].brightness = v.clamp(0.0, 4.0),
             _ => return false,
         }
-        // Ordine delle soglie: `radius_min..radius_mid` è un range RNG, e un
-        // range vuoto PANICA (settore morto). Si normalizza sempre.
-        let (a, b, c) = (rmin.min(rmid), rmid, rmax);
-        let b = b.max(a + 0.01);
-        let c = c.max(b + 0.01);
-        t.layers[li].radius_min = a;
-        t.layers[li].radius_mid = b;
-        t.layers[li].radius_max = c;
+        // La gamma di dimensione deve restare NON vuota e ordinata: `rmin` è
+        // il minore, `rmax` il maggiore.
+        let rmin = rmin.min(rmax);
+        t.layers[li].radius_min = rmin;
+        t.layers[li].radius_max = rmax.max(rmin + 0.05);
         return *t != before;
     }
     match stripped {
@@ -903,6 +970,30 @@ pub(crate) fn apply_starfield_field(key: &str, text: &str, t: &mut StarfieldTuni
     t.keep_margin = t.keep_margin.max(t.spawn_margin);
     t.galaxy_size_max = t.galaxy_size_max.max(t.galaxy_size_min + 1.0);
     *t != before
+}
+
+/// Muove OGNI stella secondo la SUA parallasse: la profondità non è più una
+/// proprietà del layer ma della stella, quindi `factor_spread > 0` fa scivolare
+/// le stelle l'una rispetto all'altra mentre la camera si sposta (è quello che
+/// toglie l'effetto "pareti piatte a tre distanze").
+///
+/// `Without<StarDrift>` sulla query della camera: due parametri che toccano
+/// `Transform` nello stesso sistema sono un B0001 (panic all'avvio → su WASM
+/// "Unreachable code").
+fn update_star_drift(
+    cameras: Query<&Transform, (With<Camera2d>, With<MainCamera>, Without<StarDrift>)>,
+    mut stars: Query<(&StarDrift, &mut Transform)>,
+) {
+    crate::mark_system("update_star_drift");
+    let Ok(cam_tf) = cameras.single() else {
+        return;
+    };
+    let cam = cam_tf.translation.truncate();
+    for (drift, mut tf) in stars.iter_mut() {
+        let local = drift.base + cam * (drift.factor - drift.layer_factor);
+        tf.translation.x = local.x;
+        tf.translation.y = local.y;
+    }
 }
 
 // ============================================================
@@ -1099,33 +1190,144 @@ mod tests {
 
     #[test]
     fn big_stars_are_rare_but_present() {
-        // Size variety: most stars small, some big AND brighter.
+        // Varietà di dimensione: quasi tutte piccole, poche grandi E più
+        // brillanti. La stella con croce sta sempre in cima alla gamma.
         let mut rng = StdRng::seed_from_u64(7);
         let cfg = sf_default().layers[0];
         let total = 2000;
         let mut big = 0;
         for _ in 0..total {
-            let (radius, color, is_big) = star_look(&mut rng, 0, &sf_default());
-            assert!(radius >= cfg.radius_min && radius <= cfg.radius_max);
-            assert_eq!(
-                is_big,
-                radius > cfg.radius_mid,
-                "the big/small flag must agree with the radius band"
-            );
-            if radius > cfg.radius_mid {
+            let spec = star_look(&mut rng, 0, &sf_default());
+            assert!(spec.radius >= cfg.radius_min && spec.radius <= cfg.radius_max);
+            let s = spec.color.to_srgba();
+            if spec.is_big {
                 big += 1;
-                let s = color.to_srgba();
+                // Le stelle con croce sono le più grandi della gamma...
+                assert!(
+                    spec.radius > cfg.radius_min * 1.8,
+                    "una stella con croce non può essere della taglia della polvere ({})",
+                    spec.radius
+                );
+                // ...e le più luminose.
                 assert!(
                     s.red.max(s.green).max(s.blue) >= 1.3,
-                    "big stars must also be brighter"
+                    "le stelle grandi devono essere anche più brillanti"
                 );
             }
         }
         let ratio = big as f32 / total as f32;
         assert!(
-            (ratio - cfg.big_chance as f32).abs() < 0.05,
-            "big-star ratio {ratio} should be close to {}",
+            (ratio - cfg.big_chance).abs() < 0.05,
+            "quota di stelle con croce {ratio} ≠ {}",
             cfg.big_chance
+        );
+    }
+
+    /// La richiesta di fondo: NON si deve poter dire "il layer 1 è quello
+    /// delle piccole e il layer 3 quello delle grandi". Ogni layer genera sia
+    /// polvere sia stelle grandi, con dimensioni intermedie in mezzo.
+    #[test]
+    fn every_layer_has_both_dust_and_big_stars() {
+        for layer in 0..sf_default().layers.len() {
+            let cfg = sf_default().layers[layer];
+            let mut rng = StdRng::seed_from_u64(1000 + layer as u64);
+            let (mut smallest, mut largest) = (f32::MAX, 0.0f32);
+            let mut with_cross = 0;
+            let total = 3000;
+            for _ in 0..total {
+                let spec = star_look(&mut rng, layer, &sf_default());
+                smallest = smallest.min(spec.radius);
+                largest = largest.max(spec.radius);
+                if spec.is_big {
+                    with_cross += 1;
+                }
+            }
+            assert!(
+                smallest < cfg.radius_min * 1.05,
+                "layer {layer}: manca la polvere (minimo {smallest})"
+            );
+            assert!(
+                largest > cfg.radius_max * 0.9,
+                "layer {layer}: mancano le stelle grandi (massimo {largest})"
+            );
+            // E la gamma è continua: il 10% più grande è ben sopra la mediana.
+            assert!(
+                largest > smallest * 2.0,
+                "layer {layer}: la gamma di dimensione è troppo stretta"
+            );
+            assert!(
+                with_cross > 0,
+                "layer {layer}: nessuna stella con alone+croce"
+            );
+        }
+    }
+
+    /// Ogni stella ha la SUA parallasse: le stelle dello stesso layer non
+    /// stanno tutte alla stessa profondità.
+    #[test]
+    fn parallax_factor_oscillates_inside_each_layer() {
+        for layer in 0..sf_default().layers.len() {
+            let cfg = sf_default().layers[layer];
+            let mut rng = StdRng::seed_from_u64(77 + layer as u64);
+            let mut min = f32::MAX;
+            let mut max = f32::MIN;
+            for _ in 0..2000 {
+                let spec = star_look(&mut rng, layer, &sf_default());
+                assert!(
+                    (0.0..=1.0).contains(&spec.factor),
+                    "parallasse fuori range: {}",
+                    spec.factor
+                );
+                min = min.min(spec.factor);
+                max = max.max(spec.factor);
+            }
+            assert!(
+                max - min > cfg.factor_spread * 0.5,
+                "layer {layer}: la parallasse non oscilla ({min}..{max}, spread {})",
+                cfg.factor_spread
+            );
+            // La finestra è [factor ± spread]; il clamp a 1.0 può tagliarne
+            // una parte (factor 1.0 con spread > 0), quindi si verifica
+            // l'APPARTENENZA, non l'uguaglianza coi bordi.
+            assert!(
+                min >= cfg.factor - cfg.factor_spread - 1e-3
+                    && max <= cfg.factor + cfg.factor_spread + 1e-3,
+                "layer {layer}: oscillazione {min}..{max} fuori dalla finestra \
+                 {}..{}",
+                cfg.factor - cfg.factor_spread,
+                cfg.factor + cfg.factor_spread
+            );
+        }
+    }
+
+    /// Una stella con parallasse propria viene disegnata dove dice la formula
+    /// `base + cam·factor`, qualunque sia il fattore del suo settore.
+    #[test]
+    fn per_star_drift_renders_at_its_own_factor() {
+        let cam = Vec2::new(-320.0, 480.0);
+        let drift = StarDrift {
+            base: Vec2::new(250.0, 700.0),
+            factor: 0.93,
+            layer_factor: 1.0,
+        };
+        let local = drift.base + cam * (drift.factor - drift.layer_factor);
+        // Mondo = origine del settore + locale, con l'origine a cam·factor_layer.
+        let sector_origin = cam * drift.layer_factor;
+        let world = sector_origin + local;
+        let expected = drift.base + cam * drift.factor;
+        assert!(
+            (world - expected).length() < 1e-4,
+            "mondo {world:?} ≠ base + cam·factor {expected:?}"
+        );
+        // E la deriva sullo schermo è (1 − factor) × lo spostamento camera.
+        let cam2 = cam + Vec2::new(100.0, 0.0);
+        let local2 = drift.base + cam2 * (drift.factor - drift.layer_factor);
+        let world2 = cam2 * drift.layer_factor + local2;
+        let slide = ((world2 - cam2) - (world - cam)).length();
+        assert!(
+            (slide - 100.0 * (1.0 - drift.factor)).abs() < 1e-3,
+            "deriva {slide} ≠ {}",
+            100.0 * (1.0 - drift.factor)
         );
     }
 
@@ -1256,8 +1458,7 @@ mod tests {
         let mut faintest = f32::MAX;
         for layer in 0..sf_default().layers.len() {
             for _ in 0..200 {
-                let (_, color, _) = star_look(&mut rng, layer, &sf_default());
-                let s = color.to_srgba();
+                let s = star_look(&mut rng, layer, &sf_default()).color.to_srgba();
                 assert!(
                     (s.alpha - 1.0).abs() < 1e-6,
                     "layer {layer}: star tint must be opaque (alpha={})",
@@ -1285,8 +1486,7 @@ mod tests {
         let peak_mean = |layer: usize, rng: &mut StdRng| -> f32 {
             let mut acc = 0.0;
             for _ in 0..200 {
-                let (_, color, _) = star_look(rng, layer, &sf_default());
-                let s = color.to_srgba();
+                let s = star_look(rng, layer, &sf_default()).color.to_srgba();
                 acc += s.red.max(s.green).max(s.blue);
             }
             acc / 200.0
