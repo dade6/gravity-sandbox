@@ -955,6 +955,36 @@ mod tests {
         assert!((LAYERS[0].factor - 1.0).abs() < 1e-6);
     }
 
+    /// Guards the invariant that broke v0.14.138: in firefly's vendored
+    /// sprite shader the NORMAL-MAP write — the thing that gives planets
+    /// their day/night terminator — must stay identical to the crate's
+    /// original logic (`color.a >= 1.0`) and must NEVER depend on the
+    /// starfield sentinel. If it does, a misbehaving condition makes every
+    /// sprite write no normal at all: planets then lose the terminator and
+    /// receive Halo Brightness instead of Planet Light (the "the lit part
+    /// of the planets is gone" bug), while the shadow cones still work.
+    #[test]
+    fn sprite_shader_normal_write_stays_independent_of_starfield() {
+        let src = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/sprite.wgsl")
+            .expect("vendored sprite shader must be present");
+        let normal_start = src
+            .find("if color.a >= 1.0 {")
+            .expect("the normal write must keep the crate's original condition");
+        let tail = &src[normal_start..];
+        let normal_block = &tail[..tail.find("return res").unwrap_or(tail.len())];
+        assert!(
+            !normal_block.contains("is_starfield"),
+            "the normal-map write must NOT depend on the starfield sentinel"
+        );
+        // The sentinel threshold must use standard WGSL (`select`), never an
+        // if-expression: WGSL has no if-expression and naga tolerance is not
+        // something to bet the planet lighting on.
+        assert!(
+            src.contains("select(1.0, 0.004, is_starfield)"),
+            "the starfield stencil threshold must use WGSL `select`"
+        );
+    }
+
     #[test]
     fn viewport_half_prefers_window_and_falls_back_headless() {
         // Headless (no Window, no resolved target info): 16:9 fallback, so

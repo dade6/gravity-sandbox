@@ -75,16 +75,20 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     var color = textureSample(sprite_texture, sprite_sampler, in.uv);
     var normal = textureSample(normal_texture, sprite_sampler, in.uv);
     
-    // v0.14.137: gli sprite dello starfield (SpriteHeight = sentinella
-    // NEGATIVA, vedi STARFIELD_HEIGHT in parallax.rs) scrivono lo stencil
-    // su TUTTO il proprio quad, anche dove la texture e' semitrasparente.
-    // Perche': la shader delle ombre identifica lo starfield dalla sua z
-    // (stencil.g ~= -500k) ed esenta quei pixel; senza stencil l'alone
-    // esterno (alpha < 1) restava "spazio vuoto" e il cono d'ombra dei
-    // pianeti lo spegneva. Gli sprite normali (pianeti, glow della stella)
-    // mantengono la soglia storica alpha >= 1.0.
+    // v0.14.137/139: gli sprite dello starfield (SpriteHeight = sentinella
+    // NEGATIVA, vedi STARFIELD_HEIGHT in parallax.rs) scrivono lo stencil su
+    // TUTTO il proprio quad, anche dove la texture e' semitrasparente: la
+    // shader delle ombre riconosce lo starfield dalla sua z (stencil.g ~=
+    // -500k) e ne esenta i pixel, e senza stencil l'alone esterno
+    // (alpha < 1) restava "spazio vuoto" -> il cono d'ombra lo spegneva.
+    // Gli sprite normali (pianeti, glow della stella) mantengono la soglia
+    // storica alpha >= 1.0.
+    // NB: `select(f, t, cond)` e' WGSL standard — un if-EXPRESSION non
+    // esiste in WGSL e non va dato per scontato che naga lo accetti.
+    // Questa condizione tocca SOLO lo stencil (le ombre): mai la normal map.
     let is_starfield = in.height < 0.0;
-    let writes_stencil = if is_starfield { color.a > 0.004 } else { color.a >= 1.0 };
+    let stencil_min_alpha = select(1.0, 0.004, is_starfield);
+    let writes_stencil = color.a >= stencil_min_alpha;
 
     if writes_stencil {
         // stencil come da crate (alpha = 1.0: presenza sprite)
@@ -94,10 +98,16 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
         res.stencil = vec4<f32>(0, 0, 0, 0);
     }
 
-    // Lo starfield NON scrive la normal map: resta "pixel senza
-    // superficie" per la lightmap (riceve Halo Brightness, mai Planet
-    // Light), comportamento identico a prima.
-    if color.a >= 1.0 && !is_starfield {
+    // v0.14.139: la scrittura della NORMAL MAP resta IDENTICA allo shader
+    // originale del crate (`color.a >= 1.0`), senza nessun riferimento allo
+    // starfield. La normal map e' cio' che da' la porzione illuminata ai
+    // pianeti (terminatore giorno/notte): legarla a una condizione nuova
+    // significa che se quella condizione si comporta male NESSUNA sprite la
+    // scrive -> i pianeti perdono il terminatore e ricevono Halo Brightness
+    // al posto di Planet Light (bug v0.14.138: "non si vede piu' la porzione
+    // illuminata dei pianeti"). Il percorso critico per i pianeti NON deve
+    // dipendere da nulla di nostro.
+    if color.a >= 1.0 {
         if normal_dummy == 1 {
             res.normal = vec4<f32>(0, 0, f32(f16(0.1)), 1.0);
         }
