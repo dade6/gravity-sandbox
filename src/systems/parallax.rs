@@ -108,87 +108,150 @@ pub struct ParallaxPlugin;
 impl Plugin for ParallaxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StarSeed>()
+            .init_resource::<StarfieldTuning>()
             .init_resource::<StarSectors>()
             .add_systems(Startup, setup_starfield)
-            .add_systems(Update, stream_starfield);
+            // L'ordine conta: applicare il tuning (che rigenera le texture e
+            // butta giù i settori) PRIMA di streammare, così il nuovo cielo
+            // compare nello stesso frame in cui si conferma un valore.
+            .add_systems(
+                Update,
+                (refresh_starfield_on_tuning_change, stream_starfield).chain(),
+            );
     }
 }
 
 // ============================================================
-// Layer configuration
+// Tuning — ogni parametro dello sfondo, regolabile a caldo
 // ============================================================
 
-struct LayerConfig {
-    /// Stars generated in every sector of this layer (density is what
-    /// matters: `stars / SECTOR_SIZE²`).
-    stars: usize,
+/// Tunables of ONE layer. `z` is deliberately NOT here: the render depth is
+/// structural (a layer must always sit behind every planet, see
+/// `sync_sprite_z`), not an aesthetic knob.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerTuning {
+    /// Stars generated in every sector of this layer. Density is what
+    /// matters (`stars / sector_size²`), so resizing the sectors requires
+    /// rescaling this.
+    pub stars: u32,
     /// Radius range of the many small stars (world units).
-    radius_min: f32,
-    radius_mid: f32,
+    pub radius_min: f32,
+    pub radius_mid: f32,
     /// Radius range of the few big stars.
-    radius_max: f32,
-    /// Probability that a given star is one of the big ones.
-    big_chance: f64,
+    pub radius_max: f32,
+    /// Probability that a given star is one of the big ones (0..1).
+    /// f32 come tutto il resto del tuning: un f64 causerebbe un falso
+    /// "cambiato" a ogni round-trip del pannello (0.12_f32 != 0.12_f64).
+    pub big_chance: f32,
     /// 1.0 = glued to the camera (infinitely far), lower = nearer.
-    factor: f32,
-    /// Render depth: must stay far behind any planet (`sync_sprite_z`
-    /// writes planets at `z = -distance`). -500k is inside the custom far
-    /// plane (±1e6, see `main_camera_projection`).
-    z: f32,
+    pub factor: f32,
+    /// Multiplier on this layer's HDR tints (1.0 = reference look).
+    pub brightness: f32,
 }
+
+/// Every knob of the sky, live-editable from the "Sfondo" panel.
+///
+/// The whole field is a pure function of these values plus the sector
+/// coordinates, so a change simply rebuilds the sky: sectors are dropped and
+/// the streaming system respawns them with the new numbers (same seed → same
+/// stars, new look). Defaults are the shipped reference look — see
+/// `defaults_match_the_reference_look`.
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct StarfieldTuning {
+    pub layers: [LayerTuning; 3],
+    /// Side of one sky sector, world units.
+    pub sector_size: f32,
+    /// World-space margin used when *spawning* sectors: keeps the seam
+    /// off-screen without paying for a whole extra ring of cells.
+    pub spawn_margin: f32,
+    /// Margin used when *keeping* sectors alive. Larger than the spawn
+    /// margin so a cell sitting exactly on the boundary is not
+    /// spawned/despawned every frame while the camera jitters (hysteresis).
+    pub keep_margin: f32,
+    /// Upper bound on live sectors per layer. Only binds at extreme
+    /// zoom-out: 100 sectors = a 10×10 grid = 10000×10000 units of sky.
+    /// Zooming out further shows empty sky past that radius.
+    pub max_sectors: usize,
+    /// Probability that a sector of the near layer also gets a galaxy.
+    pub galaxy_chance: f32,
+    /// Galaxy size range (world units).
+    pub galaxy_size_min: f32,
+    pub galaxy_size_max: f32,
+    /// Quad of a dust dot = its diameter × this.
+    pub dot_scale: f32,
+    /// Quad of a big star = its diameter × this (room for halo + cross).
+    pub spike_scale: f32,
+    /// Saturated core, as a fraction of the big star's quad radius.
+    pub spike_core: f32,
+    /// Bloom falloff exponent. > 1 keeps the halo TIGHT so the cross wins
+    /// outside it; a fat halo drowns the cross and every big star is a blob.
+    pub spike_bloom_exp: f32,
+    /// Cross width, fraction of the quad radius (~1px on screen for big
+    /// stars). Thinner than that shimmers while panning and disappears.
+    pub spike_width: f32,
+    /// Spike intensity.
+    pub spike_strength: f32,
+    /// Spike taper towards the rim: < 1 gives long arms to the quad edge.
+    pub spike_taper_exp: f32,
+}
+
+/// Render depth per layer: far behind any planet (`sync_sprite_z` writes
+/// planets at `z = -distance`), and inside the custom far plane (±1e6,
+/// see `main_camera_projection`).
+pub(crate) const LAYER_Z: [f32; 3] = [-500_000.0, -499_000.0, -498_000.0];
 
 /// Stars per 1000×1000 sector = 1.25e-4 / 5e-5 / 1.3e-5 per unit², i.e. the
 /// density of the previous 10000×10000 box (12500 / 5000 / 1250 stars), so
 /// swapping the finite box for streamed sectors does not change the look.
-const LAYERS: [LayerConfig; 3] = [
-    LayerConfig {
-        stars: 125,
-        radius_min: 0.5,
-        radius_mid: 0.95,
-        radius_max: 1.5,
-        big_chance: 0.12,
-        factor: 1.0,
-        z: -500_000.0,
-    },
-    LayerConfig {
-        stars: 50,
-        radius_min: 1.0,
-        radius_mid: 1.8,
-        radius_max: 3.0,
-        big_chance: 0.12,
-        factor: 0.95,
-        z: -499_000.0,
-    },
-    LayerConfig {
-        stars: 13,
-        radius_min: 2.0,
-        radius_mid: 2.8,
-        radius_max: 4.0,
-        big_chance: 0.15,
-        factor: 0.9,
-        z: -498_000.0,
-    },
-];
-
-/// Side of one sky sector, in world units.
-const SECTOR_SIZE: f32 = 1000.0;
-/// World-space margin used when *spawning* sectors: keeps the seam
-/// off-screen without paying for a whole extra ring of cells.
-const SPAWN_MARGIN: f32 = 250.0;
-/// World-space margin used when *keeping* sectors alive. Larger than the
-/// spawn margin so a cell sitting exactly on the boundary is not
-/// spawned/despawned every frame while the camera jitters (hysteresis).
-const KEEP_MARGIN: f32 = SECTOR_SIZE;
-/// Upper bound on live sectors per layer. Only binds at extreme zoom-out:
-/// 100 sectors = a 10×10 grid = 10000×10000 units of sky and ~18.8k
-/// entities total (the same budget as the old finite box). Zooming out
-/// further shows empty sky past that radius instead of growing forever.
-const MAX_SECTORS_PER_LAYER: usize = 100;
-/// Probability that a sector of the near layer also gets a galaxy.
-const GALAXY_CHANCE: f64 = 0.22;
-/// Galaxy size range (world units).
-const GALAXY_SIZE_MIN: f32 = 60.0;
-const GALAXY_SIZE_MAX: f32 = 150.0;
+impl Default for StarfieldTuning {
+    fn default() -> Self {
+        Self {
+            layers: [
+                LayerTuning {
+                    stars: 125,
+                    radius_min: 0.5,
+                    radius_mid: 0.95,
+                    radius_max: 1.5,
+                    big_chance: 0.12,
+                    factor: 1.0,
+                    brightness: 1.0,
+                },
+                LayerTuning {
+                    stars: 50,
+                    radius_min: 1.0,
+                    radius_mid: 1.8,
+                    radius_max: 3.0,
+                    big_chance: 0.12,
+                    factor: 0.95,
+                    brightness: 1.0,
+                },
+                LayerTuning {
+                    stars: 13,
+                    radius_min: 2.0,
+                    radius_mid: 2.8,
+                    radius_max: 4.0,
+                    big_chance: 0.15,
+                    factor: 0.9,
+                    brightness: 1.0,
+                },
+            ],
+            sector_size: 1000.0,
+            spawn_margin: 250.0,
+            keep_margin: 1000.0,
+            max_sectors: 100,
+            galaxy_chance: 0.22,
+            galaxy_size_min: 60.0,
+            galaxy_size_max: 150.0,
+            dot_scale: 1.0,
+            spike_scale: 3.2,
+            spike_core: 0.18,
+            spike_bloom_exp: 1.6,
+            spike_width: 0.080,
+            spike_strength: 0.8,
+            spike_taper_exp: 0.5,
+        }
+    }
+}
 
 // ============================================================
 // Textures
@@ -217,28 +280,10 @@ const SKY_WASH_REFERENCE: f32 = 0.9;
 // sentinella SpriteHeight, quindi valgono le stesse regole su stencil e ombre.
 
 const STAR_TEX_SIZE: u32 = 64;
-/// Quad del puntino = diametro × questo: il disco coincide con il raggio
-/// dichiarato, bordo netto.
-const DOT_SCALE: f32 = 1.0;
-/// Il disco saturo occupa questa frazione del raggio del quad (il resto è
-/// alone/croce): con SPIKE_SCALE 3.2 il nucleo resta ≈ il raggio dichiarato.
-const SPIKE_CORE: f32 = 0.18;
-/// Quad della stella grande = diametro × questo (spazio per alone + croce).
-const SPIKE_SCALE: f32 = 3.2;
-/// Esponente del falloff dell'alone (nucleo -> bordo). Qui > 1: l'alone deve
-/// essere STRETTO, perché lo spazio esterno lo devono occupare le punte: un
-/// alone "grasso" affoga la croce e ogni stella grossa torna un blob.
-const SPIKE_BLOOM_EXP: f32 = 1.6;
-/// Larghezza della croce (frazione del raggio del quad): ~1px sullo schermo
-/// per le stelle grandi (quad ~25px). Più sottile sfarfalla e sparisce.
-const SPIKE_WIDTH: f32 = 0.080;
-/// Intensità delle punte (piene: sono la firma della stella grande).
-const SPIKE_STRENGTH: f32 = 0.8;
-/// Decadimento delle punte verso il bordo: LENTO (< 1) così i bracci
-/// arrivano lunghi fino al bordo del quad, come nella foto di Sirio.
-const SPIKE_TAPER_EXP: f32 = 0.5;
 
 /// Puntino piatto: disco saturo con bordo netto (1px di antialiasing).
+/// Nessun alone, quindi nessun parametro: il suo quad coincide col diametro
+/// dichiarato (`dot_scale` nel tuning vale 1.0).
 fn star_dot_pixels() -> Vec<u8> {
     let w = STAR_TEX_SIZE as usize;
     let half = STAR_TEX_SIZE as f32 / 2.0;
@@ -260,13 +305,16 @@ fn star_dot_pixels() -> Vec<u8> {
     pixels
 }
 
-/// Stella grande: nucleo saturo + alone morbido + croce di diffrazione a 4
-/// punte. Le punte sfumano verso il bordo (le "spikes" lunghe della foto),
-/// e la loro ampiezza è costante in unità normalizzate, così non si assottigliano
-/// all'aumentare del raggio.
-fn star_spike_pixels() -> Vec<u8> {
+/// Stella grande: nucleo saturo + alone + croce di diffrazione a 4 punte.
+///
+/// Ogni numero della forma viene dal tuning (`spike_core`, `spike_bloom_exp`,
+/// `spike_width`, `spike_strength`, `spike_taper_exp`): sono le manopole del
+/// pannello "Sfondo". Vedi `StarfieldTuning` per il significato e le
+/// trappole (alone grasso = croce invisibile).
+fn star_spike_pixels(t: &StarfieldTuning) -> Vec<u8> {
     let w = STAR_TEX_SIZE as usize;
     let half = STAR_TEX_SIZE as f32 / 2.0;
+    let core = t.spike_core.clamp(0.01, 0.9);
     let mut pixels = Vec::with_capacity(w * w * 4);
     for y in 0..w {
         for x in 0..w {
@@ -274,19 +322,20 @@ fn star_spike_pixels() -> Vec<u8> {
             let ay = (y as f32 + 0.5 - half) / half;
             let d = (ax * ax + ay * ay).sqrt().min(1.0);
             // Nucleo + alone.
-            let bloom = if d <= SPIKE_CORE {
+            let bloom = if d <= core {
                 1.0
             } else {
-                let t = (d - SPIKE_CORE) / (1.0 - SPIKE_CORE);
-                (1.0 - t).powf(SPIKE_BLOOM_EXP)
+                let k = (d - core) / (1.0 - core);
+                (1.0 - k).powf(t.spike_bloom_exp.max(0.05))
             };
             // Croce: due lobi gaussiani lungo X e Y, che si attenuano con la
             // distanza dal centro (il massimo è al centro, come nella realtà).
-            // Il decadimento è LENTO (SPIKE_TAPER_EXP < 1) così le punte
+            // Il decadimento è LENTO (spike_taper_exp < 1) così le punte
             // restano più luminose dell'alone verso il bordo del quad.
-            let taper = (1.0 - d).powf(SPIKE_TAPER_EXP);
-            let gauss = |o: f32| (-(o * o) / (SPIKE_WIDTH * SPIKE_WIDTH)).exp();
-            let spike = SPIKE_STRENGTH * taper * gauss(ay).max(gauss(ax));
+            let taper = (1.0 - d).powf(t.spike_taper_exp.max(0.05));
+            let width = t.spike_width.clamp(0.005, 0.5);
+            let gauss = |o: f32| (-(o * o) / (width * width)).exp();
+            let spike = t.spike_strength * taper * gauss(ay).max(gauss(ax));
             let a = bloom.max(spike).clamp(0.0, 1.0);
             pixels.extend_from_slice(&[255u8, 255u8, 255u8, (a * 255.0) as u8]);
         }
@@ -347,23 +396,61 @@ pub fn seed_for(base: u64, layer: u8, grid: IVec2) -> u64 {
 // Setup
 // ============================================================
 
-fn setup_starfield(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
-    let dot = images.add(crate::rendering::textures::build_image(
-        star_dot_pixels(),
-        STAR_TEX_SIZE,
-        STAR_TEX_SIZE,
-    ));
-    let spike = images.add(crate::rendering::textures::build_image(
-        star_spike_pixels(),
-        STAR_TEX_SIZE,
-        STAR_TEX_SIZE,
-    ));
-    let galaxy = images.add(crate::rendering::textures::build_image(
-        galaxy_pixels(),
-        GALAXY_TEX_SIZE,
-        GALAXY_TEX_SIZE,
-    ));
-    commands.insert_resource(StarfieldTextures { dot, spike, galaxy });
+/// Build (or rebuild) the shared sky textures from the current tuning.
+/// Cheap: two 64×64 and one 128×128 procedural image, ~40KB of work.
+fn build_starfield_textures(
+    images: &mut Assets<Image>,
+    tuning: &StarfieldTuning,
+) -> StarfieldTextures {
+    StarfieldTextures {
+        dot: images.add(crate::rendering::textures::build_image(
+            star_dot_pixels(),
+            STAR_TEX_SIZE,
+            STAR_TEX_SIZE,
+        )),
+        spike: images.add(crate::rendering::textures::build_image(
+            star_spike_pixels(tuning),
+            STAR_TEX_SIZE,
+            STAR_TEX_SIZE,
+        )),
+        galaxy: images.add(crate::rendering::textures::build_image(
+            galaxy_pixels(),
+            GALAXY_TEX_SIZE,
+            GALAXY_TEX_SIZE,
+        )),
+    }
+}
+
+fn setup_starfield(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    tuning: Res<StarfieldTuning>,
+) {
+    let textures = build_starfield_textures(&mut images, &tuning);
+    commands.insert_resource(textures);
+}
+
+/// Live-apply a tuning change: rebuild the shared textures and drop every
+/// live sector so the streaming system respawns them with the new numbers
+/// (same seeds → same stars, new look). Cheap to get wrong, hence the
+/// explicit ordering before `stream_starfield` in the plugin.
+fn refresh_starfield_on_tuning_change(
+    mut commands: Commands,
+    tuning: Res<StarfieldTuning>,
+    mut images: ResMut<Assets<Image>>,
+    mut sectors: ResMut<StarSectors>,
+) {
+    if !tuning.is_changed() {
+        return;
+    }
+    crate::mark_system("refresh_starfield_on_tuning_change");
+    // Textures first: new sprites must not be built against stale handles.
+    let textures = build_starfield_textures(&mut images, &tuning);
+    commands.insert_resource(textures);
+    // Then the sky itself.
+    for (_, entity) in sectors.0.drain() {
+        commands.entity(entity).despawn();
+    }
 }
 
 // ============================================================
@@ -375,18 +462,18 @@ fn setup_starfield(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 /// AND brighter — the article's "bigger stars with a randomized size", and
 /// what makes a field read as a real sky. The big/small split also decides
 /// the TEXTURE: dust = flat dot, big = halo + 4-point diffraction cross.
-fn star_look(rng: &mut StdRng, layer: usize) -> (f32, Color, bool) {
-    let cfg = &LAYERS[layer];
-    if rng.gen_bool(cfg.big_chance) {
+fn star_look(rng: &mut StdRng, layer: usize, t: &StarfieldTuning) -> (f32, Color, bool) {
+    let cfg = &t.layers[layer];
+    if rng.gen_bool(cfg.big_chance as f64) {
         (
             rng.gen_range(cfg.radius_mid..cfg.radius_max),
-            star_color(rng, layer, 1.3),
+            star_color(rng, layer, 1.3, cfg.brightness),
             true,
         )
     } else {
         (
             rng.gen_range(cfg.radius_min..cfg.radius_mid),
-            star_color(rng, layer, 1.0),
+            star_color(rng, layer, 1.0, cfg.brightness),
             false,
         )
     }
@@ -402,7 +489,8 @@ fn star_look(rng: &mut StdRng, layer: usize) -> (f32, Color, bool) {
 /// `SKY_WASH_REFERENCE` in every layer keeps the stars as light sources;
 /// the camera is `Hdr` and tonemaps, so >1 saturates to a bright dot
 /// (like the blown-out cores in the astrophoto reference).
-fn star_color(rng: &mut StdRng, layer: usize, boost: f32) -> Color {
+fn star_color(rng: &mut StdRng, layer: usize, boost: f32, brightness: f32) -> Color {
+    let boost = boost * brightness;
     match layer {
         0 => {
             // Layer 1: small, faint — cool white-blue pinpricks.
@@ -455,8 +543,8 @@ fn galaxy_color(rng: &mut StdRng) -> Color {
 /// freshly streamed sector never flashes at the world origin before its
 /// first update (the entity does not exist in the World yet on the frame
 /// it is spawned — commands are deferred).
-fn sector_origin_world(grid: IVec2, factor: f32, cam: Vec2) -> Vec2 {
-    grid.as_vec2() * SECTOR_SIZE + cam * factor
+fn sector_origin_world(grid: IVec2, factor: f32, cam: Vec2, sector_size: f32) -> Vec2 {
+    grid.as_vec2() * sector_size + cam * factor
 }
 
 /// Deterministically build one sector (stars, plus sometimes a galaxy on
@@ -468,11 +556,13 @@ fn spawn_sector(
     base_seed: u64,
     cam: Vec2,
     textures: &StarfieldTextures,
+    t: &StarfieldTuning,
 ) -> Entity {
-    let cfg = &LAYERS[layer as usize];
+    let li = layer as usize;
+    let cfg = t.layers[li];
     let mut rng = StdRng::seed_from_u64(seed_for(base_seed, layer, grid));
 
-    let origin = sector_origin_world(grid, cfg.factor, cam);
+    let origin = sector_origin_world(grid, cfg.factor, cam, t.sector_size);
     let root = commands
         .spawn((
             StarSector {
@@ -480,25 +570,25 @@ fn spawn_sector(
                 grid,
                 factor: cfg.factor,
             },
-            Transform::from_xyz(origin.x, origin.y, cfg.z),
+            Transform::from_xyz(origin.x, origin.y, LAYER_Z[li]),
             Visibility::default(),
         ))
         .id();
 
     commands.entity(root).with_children(|parent| {
         for _ in 0..cfg.stars {
-            let (radius, color, is_big) = star_look(&mut rng, layer as usize);
+            let (radius, color, is_big) = star_look(&mut rng, li, t);
             let pos = Vec2::new(
-                rng.gen_range(0.0..SECTOR_SIZE),
-                rng.gen_range(0.0..SECTOR_SIZE),
+                rng.gen_range(0.0..t.sector_size),
+                rng.gen_range(0.0..t.sector_size),
             );
             // Bimodal look: dust is a flat dot the size of its radius; the
             // big ones get the halo + diffraction cross, with the quad
             // scaled so the saturated core still matches the radius.
             let (image, quad_scale) = if is_big {
-                (textures.spike.clone(), SPIKE_SCALE)
+                (textures.spike.clone(), t.spike_scale)
             } else {
-                (textures.dot.clone(), DOT_SCALE)
+                (textures.dot.clone(), t.dot_scale)
             };
             parent.spawn((
                 Sprite {
@@ -520,11 +610,12 @@ fn spawn_sector(
         // Weenies: distant galaxies are navigation landmarks, so they live
         // on the NEAR layer, where they drift a little (they have some
         // parallax instead of being nailed to the screen).
-        if layer as usize == LAYERS.len() - 1 && rng.gen_bool(GALAXY_CHANCE) {
-            let size = rng.gen_range(GALAXY_SIZE_MIN..GALAXY_SIZE_MAX);
+        if li == t.layers.len() - 1 && rng.gen_bool(t.galaxy_chance as f64) {
+            let size =
+                rng.gen_range(t.galaxy_size_min..t.galaxy_size_max.max(t.galaxy_size_min + 1.0));
             let pos = Vec2::new(
-                rng.gen_range(0.0..SECTOR_SIZE),
-                rng.gen_range(0.0..SECTOR_SIZE),
+                rng.gen_range(0.0..t.sector_size),
+                rng.gen_range(0.0..t.sector_size),
             );
             let angle = rng.gen_range(0.0..std::f32::consts::TAU);
             parent.spawn((
@@ -553,12 +644,12 @@ fn spawn_sector(
 /// Grid range (inclusive) of the sectors that intersect the view expanded
 /// by `margin` world units, clamped so the enumeration can never explode
 /// when zoomed far out.
-fn sector_range(center: Vec2, half_view: Vec2, margin: f32) -> (IVec2, IVec2) {
-    let side = (MAX_SECTORS_PER_LAYER as f32).sqrt().ceil() as i32;
+fn sector_range(center: Vec2, half_view: Vec2, margin: f32, t: &StarfieldTuning) -> (IVec2, IVec2) {
+    let side = (t.max_sectors as f32).sqrt().ceil() as i32;
     let max_span = side * 2 + 1;
     let reach = half_view + Vec2::splat(margin);
-    let lo_f = (center - reach) / SECTOR_SIZE;
-    let hi_f = (center + reach) / SECTOR_SIZE;
+    let lo_f = (center - reach) / t.sector_size;
+    let hi_f = (center + reach) / t.sector_size;
     let mut lo = IVec2::new(lo_f.x.floor() as i32, lo_f.y.floor() as i32);
     let mut hi = IVec2::new(hi_f.x.floor() as i32, hi_f.y.floor() as i32);
     // Clamp the span (centred on the view) at extreme zoom-out.
@@ -579,18 +670,18 @@ fn sector_range(center: Vec2, half_view: Vec2, margin: f32) -> (IVec2, IVec2) {
 /// expanded by `margin`, nearest-first and capped at
 /// `MAX_SECTORS_PER_LAYER`, so a far zoom-out keeps the densest part of the
 /// sky instead of exploding.
-fn desired_sectors(center: Vec2, half_view: Vec2, margin: f32) -> Vec<IVec2> {
-    let (lo, hi) = sector_range(center, half_view, margin);
+fn desired_sectors(center: Vec2, half_view: Vec2, margin: f32, t: &StarfieldTuning) -> Vec<IVec2> {
+    let (lo, hi) = sector_range(center, half_view, margin, t);
     let mut cells: Vec<(f32, IVec2)> = Vec::new();
     for gy in lo.y..=hi.y {
         for gx in lo.x..=hi.x {
             let grid = IVec2::new(gx, gy);
-            let d = grid.as_vec2() * SECTOR_SIZE + Vec2::splat(SECTOR_SIZE * 0.5) - center;
+            let d = grid.as_vec2() * t.sector_size + Vec2::splat(t.sector_size * 0.5) - center;
             cells.push((d.length_squared(), grid));
         }
     }
     cells.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    cells.truncate(MAX_SECTORS_PER_LAYER);
+    cells.truncate(t.max_sectors);
     cells.into_iter().map(|(_, g)| g).collect()
 }
 
@@ -623,6 +714,7 @@ fn stream_starfield(
     windows: Query<&Window>,
     textures: Option<Res<StarfieldTextures>>,
     seed: Res<StarSeed>,
+    tuning: Res<StarfieldTuning>,
     mut sectors: ResMut<StarSectors>,
     mut roots: Query<&mut Transform, With<StarSector>>,
 ) {
@@ -649,13 +741,13 @@ fn stream_starfield(
     //    which of the visible ones (SPAWN_MARGIN) are still missing.
     let mut wanted: HashSet<(u8, IVec2)> = HashSet::new();
     let mut missing: Vec<(u8, IVec2)> = Vec::new();
-    for (li, cfg) in LAYERS.iter().enumerate() {
+    for (li, cfg) in tuning.layers.iter().enumerate() {
         let layer = li as u8;
         let base = cam * (1.0 - cfg.factor);
-        for grid in desired_sectors(base, half_view, KEEP_MARGIN) {
+        for grid in desired_sectors(base, half_view, tuning.keep_margin, &tuning) {
             wanted.insert((layer, grid));
         }
-        for grid in desired_sectors(base, half_view, SPAWN_MARGIN) {
+        for grid in desired_sectors(base, half_view, tuning.spawn_margin, &tuning) {
             let key = (layer, grid);
             wanted.insert(key);
             if !sectors.0.contains_key(&key) {
@@ -676,7 +768,7 @@ fn stream_starfield(
     // 3) Spawn the missing sectors (deterministic per cell; positioned at
     //    spawn so they never flash at the origin).
     for (layer, grid) in missing {
-        let entity = spawn_sector(&mut commands, layer, grid, seed.0, cam, &textures);
+        let entity = spawn_sector(&mut commands, layer, grid, seed.0, cam, &textures, &tuning);
         sectors.0.insert((layer, grid), entity);
     }
 
@@ -684,13 +776,133 @@ fn stream_starfield(
     //    spawned in step 3 are not in the World yet (deferred commands) and
     //    already carry the right Transform, so skipping them is correct.
     for ((li, grid), entity) in sectors.0.iter() {
-        let cfg = &LAYERS[*li as usize];
+        let cfg = &tuning.layers[*li as usize];
         if let Ok(mut tf) = roots.get_mut(*entity) {
-            let origin = sector_origin_world(*grid, cfg.factor, cam);
+            let origin = sector_origin_world(*grid, cfg.factor, cam, tuning.sector_size);
             tf.translation.x = origin.x;
             tf.translation.y = origin.y;
         }
     }
+}
+
+// ============================================================
+// Pannello "Sfondo": chiavi -> parametri
+// ============================================================
+//
+// Il pannello UI non conosce la struct: parla solo di chiavi `set_sf_*` (il
+// prefisso `set_` le fa riconoscere al keypad numerico su iPhone, vedi
+// keypad.rs::is_numeric_field). Qui stanno valore corrente e applicazione,
+// con clamp e invarianti — esattamente come fa settings.rs per i globali.
+
+/// `"l2_rmax"` -> `(1, "rmax")`. None se la chiave non è di un layer.
+fn layer_key(key: &str) -> Option<(usize, &str)> {
+    let rest = key.strip_prefix('l')?;
+    let (n, field) = rest.split_at(1);
+    let idx = n.parse::<usize>().ok()?;
+    if !(1..=3).contains(&idx) {
+        return None;
+    }
+    Some((idx - 1, field.strip_prefix('_')?))
+}
+
+/// Valore corrente di un campo `set_sf_*` (usato allo spawn del pannello).
+pub(crate) fn starfield_field_value(key: &str, t: &StarfieldTuning) -> String {
+    let Some(stripped) = key.strip_prefix("set_sf_") else {
+        return String::new();
+    };
+    if let Some((li, field)) = layer_key(stripped) {
+        let l = &t.layers[li];
+        return match field {
+            "factor" => format!("{:.3}", l.factor),
+            "stars" => format!("{}", l.stars),
+            "rmin" => format!("{:.2}", l.radius_min),
+            "rmid" => format!("{:.2}", l.radius_mid),
+            "rmax" => format!("{:.2}", l.radius_max),
+            "big" => format!("{:.2}", l.big_chance),
+            "bright" => format!("{:.2}", l.brightness),
+            _ => String::new(),
+        };
+    }
+    match stripped {
+        "sector" => format!("{:.0}", t.sector_size),
+        "spawn_margin" => format!("{:.0}", t.spawn_margin),
+        "keep_margin" => format!("{:.0}", t.keep_margin),
+        "max_sectors" => format!("{}", t.max_sectors),
+        "dot_scale" => format!("{:.2}", t.dot_scale),
+        "spike_scale" => format!("{:.2}", t.spike_scale),
+        "spike_core" => format!("{:.2}", t.spike_core),
+        "spike_bloom" => format!("{:.2}", t.spike_bloom_exp),
+        "spike_width" => format!("{:.3}", t.spike_width),
+        "spike_strength" => format!("{:.2}", t.spike_strength),
+        "spike_taper" => format!("{:.2}", t.spike_taper_exp),
+        "galaxy_chance" => format!("{:.2}", t.galaxy_chance),
+        "galaxy_min" => format!("{:.0}", t.galaxy_size_min),
+        "galaxy_max" => format!("{:.0}", t.galaxy_size_max),
+        _ => String::new(),
+    }
+}
+
+/// Applica il testo di UN campo al tuning, con clamp. Ritorna true se
+/// qualcosa è cambiato (il sistema di refresh ricostruisce il cielo solo
+/// quando cambia davvero).
+pub(crate) fn apply_starfield_field(key: &str, text: &str, t: &mut StarfieldTuning) -> bool {
+    let Ok(v) = text.trim().parse::<f32>() else {
+        return false; // testo non valido: ignora, non rompere il pannello
+    };
+    let Some(stripped) = key.strip_prefix("set_sf_") else {
+        return false;
+    };
+    let before = t.clone();
+    if let Some((li, field)) = layer_key(stripped) {
+        // Copio i valori PRIMA di mutare: `t.layers[li]` e `t` non possono
+        // essere presi in prestito insieme.
+        let (mut rmin, mut rmid, mut rmax) = (
+            t.layers[li].radius_min,
+            t.layers[li].radius_mid,
+            t.layers[li].radius_max,
+        );
+        match field {
+            "factor" => t.layers[li].factor = v.clamp(0.0, 1.0),
+            "stars" => t.layers[li].stars = v.max(0.0) as u32,
+            "rmin" => rmin = v.clamp(0.1, 20.0),
+            "rmid" => rmid = v.clamp(0.1, 20.0),
+            "rmax" => rmax = v.clamp(0.1, 20.0),
+            "big" => t.layers[li].big_chance = v.clamp(0.0, 1.0),
+            "bright" => t.layers[li].brightness = v.clamp(0.0, 4.0),
+            _ => return false,
+        }
+        // Ordine delle soglie: `radius_min..radius_mid` è un range RNG, e un
+        // range vuoto PANICA (settore morto). Si normalizza sempre.
+        let (a, b, c) = (rmin.min(rmid), rmid, rmax);
+        let b = b.max(a + 0.01);
+        let c = c.max(b + 0.01);
+        t.layers[li].radius_min = a;
+        t.layers[li].radius_mid = b;
+        t.layers[li].radius_max = c;
+        return *t != before;
+    }
+    match stripped {
+        "sector" => t.sector_size = v.clamp(100.0, 5000.0),
+        "spawn_margin" => t.spawn_margin = v.clamp(0.0, 5000.0),
+        "keep_margin" => t.keep_margin = v.clamp(0.0, 10000.0),
+        "max_sectors" => t.max_sectors = (v.max(1.0) as usize).min(400),
+        "dot_scale" => t.dot_scale = v.clamp(0.2, 10.0),
+        "spike_scale" => t.spike_scale = v.clamp(0.5, 12.0),
+        "spike_core" => t.spike_core = v.clamp(0.02, 0.6),
+        "spike_bloom" => t.spike_bloom_exp = v.clamp(0.3, 4.0),
+        "spike_width" => t.spike_width = v.clamp(0.01, 0.4),
+        "spike_strength" => t.spike_strength = v.clamp(0.0, 1.0),
+        "spike_taper" => t.spike_taper_exp = v.clamp(0.1, 2.0),
+        "galaxy_chance" => t.galaxy_chance = v.clamp(0.0, 1.0),
+        "galaxy_min" => t.galaxy_size_min = v.clamp(5.0, 600.0),
+        "galaxy_max" => t.galaxy_size_max = v.clamp(5.0, 600.0),
+        _ => return false,
+    }
+    // Invarianti (non manopole): senza isteresi le celle di bordo vengono
+    // distrutte e ricreate a ogni frame; con min >= max il range RNG panica.
+    t.keep_margin = t.keep_margin.max(t.spawn_margin);
+    t.galaxy_size_max = t.galaxy_size_max.max(t.galaxy_size_min + 1.0);
+    *t != before
 }
 
 // ============================================================
@@ -700,6 +912,29 @@ fn stream_starfield(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Tuning di RIFERIMENTO (quello spedito): i test parlano di parametri,
+    /// non di costanti globali, così restano validi anche se il pannello
+    /// "Sfondo" li cambia a runtime.
+    fn sf_default() -> StarfieldTuning {
+        StarfieldTuning::default()
+    }
+
+    fn sector_size() -> f32 {
+        sf_default().sector_size
+    }
+
+    fn spawn_margin() -> f32 {
+        sf_default().spawn_margin
+    }
+
+    fn keep_margin() -> f32 {
+        sf_default().keep_margin
+    }
+
+    fn max_sectors() -> usize {
+        sf_default().max_sectors
+    }
 
     #[test]
     fn seed_derivation_is_deterministic_and_distinct() {
@@ -740,8 +975,8 @@ mod tests {
         // The old field was 12500/5000/1250 stars over a 10000×10000 box.
         let old_area = 10_000.0 * 10_000.0;
         let old = [12500.0, 5000.0, 1250.0];
-        let sector_area = SECTOR_SIZE * SECTOR_SIZE;
-        for (i, cfg) in LAYERS.iter().enumerate() {
+        let sector_area = sector_size() * sector_size();
+        for (i, cfg) in sf_default().layers.iter().enumerate() {
             let old_density = old[i] / old_area;
             let new_density = cfg.stars as f32 / sector_area;
             let ratio = new_density / old_density;
@@ -758,32 +993,42 @@ mod tests {
         // Normal zoom: the range must cover the view plus the margin.
         let half = Vec2::new(640.0, 360.0);
         let margin = 250.0;
-        let (lo, hi) = sector_range(Vec2::ZERO, half, margin);
+        let (lo, hi) = sector_range(Vec2::ZERO, half, margin, &sf_default());
         assert!(
-            (lo.x as f32) * SECTOR_SIZE <= -(half.x + margin),
+            (lo.x as f32) * sector_size() <= -(half.x + margin),
             "left edge not covered"
         );
         assert!(
-            ((hi.x + 1) as f32) * SECTOR_SIZE >= half.x + margin,
+            ((hi.x + 1) as f32) * sector_size() >= half.x + margin,
             "right edge not covered"
         );
         assert!(
-            (lo.y as f32) * SECTOR_SIZE <= -(half.y + margin),
+            (lo.y as f32) * sector_size() <= -(half.y + margin),
             "bottom edge not covered"
         );
         assert!(
-            ((hi.y + 1) as f32) * SECTOR_SIZE >= half.y + margin,
+            ((hi.y + 1) as f32) * sector_size() >= half.y + margin,
             "top edge not covered"
         );
         // A phone viewport must not over-provision: the spawn set stays small.
-        let phone = desired_sectors(Vec2::ZERO, Vec2::new(195.0, 422.0), SPAWN_MARGIN);
+        let phone = desired_sectors(
+            Vec2::ZERO,
+            Vec2::new(195.0, 422.0),
+            spawn_margin(),
+            &sf_default(),
+        );
         assert!(
             phone.len() <= 9,
             "phone view spawns {} sectors (expected a handful)",
             phone.len()
         );
         // Extreme zoom-out: the enumeration must stay bounded...
-        let (lo, hi) = sector_range(Vec2::ZERO, Vec2::splat(1.0e6), SPAWN_MARGIN);
+        let (lo, hi) = sector_range(
+            Vec2::ZERO,
+            Vec2::splat(1.0e6),
+            spawn_margin(),
+            &sf_default(),
+        );
         let span_x = hi.x - lo.x + 1;
         let span_y = hi.y - lo.y + 1;
         assert!(
@@ -791,16 +1036,31 @@ mod tests {
             "range exploded: {span_x}×{span_y}"
         );
         // ...and the capped list never exceeds the budget, nearest first.
-        let cells = desired_sectors(Vec2::ZERO, Vec2::splat(1.0e6), SPAWN_MARGIN);
-        assert_eq!(cells.len(), MAX_SECTORS_PER_LAYER);
-        let centre = |g: IVec2| g.as_vec2() * SECTOR_SIZE + Vec2::splat(SECTOR_SIZE * 0.5);
+        let cells = desired_sectors(
+            Vec2::ZERO,
+            Vec2::splat(1.0e6),
+            spawn_margin(),
+            &sf_default(),
+        );
+        assert_eq!(cells.len(), max_sectors());
+        let centre = |g: IVec2| g.as_vec2() * sector_size() + Vec2::splat(sector_size() * 0.5);
         assert!(
             centre(cells[0]).length() <= centre(cells[cells.len() - 1]).length(),
             "sectors must be kept nearest-first"
         );
         // Hysteresis: the keep set must be a superset of the spawn set.
-        let spawn = desired_sectors(Vec2::ZERO, Vec2::new(640.0, 360.0), SPAWN_MARGIN);
-        let keep = desired_sectors(Vec2::ZERO, Vec2::new(640.0, 360.0), KEEP_MARGIN);
+        let spawn = desired_sectors(
+            Vec2::ZERO,
+            Vec2::new(640.0, 360.0),
+            spawn_margin(),
+            &sf_default(),
+        );
+        let keep = desired_sectors(
+            Vec2::ZERO,
+            Vec2::new(640.0, 360.0),
+            keep_margin(),
+            &sf_default(),
+        );
         for g in &spawn {
             assert!(keep.contains(g), "keep set must contain {g:?}");
         }
@@ -813,10 +1073,10 @@ mod tests {
         // its camera-relative slide is exactly (1 − factor), whatever sector
         // it lives in. Same formula as `stream_starfield`.
         let cam = Vec2::new(1234.0, -567.0);
-        for (li, cfg) in LAYERS.iter().enumerate() {
+        for (li, cfg) in sf_default().layers.iter().enumerate() {
             let grid = IVec2::new(-3, 7);
-            let origin = grid.as_vec2() * SECTOR_SIZE;
-            let root = sector_origin_world(grid, cfg.factor, cam);
+            let origin = grid.as_vec2() * sector_size();
+            let root = sector_origin_world(grid, cfg.factor, cam, sector_size());
             let local = Vec2::new(250.0, 800.0);
             let world = root + local;
             let base = origin + local;
@@ -827,7 +1087,7 @@ mod tests {
             );
             // On-screen motion is (1 − factor) × camera motion.
             let cam2 = cam + Vec2::new(100.0, 0.0);
-            let world2 = sector_origin_world(grid, cfg.factor, cam2) + local;
+            let world2 = sector_origin_world(grid, cfg.factor, cam2, sector_size()) + local;
             let slide = ((world2 - cam2) - (world - cam)).length();
             let expected_slide = 100.0 * (1.0 - cfg.factor);
             assert!(
@@ -841,11 +1101,11 @@ mod tests {
     fn big_stars_are_rare_but_present() {
         // Size variety: most stars small, some big AND brighter.
         let mut rng = StdRng::seed_from_u64(7);
-        let cfg = &LAYERS[0];
+        let cfg = sf_default().layers[0];
         let total = 2000;
         let mut big = 0;
         for _ in 0..total {
-            let (radius, color, is_big) = star_look(&mut rng, 0);
+            let (radius, color, is_big) = star_look(&mut rng, 0, &sf_default());
             assert!(radius >= cfg.radius_min && radius <= cfg.radius_max);
             assert_eq!(
                 is_big,
@@ -871,25 +1131,29 @@ mod tests {
 
     #[test]
     fn galaxies_are_deterministic_and_sparse() {
-        assert!(GALAXY_CHANCE > 0.0 && GALAXY_CHANCE < 0.5);
-        assert!(GALAXY_SIZE_MIN < GALAXY_SIZE_MAX);
+        assert!(sf_default().galaxy_chance > 0.0 && sf_default().galaxy_chance < 0.5);
+        assert!(sf_default().galaxy_size_min < sf_default().galaxy_size_max);
         // Deterministic per sector: the same cell gives the same coin flip.
         let mut rng_a = StdRng::seed_from_u64(seed_for(42, 2, IVec2::new(5, -2)));
         let mut rng_b = StdRng::seed_from_u64(seed_for(42, 2, IVec2::new(5, -2)));
-        assert_eq!(rng_a.gen_bool(GALAXY_CHANCE), rng_b.gen_bool(GALAXY_CHANCE));
+        assert_eq!(
+            rng_a.gen_bool(sf_default().galaxy_chance as f64),
+            rng_b.gen_bool(sf_default().galaxy_chance as f64)
+        );
         // Over a wide sample the fraction stays in the expected ballpark.
         let samples = 600;
         let mut with_galaxy = 0;
         for i in 0..samples {
             let mut rng = StdRng::seed_from_u64(seed_for(42, 2, IVec2::new(i, 3)));
-            if rng.gen_bool(GALAXY_CHANCE) {
+            if rng.gen_bool(sf_default().galaxy_chance as f64) {
                 with_galaxy += 1;
             }
         }
+        let chance = sf_default().galaxy_chance as f64;
         let ratio = with_galaxy as f64 / samples as f64;
         assert!(
-            (ratio - GALAXY_CHANCE).abs() < 0.08,
-            "galaxy ratio {ratio} should be close to {GALAXY_CHANCE}"
+            (ratio - chance).abs() < 0.08,
+            "galaxy ratio {ratio} should be close to {chance}"
         );
     }
 
@@ -927,7 +1191,7 @@ mod tests {
         // The big-star look: a saturated core, a soft halo AND — the point
         // of the whole thing — a 4-point diffraction cross that beats the
         // halo along the axes (otherwise it drowns in the glow).
-        let px = star_spike_pixels();
+        let px = star_spike_pixels(&sf_default());
         let w = STAR_TEX_SIZE as usize;
         let half = STAR_TEX_SIZE as f32 / 2.0;
         let c = w / 2;
@@ -990,9 +1254,9 @@ mod tests {
     fn star_tints_outshine_the_washed_sky() {
         let mut rng = StdRng::seed_from_u64(42);
         let mut faintest = f32::MAX;
-        for layer in 0..LAYERS.len() {
+        for layer in 0..sf_default().layers.len() {
             for _ in 0..200 {
-                let (_, color, _) = star_look(&mut rng, layer);
+                let (_, color, _) = star_look(&mut rng, layer, &sf_default());
                 let s = color.to_srgba();
                 assert!(
                     (s.alpha - 1.0).abs() < 1e-6,
@@ -1021,7 +1285,7 @@ mod tests {
         let peak_mean = |layer: usize, rng: &mut StdRng| -> f32 {
             let mut acc = 0.0;
             for _ in 0..200 {
-                let (_, color, _) = star_look(rng, layer);
+                let (_, color, _) = star_look(rng, layer, &sf_default());
                 let s = color.to_srgba();
                 acc += s.red.max(s.green).max(s.blue);
             }
@@ -1051,14 +1315,18 @@ mod tests {
     #[test]
     fn layers_are_ordered_far_to_near() {
         // The sky must sit behind any planet (`sync_sprite_z` writes
-        // planets at z = -distance from the star).
-        for cfg in &LAYERS {
-            assert!(cfg.z < -100_000.0, "layer z {} not behind planets", cfg.z);
+        // planets at z = -distance from the star). The depth is structural
+        // (LAYER_Z), so it is not a panel knob — but it must stay ordered.
+        for z in LAYER_Z {
+            assert!(z < -100_000.0, "layer z {z} not behind planets");
         }
-        assert!(LAYERS[0].z < LAYERS[1].z && LAYERS[1].z < LAYERS[2].z);
+        assert!(LAYER_Z[0] < LAYER_Z[1] && LAYER_Z[1] < LAYER_Z[2]);
         // Far layers are more glued to the camera than near ones.
-        assert!(LAYERS[0].factor > LAYERS[1].factor && LAYERS[1].factor > LAYERS[2].factor);
-        assert!((LAYERS[0].factor - 1.0).abs() < 1e-6);
+        assert!(
+            sf_default().layers[0].factor > sf_default().layers[1].factor
+                && sf_default().layers[1].factor > sf_default().layers[2].factor
+        );
+        assert!((sf_default().layers[0].factor - 1.0).abs() < 1e-6);
     }
 
     /// Guards the invariant that broke v0.14.138: in firefly's vendored
@@ -1127,9 +1395,13 @@ mod tests {
             .add_plugins(bevy::asset::AssetPlugin::default())
             .init_asset::<Image>()
             .init_resource::<StarSeed>()
+            .init_resource::<StarfieldTuning>()
             .init_resource::<StarSectors>()
             .add_systems(Startup, setup_starfield)
-            .add_systems(Update, stream_starfield);
+            .add_systems(
+                Update,
+                (refresh_starfield_on_tuning_change, stream_starfield).chain(),
+            );
 
         let cam = app
             .world_mut()
@@ -1187,7 +1459,7 @@ mod tests {
             .collect();
         assert_eq!(far_before, far_after, "the glued layer must not stream");
         // Bounded and consistent: no leak, no explosion.
-        assert!(after.len() <= LAYERS.len() * MAX_SECTORS_PER_LAYER);
+        assert!(after.len() <= sf_default().layers.len() * max_sectors());
         assert_eq!(
             count::<&StarSector>(&mut app),
             after.len(),
@@ -1199,8 +1471,12 @@ mod tests {
         let mut qs = world.query::<(&Transform, &StarSector)>();
         let mut checked = 0;
         for (tf, sector) in qs.iter(world) {
-            let expected =
-                sector_origin_world(sector.grid, LAYERS[sector.layer as usize].factor, cam_now);
+            let expected = sector_origin_world(
+                sector.grid,
+                sf_default().layers[sector.layer as usize].factor,
+                cam_now,
+                sector_size(),
+            );
             assert!(
                 (tf.translation.truncate() - expected).length() < 1.0,
                 "sector {:?} placed at {:?}, expected {expected:?}",

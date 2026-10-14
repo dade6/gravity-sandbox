@@ -265,6 +265,7 @@ fn spawn_toolbar(commands: &mut Commands) {
             // globali (gravità/ambient/glow/traiettorie). DOPO Reset/Salva,
             // stesso stile esatto degli altri bottoni.
             crate::systems::settings::spawn_settings_button(bar);
+            crate::systems::starfield_panel::spawn_starfield_button(bar);
             bar.spawn(
                 (Node {
                     flex_grow: 1.0,
@@ -1311,6 +1312,9 @@ fn handle_ui_buttons(
             Without<crate::systems::settings::SettingsBtn>,
             Without<crate::systems::settings::SettingsCloseBtn>,
             Without<crate::systems::settings::SettingsToggleBtn>,
+            Without<crate::systems::starfield_panel::StarfieldBtn>,
+            Without<crate::systems::starfield_panel::StarfieldCloseBtn>,
+            Without<crate::systems::starfield_panel::StarfieldResetBtn>,
             Without<crate::systems::camera_follow::FollowToggle>,
             Without<crate::systems::camera_follow::FollowOption>,
         ),

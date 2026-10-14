@@ -69,19 +69,19 @@ pub struct SettingsToggleBtn;
 pub struct SettingsSection;
 
 /// Colore testo dell'header di sezione (stesso giallo caldo del panel).
-const SECTION_COLOR: Color = Color::srgba(1.0, 0.85, 0.4, 0.95);
+pub(crate) const SECTION_COLOR: Color = Color::srgba(1.0, 0.85, 0.4, 0.95);
 /// Sfondo del riquadro modale (stesso del delete dialog in ui.rs).
-const DIALOG_BG: Color = Color::srgba(0.12, 0.12, 0.22, 0.95);
+pub(crate) const DIALOG_BG: Color = Color::srgba(0.12, 0.12, 0.22, 0.95);
 /// Sfondo overlay (stesso del delete dialog in ui.rs).
-const OVERLAY_FG: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
-const TEXT_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.75);
-const BORDER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.25);
-const INPUT_BG: Color = Color::srgba(0.0, 0.0, 0.0, 0.3);
-const INPUT_BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
+pub(crate) const OVERLAY_FG: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
+pub(crate) const TEXT_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.75);
+pub(crate) const BORDER_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.25);
+pub(crate) const INPUT_BG: Color = Color::srgba(0.0, 0.0, 0.0, 0.3);
+pub(crate) const INPUT_BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.15);
 /// GlobalZIndex 300: stesso livello del delete dialog (ui.rs). UN dialog
 /// alla volta: il gate in handle_settings_button / close_on_delete garantisce
 /// che non siano mai visibili insieme, quindi lo stesso z va bene.
-const SETTINGS_Z: i32 = 300;
+pub(crate) const SETTINGS_Z: i32 = 300;
 
 pub struct SettingsPlugin;
 
@@ -348,19 +348,19 @@ fn spawn_settings_dialog(
                     // === GRAVITÀ ===
                     spawn_section_header(dialog, "GRAVITÀ");
                     for (key, label) in GRAVITY_FIELDS {
-                        spawn_field_row(dialog, key, label, &ctx);
+                        spawn_field_row(dialog, key, label, settings_field_value(key, &ctx));
                     }
 
                     // === ILLUMINAZIONE GLOBALE ===
                     spawn_section_header(dialog, "ILLUMINAZIONE GLOBALE");
                     for (key, label) in AMBIENT_FIELDS {
-                        spawn_field_row(dialog, key, label, &ctx);
+                        spawn_field_row(dialog, key, label, settings_field_value(key, &ctx));
                     }
 
                     // === CURVA ALONE ===
                     spawn_section_header(dialog, "CURVA ALONE");
                     for (key, label) in GLOW_FIELDS {
-                        spawn_field_row(dialog, key, label, &ctx);
+                        spawn_field_row(dialog, key, label, settings_field_value(key, &ctx));
                     }
 
                     // === TRAIETTORIE ===
@@ -410,7 +410,7 @@ fn spawn_settings_dialog(
                             ));
                         });
                     for (key, label) in TRAJECTORY_FIELDS {
-                        spawn_field_row(dialog, key, label, &ctx);
+                        spawn_field_row(dialog, key, label, settings_field_value(key, &ctx));
                     }
                 });
         });
@@ -433,7 +433,7 @@ fn toggle_color(enabled: bool) -> Color {
 }
 
 /// Header di sezione (stile ILLUMINAZIONE PIANETI / ALONE STELLA del panel).
-fn spawn_section_header(dialog: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, title: &str) {
+pub(crate) fn spawn_section_header(dialog: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, title: &str) {
     dialog.spawn((
         SettingsSection,
         Text::new(title),
@@ -452,11 +452,11 @@ fn spawn_section_header(dialog: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
 
 /// Riga campo: label + input EditableText con PropInput(key), stesso pattern
 /// di spawn_star_section. Il valore iniziale è quello CORRENTE della risorsa.
-fn spawn_field_row(
+pub(crate) fn spawn_field_row(
     dialog: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
     key: &'static str,
     label: &str,
-    ctx: &SettingsSnapshot,
+    value: String,
 ) {
     let mut row = dialog.spawn(Node {
         flex_direction: FlexDirection::Row,
@@ -490,7 +490,7 @@ fn spawn_field_row(
                 BorderColor::all(INPUT_BORDER),
             ))
             .with_child((
-                EditableText::new(settings_field_value(key, ctx)),
+                EditableText::new(value),
                 PropInput(key),
                 TextFont {
                     font: FontSource::default(),
@@ -522,7 +522,7 @@ fn spawn_field_row(
 /// `physical_cursor_position() - physical_viewport_rect().min`;
 /// touch: `position() * scale_factor - viewport_min`). Nessun viewport
 /// (= nessuna camera con render target) → None.
-fn ui_press_position(
+pub(crate) fn ui_press_position(
     windows: &Query<&Window>,
     camera_query: &Query<
         (&Camera, &GlobalTransform),
@@ -551,7 +551,7 @@ fn ui_press_position(
 
 /// True se il punto (pixel fisici viewport-relativi) cade dentro il rect di
 /// un nodo (stesso hit-test di selection.rs).
-fn point_in_node(node: &ComputedNode, gt: &UiGlobalTransform, pos: Vec2) -> bool {
+pub(crate) fn point_in_node(node: &ComputedNode, gt: &UiGlobalTransform, pos: Vec2) -> bool {
     let half = node.size / 2.0;
     pos.x >= gt.translation.x - half.x
         && pos.x <= gt.translation.x + half.x

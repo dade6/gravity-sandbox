@@ -13,6 +13,7 @@ pub mod property_editor;
 pub mod reset;
 pub mod selection;
 pub mod settings;
+pub mod starfield_panel;
 pub mod shadow;
 pub mod timeline;
 pub mod tools;

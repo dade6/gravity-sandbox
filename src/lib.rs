@@ -447,6 +447,7 @@ pub fn wasm_main() {
         ResetPlugin,
         systems::keypad::KeypadPlugin,
         systems::settings::SettingsPlugin,
+        systems::starfield_panel::StarfieldPanelPlugin,
         FireflyBridgePlugin,
         systems::camera_follow::CameraFollowPlugin,
         systems::gravity::GravityPlugin,
@@ -523,6 +524,7 @@ mod tests {
             ResetPlugin,
             systems::keypad::KeypadPlugin,
             systems::settings::SettingsPlugin,
+            systems::starfield_panel::StarfieldPanelPlugin,
             systems::camera_follow::CameraFollowPlugin,
             systems::gravity::GravityPlugin,
         ))
