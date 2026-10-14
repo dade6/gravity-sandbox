@@ -19,10 +19,12 @@
 //! Z-order: overlay = 300 (come settings/delete: UN dialog alla volta),
 //! keypad = 400.
 
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use bevy::text::{EditableText, FontSize, FontSource, TextCursorStyle};
 use bevy::ui::widget::TextScroll;
+use bevy::ui::ScrollPosition;
 
 use crate::systems::keypad::Keypad;
 use crate::systems::parallax::{apply_starfield_field, starfield_field_value, StarfieldTuning};
@@ -175,6 +177,7 @@ impl Plugin for StarfieldPanelPlugin {
             (
                 handle_starfield_button,
                 apply_starfield_on_confirm,
+                scroll_starfield_panel,
                 handle_starfield_reset,
                 sync_starfield_fields_on_tuning_change,
                 close_starfield_on_delete_dialog,
@@ -270,7 +273,7 @@ fn handle_starfield_button(
     spawn_starfield_dialog(&mut commands, &tuning);
 }
 
-/// Rete di sicurezza speculare a `close_settings_on_delete_dialog`.
+/// Chiude il pannello quando il delete dialog si apre (rete di sicurezza).
 fn close_starfield_on_delete_dialog(
     pending: Res<PendingDelete>,
     panels: Query<Entity, With<StarfieldDialog>>,
@@ -329,9 +332,15 @@ fn spawn_starfield_dialog(commands: &mut Commands, tuning: &StarfieldTuning) {
             overlay
                 .spawn((
                     StarfieldBox,
+                    // Il riquadro è SCORREVOLE: 38 campi non stanno in nessuno
+                    // schermo di iPhone. `Overflow::scroll_y` fa il clip e
+                    // `ScrollPosition` sposta il contenuto; chi li muove è
+                    // `scroll_starfield_panel` (dito/mouse) — Bevy NON scorre
+                    // da solo le aree in overflow.
+                    ScrollPosition::default(),
                     Node {
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(4.0),
+                        row_gap: Val::Px(3.0),
                         padding: UiRect::all(Val::Px(16.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         border_radius: BorderRadius::px(10.0, 10.0, 10.0, 10.0),
@@ -346,14 +355,20 @@ fn spawn_starfield_dialog(commands: &mut Commands, tuning: &StarfieldTuning) {
                 ))
                 .with_children(|dialog| {
                     // Header: titolo + Ripristina + X
+                    // Header FISSO: con 38 campi il contenuto scorre, ma il
+                    // titolo, "Ripristina" e la X devono restare raggiungibili
+                    // anche in fondo (`IgnoreScroll` = non scorre col padre).
                     dialog
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            justify_content: JustifyContent::SpaceBetween,
-                            align_items: AlignItems::Center,
-                            width: Val::Percent(100.0),
-                            ..default()
-                        })
+                        .spawn((
+                            IgnoreScroll(BVec2::new(true, true)),
+                            Node {
+                                flex_direction: FlexDirection::Row,
+                                justify_content: JustifyContent::SpaceBetween,
+                                align_items: AlignItems::Center,
+                                width: Val::Percent(100.0),
+                                ..default()
+                            },
+                        ))
                         .with_children(|header| {
                             header.spawn((
                                 Text::new("Sfondo stellato"),
@@ -424,11 +439,12 @@ fn spawn_starfield_dialog(commands: &mut Commands, tuning: &StarfieldTuning) {
                                 });
                         });
 
-                    // Nota: come si comportano i cambiamenti.
+                    // Nota: come si comportano i cambiamenti + come si scorre.
                     dialog.spawn((
                         Text::new(
                             "Le modifiche si applicano subito: il cielo viene ricostruito \
-                             con gli stessi semi (stesse stelle, nuovo aspetto).",
+                             con gli stessi semi (stesse stelle, nuovo aspetto). \
+                             Scorri trascinando per vedere tutti i parametri.",
                         ),
                         TextFont {
                             font: FontSource::default(),
@@ -619,6 +635,110 @@ fn sync_starfield_fields_on_tuning_change(
 }
 
 // ============================================================
+// Scroll del pannello
+// ============================================================
+//
+// Bevy NON fa scorrere da sé le aree `Overflow::scroll_*`: il widget
+// `ScrollArea` di bevy_ui_widgets gestisce SOLO la rotellina/trackpad (eventi
+// di picking `Pointer<Scroll>`), che su iPhone non esiste. Con 38 campi il
+// pannello non entra in nessuno schermo di telefono, quindi lo scroll è
+// implementato qui: il contenuto segue il DITO (drag) e la rotellina funziona
+// su Mac. La matematica del clamp sta in `clamped_scroll_y` (pura, testata).
+
+/// Posizione di scroll dopo un delta, mai oltre i bordi. `visible`/`content`
+/// sono in pixel logici e `delta` è positivo quando il contenuto deve salire.
+fn clamped_scroll_y(current: f32, delta: f32, visible: f32, content: f32) -> f32 {
+    let max = (content - visible).max(0.0);
+    (current + delta).clamp(0.0, max)
+}
+
+/// Posizione CORRENTE del dito/cursore (pixel fisici, viewport-relativi)
+/// mentre è premuto; `None` se non c'è nessun contatto. Diversa da
+/// `ui_press_position` (che risponde solo al PRIMO frame di pressione): lo
+/// scroll deve seguire il movimento.
+fn held_position(
+    windows: &Query<&Window>,
+    cameras: &Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera2d>, With<crate::systems::camera::MainCamera>),
+    >,
+    touches: &Touches,
+    mouse: &ButtonInput<MouseButton>,
+) -> Option<Vec2> {
+    let window = windows.iter().next()?;
+    let viewport_min = cameras
+        .iter()
+        .next()
+        .and_then(|(cam, _)| cam.physical_viewport_rect())
+        .map(|r| r.min.as_vec2())
+        .unwrap_or_default();
+    if let Some(touch) = touches.iter().next() {
+        return Some(touch.position() * window.scale_factor() - viewport_min);
+    }
+    if mouse.pressed(MouseButton::Left) {
+        return window.physical_cursor_position().map(|p| p - viewport_min);
+    }
+    None
+}
+
+/// Scroll del pannello: trascinamento col dito/mouse + rotellina.
+fn scroll_starfield_panel(
+    mut panels: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<StarfieldBox>>,
+    // I bottoni DENTRO il modale: un tap su X/Ripristina non deve diventare
+    // un trascinamento (il resto dei bottoni dell'app ha rect fuori dal box).
+    buttons: Query<(&ComputedNode, &UiGlobalTransform), (With<Interaction>, Without<StarfieldBox>)>,
+    mut wheel: MessageReader<MouseWheel>,
+    touches: Res<Touches>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    cameras: Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera2d>, With<crate::systems::camera::MainCamera>),
+    >,
+    mut last: Local<Option<Vec2>>,
+) {
+    crate::mark_system("scroll_starfield_panel");
+    let Ok((node, gt, mut scroll)) = panels.single_mut() else {
+        *last = None;
+        return;
+    };
+    let inv = node.inverse_scale_factor;
+    let visible = node.size() * inv;
+    let content = node.content_size() * inv;
+
+    // 1) Dito/mouse: il contenuto segue il trascinamento.
+    match held_position(&windows, &cameras, &touches, &mouse_buttons) {
+        None => *last = None,
+        Some(current) => match *last {
+            None => {
+                if point_in_node(node, gt, current)
+                    && !buttons.iter().any(|(n, g)| point_in_node(n, g, current))
+                {
+                    *last = Some(current);
+                }
+            }
+            Some(prev) => {
+                *last = Some(current);
+                // Dito che sale → delta positivo → il contenuto sale.
+                let delta_y = (prev.y - current.y) * inv;
+                if delta_y.abs() > 0.1 {
+                    scroll.y = clamped_scroll_y(scroll.y, delta_y, visible.y, content.y);
+                }
+            }
+        },
+    }
+
+    // 2) Rotellina/trackpad (Mac), stesso clamp.
+    for ev in wheel.read() {
+        let step = match ev.unit {
+            MouseScrollUnit::Line => 24.0,
+            MouseScrollUnit::Pixel => 1.0,
+        };
+        scroll.y = clamped_scroll_y(scroll.y, -ev.y * step, visible.y, content.y);
+    }
+}
+
+// ============================================================
 // Tests
 // ============================================================
 
@@ -664,6 +784,20 @@ mod tests {
     }
 
     #[test]
+    fn panel_scroll_stays_within_the_content() {
+        // Il clamp: mai sopra 0, mai oltre `contenuto − visibile`, e con
+        // contenuto più corto del riquadro non si scorre affatto.
+        assert_eq!(clamped_scroll_y(0.0, 50.0, 400.0, 1200.0), 50.0);
+        assert_eq!(clamped_scroll_y(10.0, -50.0, 400.0, 1200.0), 0.0);
+        assert_eq!(clamped_scroll_y(790.0, 100.0, 400.0, 1200.0), 800.0);
+        assert_eq!(clamped_scroll_y(800.0, 500.0, 400.0, 1200.0), 800.0);
+        // Contenuto che entra: nessuno scroll.
+        assert_eq!(clamped_scroll_y(0.0, 120.0, 600.0, 500.0), 0.0);
+        // Contenuto identico al riquadro: nessuno scroll.
+        assert_eq!(clamped_scroll_y(0.0, 10.0, 400.0, 400.0), 0.0);
+    }
+
+    #[test]
     fn panel_systems_run_without_query_conflicts() {
         // GATE B0001: i sistemi del pannello toccano Interaction, EditableText,
         // ComputedNode/UiGlobalTransform e StarfieldTuning. Un conflitto di
@@ -676,6 +810,7 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<PendingDelete>()
             .init_resource::<StarfieldTuning>()
+            .add_message::<MouseWheel>()
             .add_systems(
                 Startup,
                 |mut commands: Commands, tuning: Res<StarfieldTuning>| {
@@ -688,6 +823,7 @@ mod tests {
                 (
                     handle_starfield_button,
                     apply_starfield_on_confirm,
+                    scroll_starfield_panel,
                     handle_starfield_reset,
                     sync_starfield_fields_on_tuning_change,
                     close_starfield_on_delete_dialog,

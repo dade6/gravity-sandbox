@@ -97,7 +97,7 @@ struct TimelinSpeed;
 /// Marker per dialog di conferma cancellazione
 
 #[derive(Component)]
-struct DeleteDialog;
+pub(crate) struct DeleteDialog;
 
 /// Marker per bottoni del dialog cancellazione
 
