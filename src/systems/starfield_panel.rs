@@ -681,6 +681,25 @@ fn held_position(
     None
 }
 
+/// Posizione del cursore in pixel fisici viewport-relativi (stessa convenzione
+/// dei riquadri UI); `None` se il cursore non è sulla finestra.
+fn cursor_position(
+    windows: &Query<&Window>,
+    cameras: &Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera2d>, With<crate::systems::camera::MainCamera>),
+    >,
+) -> Option<Vec2> {
+    let window = windows.iter().next()?;
+    let viewport_min = cameras
+        .iter()
+        .next()
+        .and_then(|(cam, _)| cam.physical_viewport_rect())
+        .map(|r| r.min.as_vec2())
+        .unwrap_or_default();
+    window.physical_cursor_position().map(|p| p - viewport_min)
+}
+
 /// Scroll del pannello: trascinamento col dito/mouse + rotellina.
 fn scroll_starfield_panel(
     mut panels: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<StarfieldBox>>,
@@ -728,8 +747,20 @@ fn scroll_starfield_panel(
         },
     }
 
-    // 2) Rotellina/trackpad (Mac), stesso clamp.
+    // 2) Rotellina/trackpad (Mac): SOLO se il cursore è sopra il riquadro.
+    //    Lo stesso gesto a due dita è ANCHE lo zoom della scena
+    //    (`zoom_camera` legge la stessa `AccumulatedMouseScroll`): fuori dal
+    //    pannello deve restare alla scena, dentro al pannello deve scorrere i
+    //    parametri e NON zoomare (vedi la guardia in `zoom_camera`).
+    //    I messaggi si consumano SEMPRE: senza `read` resterebbero in coda e
+    //    scatterebbero appena il cursore entra nel pannello.
+    let over_box = cursor_position(&windows, &cameras)
+        .map(|p| point_in_node(node, gt, p))
+        .unwrap_or(false);
     for ev in wheel.read() {
+        if !over_box {
+            continue;
+        }
         let step = match ev.unit {
             MouseScrollUnit::Line => 24.0,
             MouseScrollUnit::Pixel => 1.0,
@@ -795,6 +826,84 @@ mod tests {
         assert_eq!(clamped_scroll_y(0.0, 120.0, 600.0, 500.0), 0.0);
         // Contenuto identico al riquadro: nessuno scroll.
         assert_eq!(clamped_scroll_y(0.0, 10.0, 400.0, 400.0), 0.0);
+    }
+
+    #[test]
+    fn wheel_scrolls_only_when_the_pointer_is_over_the_panel() {
+        // Il gesto a due dita del trackpad è ANCHE lo zoom della scena
+        // (zoom_camera legge la stessa AccumulatedMouseScroll): il pannello
+        // deve scorrere SOLO se il cursore è sopra di lui, altrimenti il
+        // cursore fuori dal pannello (dove l'utente vuole zoomare la scena)
+        // farebbe scorrere i parametri.
+        use bevy::math::DVec2;
+        use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform};
+
+        fn build(cursor: Vec2) -> App {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .init_resource::<InputFocus>()
+                .init_resource::<Touches>()
+                .init_resource::<ButtonInput<MouseButton>>()
+                .init_resource::<PendingDelete>()
+                .init_resource::<StarfieldTuning>()
+                .add_message::<MouseWheel>()
+                .add_systems(Update, scroll_starfield_panel);
+            let mut window = Window::default();
+            window
+                .set_physical_cursor_position(Some(DVec2::new(cursor.x as f64, cursor.y as f64)));
+            app.world_mut().spawn(window);
+            app.world_mut().spawn((
+                StarfieldBox,
+                ComputedNode {
+                    size: Vec2::new(300.0, 200.0),
+                    content_size: Vec2::new(300.0, 1200.0),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(150.0, 100.0),
+                ScrollPosition::default(),
+            ));
+            app
+        }
+
+        fn wheel(app: &mut App) {
+            app.world_mut()
+                .resource_mut::<Messages<MouseWheel>>()
+                .write(MouseWheel {
+                    unit: MouseScrollUnit::Line,
+                    x: 0.0,
+                    y: -3.0,
+                    window: Entity::PLACEHOLDER,
+                    phase: bevy::input::touch::TouchPhase::Moved,
+                });
+        }
+
+        fn scroll_y(app: &mut App) -> f32 {
+            let world = app.world_mut();
+            world
+                .query_filtered::<&ScrollPosition, With<StarfieldBox>>()
+                .single(world)
+                .expect("box")
+                .y
+        }
+
+        // Cursore SOPRA il riquadro: la rotellina scorre.
+        let mut over = build(Vec2::new(150.0, 100.0));
+        wheel(&mut over);
+        over.update();
+        assert!(
+            scroll_y(&mut over) > 0.0,
+            "col cursore sopra il pannello la rotellina deve scorrere"
+        );
+
+        // Cursore FUORI: la rotellina è della scena (zoom), il pannello fermo.
+        let mut away = build(Vec2::new(900.0, 900.0));
+        wheel(&mut away);
+        away.update();
+        assert_eq!(
+            scroll_y(&mut away),
+            0.0,
+            "col cursore fuori dal pannello la rotellina non deve scorrere i parametri"
+        );
     }
 
     #[test]

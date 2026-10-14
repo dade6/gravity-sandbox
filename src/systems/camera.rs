@@ -146,7 +146,17 @@ fn zoom_camera(
     scroll: Res<AccumulatedMouseScroll>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     drag_state: Res<MoveDragState>,
-    mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
+    windows: Query<&Window>,
+    mut camera_query: Query<(&mut Projection, &Camera), (With<Camera2d>, With<MainCamera>)>,
+    // I riquadri dei modali scorrevoli: sopra di essi la rotellina (lo stesso
+    // gesto a due dita del trackpad) è del pannello, non della scena.
+    modal_boxes: Query<
+        (&ComputedNode, &UiGlobalTransform),
+        Or<(
+            With<crate::systems::starfield_panel::StarfieldBox>,
+            With<crate::systems::settings::SettingsBox>,
+        )>,
+    >,
 ) {
     crate::mark_system("zoom_camera");
 
@@ -156,7 +166,26 @@ fn zoom_camera(
     if mouse_buttons.pressed(MouseButton::Right) {
         return;
     }
-    if let Ok(mut projection) = camera_query.single_mut() {
+    // Cursore sopra un pannello modale → il gesto scorre i parametri e NON
+    // deve zoomare la scena (senza questa guardia si facevano entrambe le cose
+    // con lo stesso movimento a due dita).
+    if let Some(window) = windows.iter().next() {
+        let viewport_min = camera_query
+            .single()
+            .ok()
+            .and_then(|(_, cam)| cam.physical_viewport_rect())
+            .map(|r| r.min.as_vec2())
+            .unwrap_or_default();
+        if let Some(cursor) = window.physical_cursor_position().map(|p| p - viewport_min) {
+            if modal_boxes
+                .iter()
+                .any(|(node, gt)| crate::systems::settings::point_in_node(node, gt, cursor))
+            {
+                return;
+            }
+        }
+    }
+    if let Ok((mut projection, _)) = camera_query.single_mut() {
         let delta = scroll.delta;
         if let Projection::Orthographic(ortho) = &mut *projection {
             if delta.x == 0.0 && delta.y.abs() > 0.0 {
@@ -275,56 +304,85 @@ fn touch_zoom(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::DVec2;
+    use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform};
 
-    /// Con un modale UI aperto la camera è FERMA: il trascinamento serve a
-    /// scorrere i parametri del pannello "Sfondo" e la rotellina scorre il
+    /// App minimale con una finestra (e un cursore) e la camera: i sistemi
+    /// girano DAVVERO (niente GPU) → è anche il gate B0001 per le query qui.
+    fn build(with_modal_box: bool, cursor: Vec2) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Touches>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<AccumulatedMouseMotion>()
+            .init_resource::<AccumulatedMouseScroll>()
+            .init_resource::<MoveDragState>()
+            .init_resource::<PanState>()
+            .init_resource::<TouchPanState>()
+            .add_systems(
+                Update,
+                (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom),
+            );
+        let mut window = Window::default();
+        window.set_physical_cursor_position(Some(DVec2::new(cursor.x as f64, cursor.y as f64)));
+        app.world_mut().spawn(window);
+        app.world_mut().spawn((
+            Camera2d,
+            MainCamera,
+            Camera::default(),
+            Projection::Orthographic(OrthographicProjection::default_2d()),
+            Transform::from_xyz(0.0, 0.0, 0.0),
+        ));
+        if with_modal_box {
+            // Riquadro modale scorrevole centrato in (200,200), 400×400:
+            // il cursore (200,200) è DENTRO, (900,900) è fuori. Porta ANCHE il
+            // marker del modale: è quello che congela la camera (nell'app
+            // reale il riquadro è figlio del modale).
+            app.world_mut().spawn((
+                crate::systems::starfield_panel::StarfieldDialog,
+                crate::systems::starfield_panel::StarfieldBox,
+                ComputedNode {
+                    size: Vec2::new(400.0, 400.0),
+                    content_size: Vec2::new(400.0, 1200.0),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(200.0, 200.0),
+                ScrollPosition::default(),
+            ));
+        }
+        app
+    }
+
+    fn camera_x(app: &mut App) -> f32 {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&Transform, With<MainCamera>>()
+            .single(world)
+            .expect("camera")
+            .translation
+            .x
+    }
+
+    fn camera_scale(app: &mut App) -> f32 {
+        let world = app.world_mut();
+        match world
+            .query_filtered::<&Projection, With<MainCamera>>()
+            .single(world)
+            .expect("camera")
+        {
+            Projection::Orthographic(ortho) => ortho.scale,
+            other => panic!("proiezione inattesa: {other:?}"),
+        }
+    }
+
+    /// Con un modale aperto la camera è FERMA: il trascinamento serve a
+    /// scorrere i parametri del pannello "Sfondo", la rotellina scorre il
     /// pannello. Senza la guardia si scorreva il pannello E si spostava la
     /// scena nello stesso gesto.
-    ///
-    /// Il test esegue davvero i sistemi (MinimalPlugins, niente GPU): è anche
-    /// il gate B0001 per le query aggiunte qui.
     #[test]
     fn camera_is_frozen_while_a_modal_is_open() {
-        fn build(with_modal: bool) -> App {
-            let mut app = App::new();
-            app.add_plugins(MinimalPlugins)
-                .init_resource::<Touches>()
-                .init_resource::<ButtonInput<MouseButton>>()
-                .init_resource::<AccumulatedMouseMotion>()
-                .init_resource::<AccumulatedMouseScroll>()
-                .init_resource::<MoveDragState>()
-                .init_resource::<PanState>()
-                .init_resource::<TouchPanState>()
-                .add_systems(
-                    Update,
-                    (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom),
-                );
-            app.world_mut().spawn((
-                Camera2d,
-                MainCamera,
-                Projection::Orthographic(OrthographicProjection::default_2d()),
-                Transform::from_xyz(0.0, 0.0, 0.0),
-            ));
-            if with_modal {
-                // Un modale qualunque (il pannello "Sfondo" è quello nuovo).
-                app.world_mut()
-                    .spawn(crate::systems::starfield_panel::StarfieldDialog);
-            }
-            app
-        }
-
-        fn camera_x(app: &mut App) -> f32 {
-            let world = app.world_mut();
-            world
-                .query_filtered::<&Transform, With<MainCamera>>()
-                .single(world)
-                .expect("camera")
-                .translation
-                .x
-        }
-
         // 1) Senza modale: il drag col tasto destro sposta la camera.
-        let mut free = build(false);
+        let mut free = build(false, Vec2::new(900.0, 900.0));
         free.world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
             .press(MouseButton::Right);
@@ -339,7 +397,7 @@ mod tests {
         );
 
         // 2) Con modale: nessun movimento, né da drag né da rotellina.
-        let mut modal = build(true);
+        let mut modal = build(true, Vec2::new(900.0, 900.0));
         modal
             .world_mut()
             .resource_mut::<ButtonInput<MouseButton>>()
@@ -359,6 +417,36 @@ mod tests {
             camera_x(&mut modal),
             0.0,
             "con un modale aperto la camera non deve muoversi"
+        );
+    }
+
+    /// La rotellina/trackpad a due dita (Mac) sopra un riquadro modale è del
+    /// PANNELLO: lo zoom della scena non deve muoversi, altrimenti scorrendo i
+    /// parametri si cambia anche lo zoom. Fuori dal riquadro, invece, lo zoom
+    /// deve continuare a funzionare.
+    #[test]
+    fn wheel_zoom_is_ignored_over_a_modal_box() {
+        let mut inside = build(true, Vec2::new(200.0, 200.0));
+        inside
+            .world_mut()
+            .resource_mut::<AccumulatedMouseScroll>()
+            .delta = Vec2::new(0.0, 3.0);
+        inside.update();
+        assert_eq!(
+            camera_scale(&mut inside),
+            1.0,
+            "con il cursore sopra il pannello la rotellina non deve zoomare"
+        );
+
+        let mut outside = build(true, Vec2::new(900.0, 900.0));
+        outside
+            .world_mut()
+            .resource_mut::<AccumulatedMouseScroll>()
+            .delta = Vec2::new(0.0, 3.0);
+        outside.update();
+        assert!(
+            (camera_scale(&mut outside) - 1.0).abs() > 1e-6,
+            "fuori dal pannello la rotellina deve zoomare la scena"
         );
     }
 }
