@@ -54,6 +54,52 @@ pub struct StarSector {
 #[derive(Component)]
 pub struct Star;
 
+/// Polvere: la stella SENZA alone+croce, cioè quella che a zoom out estremo
+/// diventa sotto-pixel. Porta l'indice nella cella, così il livello di
+/// dettaglio (`SkyLod`) può tenerne una su N con lo stesso criterio sia allo
+/// spawn sia quando lo zoom cambia.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Dust {
+    pub index: u32,
+}
+
+/// Livello di dettaglio del cielo, deciso dallo ZOOM.
+///
+/// A zoom out estremo un settore copre pochi pixel: la polvere (punti di
+/// 0.6-5 unità mondo) è sotto il pixel e non si vede, ma il cielo passa da
+/// ~1.100 a ~18.800 sprite — 17× il lavoro (estra­zione, pass stencil, pass
+/// sprite) per zero pixel visibili. Questo è il motivo per cui un Mac a zoom
+/// out estremo scatta: le stesse entità costano di più a risoluzione Retina.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SkyLod(pub u8);
+
+/// Sotto il pixel: un settore così piccolo a schermo rende invisibile la
+/// polvere. Soglie sul lato del settore A SCHERMO (`sector_size / zoom`).
+const LOD_DUST_QUARTER_PX: f32 = 400.0;
+const LOD_BIG_ONLY_PX: f32 = 120.0;
+
+/// 0 = tutto, 1 = una polvere su 4, 2 = solo le stelle grandi.
+fn sky_lod(zoom: f32, sector_size: f32) -> u8 {
+    let px = sector_size / zoom.max(1e-4);
+    if px <= LOD_BIG_ONLY_PX {
+        2
+    } else if px <= LOD_DUST_QUARTER_PX {
+        1
+    } else {
+        0
+    }
+}
+
+/// Questa polvere si vede a questo livello di dettaglio? Indice STABILE
+/// (`index % 4`) così cambiando zoom non si rimescola il cielo.
+fn dust_visible(index: u32, lod: u8) -> bool {
+    match lod {
+        0 => true,
+        1 => index % 4 == 0,
+        _ => false,
+    }
+}
+
 /// Parallasse PER STELLA: una stella non si muove col fattore del layer ma con
 /// il suo. `base` è la posizione in spazio-base del layer (dentro il settore),
 /// `factor` la sua parallasse e `layer_factor` quella del settore che la
@@ -122,6 +168,7 @@ impl Plugin for ParallaxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<StarSeed>()
             .init_resource::<StarfieldTuning>()
+            .init_resource::<SkyLod>()
             .init_resource::<StarSectors>()
             .add_systems(Startup, setup_starfield)
             // L'ordine conta: applicare il tuning (che rigenera le texture e
@@ -134,6 +181,7 @@ impl Plugin for ParallaxPlugin {
                 (
                     refresh_starfield_on_tuning_change,
                     stream_starfield,
+                    apply_sky_lod,
                     update_star_drift,
                 )
                     .chain(),
@@ -619,6 +667,7 @@ fn spawn_sector(
     cam: Vec2,
     textures: &StarfieldTextures,
     t: &StarfieldTuning,
+    lod: u8,
 ) -> Entity {
     let li = layer as usize;
     let cfg = t.layers[li];
@@ -638,7 +687,7 @@ fn spawn_sector(
         .id();
 
     commands.entity(root).with_children(|parent| {
-        for _ in 0..cfg.stars {
+        for index in 0..cfg.stars {
             let spec = star_look(&mut rng, li, t);
             // Posizione in spazio-base del layer: il settore è solo un
             // contenitore, la stella ha una parallasse propria (StarDrift).
@@ -654,10 +703,13 @@ fn spawn_sector(
             } else {
                 (textures.dot.clone(), t.dot_scale)
             };
+            // La polvere nasce già col livello di dettaglio corrente: i comandi
+            // sono deferred, quindi `apply_sky_lod` non la vedrebbe in tempo.
+            let visible = spec.is_big || dust_visible(index, lod);
             // Posizionata già corretta al frame di spawn (i comandi sono
             // deferred: senza questo la cella nuova lampeggerebbe).
             let local = base + cam * (spec.factor - cfg.factor);
-            parent.spawn((
+            let mut entity = parent.spawn((
                 Sprite {
                     image,
                     color: spec.color,
@@ -668,7 +720,11 @@ fn spawn_sector(
                 // no normal map (see STARFIELD_HEIGHT).
                 SpriteHeight(STARFIELD_HEIGHT),
                 Transform::from_xyz(local.x, local.y, 0.0),
-                Visibility::default(),
+                if visible {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                },
                 RenderLayers::layer(1),
                 StarDrift {
                     base,
@@ -677,6 +733,9 @@ fn spawn_sector(
                 },
                 Star,
             ));
+            if !spec.is_big {
+                entity.insert(Dust { index });
+            }
         }
 
         // Weenies: distant galaxies are navigation landmarks, so they live
@@ -787,6 +846,7 @@ fn stream_starfield(
     textures: Option<Res<StarfieldTextures>>,
     seed: Res<StarSeed>,
     tuning: Res<StarfieldTuning>,
+    mut lod: ResMut<SkyLod>,
     mut sectors: ResMut<StarSectors>,
     mut roots: Query<&mut Transform, With<StarSector>>,
 ) {
@@ -808,6 +868,10 @@ fn stream_starfield(
         .next()
         .map(|w| Vec2::new(w.width(), w.height()));
     let half_view = viewport_half(window_size, camera, zoom);
+
+    // Livello di dettaglio del cielo (dipende dallo zoom, non dalla camera):
+    // a zoom out estremo la polvere è sotto il pixel e si spegne.
+    lod.set_if_neq(SkyLod(sky_lod(zoom, tuning.sector_size)));
 
     // 1) Which sectors should stay alive (KEEP_MARGIN, hysteresis) and
     //    which of the visible ones (SPAWN_MARGIN) are still missing.
@@ -840,7 +904,16 @@ fn stream_starfield(
     // 3) Spawn the missing sectors (deterministic per cell; positioned at
     //    spawn so they never flash at the origin).
     for (layer, grid) in missing {
-        let entity = spawn_sector(&mut commands, layer, grid, seed.0, cam, &textures, &tuning);
+        let entity = spawn_sector(
+            &mut commands,
+            layer,
+            grid,
+            seed.0,
+            cam,
+            &textures,
+            &tuning,
+            lod.0,
+        );
         sectors.0.insert((layer, grid), entity);
     }
 
@@ -981,7 +1054,20 @@ pub(crate) fn apply_starfield_field(key: &str, text: &str, t: &mut StarfieldTuni
 /// `Transform` nello stesso sistema sono un B0001 (panic all'avvio → su WASM
 /// "Unreachable code").
 fn update_star_drift(
-    cameras: Query<&Transform, (With<Camera2d>, With<MainCamera>, Without<StarDrift>)>,
+    // `Changed<Transform>`: la posizione locale di una stella dipende SOLO
+    // dalla posizione della camera, quindi se la camera non si è mossa (es.
+    // durante uno zoom, che cambia `Projection` e non il Transform) non c'è
+    // niente da riscrivere — e si risparmiano ~18k scritture per frame a zoom
+    // out estremo.
+    cameras: Query<
+        &Transform,
+        (
+            With<Camera2d>,
+            With<MainCamera>,
+            Without<StarDrift>,
+            Changed<Transform>,
+        ),
+    >,
     mut stars: Query<(&StarDrift, &mut Transform)>,
 ) {
     crate::mark_system("update_star_drift");
@@ -993,6 +1079,28 @@ fn update_star_drift(
         let local = drift.base + cam * (drift.factor - drift.layer_factor);
         tf.translation.x = local.x;
         tf.translation.y = local.y;
+    }
+}
+
+/// Spegne la polvere che a questo zoom è sotto il pixel.
+///
+/// Si esegue SOLO quando il livello di dettaglio cambia (è l'unico momento in
+/// cui serve un giro su tutte le stelle): scriverla ogni frame sarebbe un
+/// cambiamento di `Visibility` a vuoto su ~18k entità.
+fn apply_sky_lod(lod: Res<SkyLod>, mut dust: Query<(&Dust, &mut Visibility)>) {
+    crate::mark_system("apply_sky_lod");
+    if !lod.is_changed() {
+        return;
+    }
+    for (dust, mut visibility) in dust.iter_mut() {
+        let want = if dust_visible(dust.index, lod.0) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != want {
+            *visibility = want;
+        }
     }
 }
 
@@ -1331,6 +1439,90 @@ mod tests {
         );
     }
 
+    /// Il livello di dettaglio segue lo ZOOM: a zoom out estremo il settore
+    /// copre pochi pixel e la polvere (sotto il pixel) si spegne. È la difesa
+    /// contro il conto che fa scattare un Mac a zoom out: da ~1.100 a ~18.800
+    /// sprite per zero pixel visibili in più.
+    #[test]
+    fn sky_lod_follows_the_zoom() {
+        let sector = sf_default().sector_size;
+        // Zoom normale: tutto visibile.
+        assert_eq!(sky_lod(1.0, sector), 0);
+        assert_eq!(sky_lod(2.0, sector), 0);
+        // Settore ≤ 400 px a schermo: una polvere su 4.
+        assert_eq!(sky_lod(3.0, sector), 1);
+        assert_eq!(sky_lod(8.0, sector), 1);
+        // Settore ≤ 120 px: solo le stelle grandi.
+        assert_eq!(sky_lod(10.0, sector), 2);
+        assert_eq!(sky_lod(50.0, sector), 2);
+        // Zoom-in: mai sotto il dettaglio pieno.
+        assert_eq!(sky_lod(0.5, sector), 0);
+        // Difesa: zoom 0 o valori assurdi non devono panicare.
+        assert_eq!(sky_lod(0.0, sector), 0);
+    }
+
+    /// A `lod = 1` si tiene una polvere su quattro, sempre le STESSE: la
+    /// scelta dipende dall'indice nella cella, non dal frame.
+    #[test]
+    fn dust_lod_is_stable() {
+        assert!(dust_visible(0, 0) && dust_visible(7, 0));
+        for index in 0..64u32 {
+            let expected = index % 4 == 0;
+            assert_eq!(
+                dust_visible(index, 1),
+                expected,
+                "lod 1: indice {index} sbagliato"
+            );
+        }
+        assert!(!dust_visible(0, 2) && !dust_visible(3, 2));
+        // A lod 1 resta un quarto della polvere.
+        let kept = (0..100u32).filter(|i| dust_visible(*i, 1)).count();
+        assert_eq!(kept, 25);
+    }
+
+    /// `apply_sky_lod` spegne/riaccende la polvere giusta quando il livello
+    /// cambia, e non tocca niente se non è cambiato.
+    #[test]
+    fn apply_sky_lod_toggles_dust_visibility() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SkyLod>()
+            .add_systems(Update, apply_sky_lod);
+        for index in 0..8u32 {
+            app.world_mut()
+                .spawn((Dust { index }, Visibility::Inherited));
+        }
+        // lod 0 (default) → tutto visibile, niente da fare.
+        app.update();
+        let visible = |app: &mut App| -> Vec<bool> {
+            let world = app.world_mut();
+            let mut rows: Vec<(u32, bool)> = world
+                .query::<(&Dust, &Visibility)>()
+                .iter(world)
+                .map(|(dust, visibility)| (dust.index, *visibility == Visibility::Inherited))
+                .collect();
+            rows.sort_by_key(|(index, _)| *index);
+            rows.into_iter().map(|(_, visible)| visible).collect()
+        };
+        assert_eq!(visible(&mut app), vec![true; 8]);
+
+        // lod 2 → solo le stelle grandi: tutta la polvere spenta.
+        app.world_mut().resource_mut::<SkyLod>().0 = 2;
+        app.update();
+        assert_eq!(visible(&mut app), vec![false; 8]);
+
+        // lod 1 → 1 su 4 (indici 0 e 4).
+        app.world_mut().resource_mut::<SkyLod>().0 = 1;
+        app.update();
+        let expected = (0..8u32).map(|i| i % 4 == 0).collect::<Vec<_>>();
+        assert_eq!(visible(&mut app), expected);
+
+        // Ritorno a lod 0: tutto riacceso.
+        app.world_mut().resource_mut::<SkyLod>().0 = 0;
+        app.update();
+        assert_eq!(visible(&mut app), vec![true; 8]);
+    }
+
     #[test]
     fn galaxies_are_deterministic_and_sparse() {
         assert!(sf_default().galaxy_chance > 0.0 && sf_default().galaxy_chance < 0.5);
@@ -1596,11 +1788,18 @@ mod tests {
             .init_asset::<Image>()
             .init_resource::<StarSeed>()
             .init_resource::<StarfieldTuning>()
+            .init_resource::<SkyLod>()
             .init_resource::<StarSectors>()
             .add_systems(Startup, setup_starfield)
             .add_systems(
                 Update,
-                (refresh_starfield_on_tuning_change, stream_starfield).chain(),
+                (
+                    refresh_starfield_on_tuning_change,
+                    stream_starfield,
+                    apply_sky_lod,
+                    update_star_drift,
+                )
+                    .chain(),
             );
 
         let cam = app

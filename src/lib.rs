@@ -453,11 +453,13 @@ pub fn wasm_main() {
         systems::gravity::GravityPlugin,
     ))
     .insert_resource(Gravity::ZERO)
+    .init_resource::<SkyDebug>()
     .add_systems(
         Update,
         (
             debug_state_snapshot,
             debug_ghost_snapshot,
+            debug_sky_snapshot,
             apply_mobile_text_input,
             clear_focus_on_outside_press,
         ),
@@ -1139,6 +1141,45 @@ fn clear_focus_on_outside_press(
 }
 /// `DEBUG_STATE` (leggibile da JS via `debug_state()`). Serve per diagnosticare
 /// il bug "il pianeta si sposta con Select attivo".
+/// Diagnostica del CIELO per il badge `?debug`: FPS, stelle/settori vivi e
+/// livello di dettaglio. Serve a rispondere con un numero (e non a naso) a
+/// domande tipo "perché a zoom out estremo su Mac scatta?": il cielo passa da
+/// ~1.100 a ~18.800 sprite, e con `lod > 0` la polvere sotto il pixel è spenta.
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource, Default)]
+struct SkyDebug {
+    stars: usize,
+    sectors: usize,
+    lod: u8,
+    fps: f32,
+}
+
+/// Riempie `SkyDebug`. Sistema separato: `debug_state_snapshot` è già al
+/// limite di parametri di Bevy (16).
+#[cfg(target_arch = "wasm32")]
+fn debug_sky_snapshot(
+    time: Res<Time>,
+    mut sky: ResMut<SkyDebug>,
+    stars: Query<(), With<crate::systems::parallax::Star>>,
+    sectors: Res<crate::systems::parallax::StarSectors>,
+    lod: Res<crate::systems::parallax::SkyLod>,
+) {
+    crate::mark_system("debug_sky_snapshot");
+    // Media mobile esponenziale: un FPS istantaneo è illeggibile su screenshot.
+    let dt = time.delta_secs();
+    if dt > 0.0 {
+        let instant = 1.0 / dt;
+        sky.fps = if sky.fps > 0.0 {
+            sky.fps * 0.9 + instant * 0.1
+        } else {
+            instant
+        };
+    }
+    sky.stars = stars.iter().count();
+    sky.sectors = sectors.len();
+    sky.lod = lod.0;
+}
+
 #[cfg(target_arch = "wasm32")]
 fn debug_state_snapshot(
     current_tool: Res<crate::systems::tools::CurrentTool>,
@@ -1173,6 +1214,7 @@ fn debug_state_snapshot(
     firefly_cam: Query<(), With<crate::systems::firefly_bridge::FireflyCamera>>,
     firefly_cfg: Query<&bevy_firefly::data::FireflyConfig>,
     light_heights: Query<&bevy_firefly::prelude::LightHeight>,
+    sky: Res<SkyDebug>,
 ) {
     crate::mark_system("debug_state_snapshot");
     use crate::systems::tools::Tool;
@@ -1265,7 +1307,7 @@ fn debug_state_snapshot(
         bevy_firefly::extract::LIGHT_FALLOFF_MODE.load(ord),
     );
     let json = format!(
-        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0},"vpush":{},"vnoclass":{},"vitems":{},"vgpu":"{}"}},"star":"{}","field_rects":[{}],"bodies":[{}]}}"#,
+        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0},"vpush":{},"vnoclass":{},"vitems":{},"vgpu":"{}"}},"star":"{}","field_rects":[{}],"bodies":[{}],"sky":{{"stars":{},"sectors":{},"lod":{},"fps":{:.0}}}}}"#,
         last_system,
         frame,
         tool,
@@ -1294,7 +1336,11 @@ fn debug_state_snapshot(
         vgpu,
         star_str,
         rects.join(","),
-        parts.join(",")
+        parts.join(","),
+        sky.stars,
+        sky.sectors,
+        sky.lod,
+        sky.fps
     );
     // v0.14.120: guardia di sviluppo. Se il payload non è JSON valido il badge
     // JS entra in "🛑 DEAD" (JSON.parse fallisce 4 volte) nascondendo la causa
