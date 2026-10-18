@@ -267,9 +267,14 @@ pub struct StarfieldTuning {
     /// volte il raggio della stella e "mangiava" la croce; a 4.0 il bagliore
     /// resta adeso al nucleo e i bracci si leggono netti.
     pub spike_bloom_exp: f32,
-    /// Cross width, fraction of the quad radius (~1px on screen for big
-    /// stars). Thinner than that shimmers while panning and disappears.
+    /// Cross width AT THE CORE, fraction of the quad radius (~1px on screen
+    /// for big stars). Thinner than that shimmers while panning and disappears.
     pub spike_width: f32,
+    /// Rastremazione dei bracci verso la punta (0..0.95): la larghezza cala
+    /// di `spike_width * (1 - spike_shrink * d)`. A 0 i bracci sono barre a
+    /// larghezza COSTANTE (sbagliato: una punta di diffrazione nasce larga al
+    /// nucleo e finisce a spillo).
+    pub spike_shrink: f32,
     /// Spike intensity.
     pub spike_strength: f32,
     /// Spike taper towards the rim: < 1 gives long arms to the quad edge.
@@ -335,6 +340,7 @@ impl Default for StarfieldTuning {
             spike_core: 0.18,
             spike_bloom_exp: 4.0,
             spike_width: 0.080,
+            spike_shrink: 0.65,
             spike_strength: 0.8,
             spike_taper_exp: 0.5,
         }
@@ -421,7 +427,11 @@ fn star_spike_pixels(t: &StarfieldTuning) -> Vec<u8> {
             // Il decadimento è LENTO (spike_taper_exp < 1) così le punte
             // restano più luminose dell'alone verso il bordo del quad.
             let taper = (1.0 - d).powf(t.spike_taper_exp.max(0.05));
-            let width = t.spike_width.clamp(0.005, 0.5);
+            // Larghezza del braccio: massima al nucleo, rastremata verso il
+            // bordo (mai sotto ~0.12 per non finire sotto il pixel).
+            let width = (t.spike_width.clamp(0.005, 0.5)
+                * (1.0 - t.spike_shrink.clamp(0.0, 0.95) * d))
+            .max(0.012);
             let gauss = |o: f32| (-(o * o) / (width * width)).exp();
             let spike = t.spike_strength * taper * gauss(ay).max(gauss(ax));
             let a = bloom.max(spike).clamp(0.0, 1.0);
@@ -981,6 +991,7 @@ pub(crate) fn starfield_field_value(key: &str, t: &StarfieldTuning) -> String {
         "spike_core" => format!("{:.2}", t.spike_core),
         "spike_bloom" => format!("{:.2}", t.spike_bloom_exp),
         "spike_width" => format!("{:.3}", t.spike_width),
+        "spike_shrink" => format!("{:.2}", t.spike_shrink),
         "spike_strength" => format!("{:.2}", t.spike_strength),
         "spike_taper" => format!("{:.2}", t.spike_taper_exp),
         "galaxy_chance" => format!("{:.2}", t.galaxy_chance),
@@ -1033,6 +1044,7 @@ pub(crate) fn apply_starfield_field(key: &str, text: &str, t: &mut StarfieldTuni
         "spike_core" => t.spike_core = v.clamp(0.02, 0.6),
         "spike_bloom" => t.spike_bloom_exp = v.clamp(0.3, 4.0),
         "spike_width" => t.spike_width = v.clamp(0.01, 0.4),
+        "spike_shrink" => t.spike_shrink = v.clamp(0.0, 0.95),
         "spike_strength" => t.spike_strength = v.clamp(0.0, 1.0),
         "spike_taper" => t.spike_taper_exp = v.clamp(0.1, 2.0),
         "galaxy_chance" => t.galaxy_chance = v.clamp(0.0, 1.0),
@@ -1610,10 +1622,31 @@ mod tests {
             on_diagonal < 0.1,
             "alone troppo largo: a 0.7r sulla diagonale vale {on_diagonal}"
         );
-        // The spikes must survive to the outer part of the quad.
+        // I bracci si RASTREMANO verso la punta: larghi al nucleo, a spillo
+        // fuori (una punta larga all'estremità sembra un "tridente" rovescio).
+        // Misura l'FWHM del braccio a due distanze.
+        // Rapporto fuori-asse / asse alla STESSA distanza: misura la forma del
+        // profilo senza dipendere dalla luminosità (che cala comunque).
+        let profile = |d: f32| -> f32 {
+            let x = c + (half * d) as usize;
+            let on_axis = at(x, c);
+            let off_axis = at(x, c + 1);
+            if on_axis > 0.0 {
+                off_axis / on_axis
+            } else {
+                0.0
+            }
+        };
+        let near = profile(0.55);
+        let far = profile(0.9);
+        assert!(
+            near > far * 1.2,
+            "il braccio non si assottiglia verso la punta: profilo {near:.2} a 0.55r, {far:.2} a 0.9r"
+        );
+        // La punta resta comunque visibile (altrimenti i bracci sembrano corti).
         let outer = at(c + (half * 0.9) as usize, c);
         assert!(
-            outer > 0.2,
+            outer > 0.12,
             "spike must still be visible at 0.9r (a={outer})"
         );
         // And the halo must still be there for the off-axis directions.

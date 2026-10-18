@@ -132,6 +132,10 @@ const SHAPE_FIELDS: &[(&str, &str)] = &[
     ("set_sf_spike_core", "spike_core (nucleo saturo):"),
     ("set_sf_spike_bloom", "spike_bloom (strettezza alone):"),
     ("set_sf_spike_width", "spike_width (spessore bracci):"),
+    (
+        "set_sf_spike_shrink",
+        "spike_shrink (rastremazione punta, 0-0.95):",
+    ),
     ("set_sf_spike_strength", "spike_strength (forza bracci):"),
     (
         "set_sf_spike_taper",
@@ -955,7 +959,7 @@ mod tests {
                 .query_filtered::<Entity, With<PropInput>>()
                 .iter(world)
                 .count(),
-            38,
+            39,
             "tutti i campi del pannello devono esistere"
         );
     }
@@ -965,8 +969,8 @@ mod tests {
         let keys = all_field_keys();
         assert_eq!(
             keys.len(),
-            38,
-            "24 di layer (8 × 3) + 7 forma + 3 galassie + 4 settori"
+            39,
+            "24 di layer (8 × 3) + 8 forma + 3 galassie + 4 settori"
         );
         let mut seen = std::collections::HashSet::new();
         for key in keys {
