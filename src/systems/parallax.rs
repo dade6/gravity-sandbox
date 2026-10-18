@@ -262,8 +262,10 @@ pub struct StarfieldTuning {
     pub spike_scale: f32,
     /// Saturated core, as a fraction of the big star's quad radius.
     pub spike_core: f32,
-    /// Bloom falloff exponent. > 1 keeps the halo TIGHT so the cross wins
-    /// outside it; a fat halo drowns the cross and every big star is a blob.
+    /// Esponente del falloff dell'alone (nucleo -> bordo). Valori alti = alone
+    /// STRETTO attorno al nucleo: con 1.6 l'alone si allargava fino a ~2.2
+    /// volte il raggio della stella e "mangiava" la croce; a 4.0 il bagliore
+    /// resta adeso al nucleo e i bracci si leggono netti.
     pub spike_bloom_exp: f32,
     /// Cross width, fraction of the quad radius (~1px on screen for big
     /// stars). Thinner than that shimmers while panning and disappears.
@@ -331,7 +333,7 @@ impl Default for StarfieldTuning {
             dot_scale: 1.0,
             spike_scale: 3.2,
             spike_core: 0.18,
-            spike_bloom_exp: 1.6,
+            spike_bloom_exp: 4.0,
             spike_width: 0.080,
             spike_strength: 0.8,
             spike_taper_exp: 0.5,
@@ -1600,6 +1602,13 @@ mod tests {
         assert!(
             on_axis > on_diagonal * 1.15,
             "the cross must stand out from the halo (axis {on_axis} vs diagonal {on_diagonal})"
+        );
+        // L'alone NON deve più allargarsi a due raggi di stella: fuori dalla
+        // croce (sulla diagonale) a 0.7r deve essere quasi spento. Con
+        // bloom 1.6 valeva 0.22 e le stelle con croce sembravano un blob.
+        assert!(
+            on_diagonal < 0.1,
+            "alone troppo largo: a 0.7r sulla diagonale vale {on_diagonal}"
         );
         // The spikes must survive to the outer part of the quad.
         let outer = at(c + (half * 0.9) as usize, c);
