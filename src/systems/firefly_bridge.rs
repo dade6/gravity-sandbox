@@ -38,6 +38,18 @@ const LIGHT_HEIGHT: f32 = 0.0;
 /// Altezza stella: con z_sorting, non riceve ombre dai pianeti.
 const STAR_HEIGHT: f32 = 1000.0;
 
+/// Risoluzione delle texture procedurali CONDIVISE (v0.14.149).
+///
+/// Il disco e la normal map vengono stesi sul quad del corpo
+/// (`custom_size = radius*2`), quindi i texel per pixel a schermo dipendono
+/// dal RAGGIO in unita' mondo: con un preset a scala grande (pianeti da
+/// ~400 px CSS, ~1200 px su Retina) una texture 64² dava 6 px di schermo per texel ->
+/// bordi a scalini; la normal map 256² dava ~1.5 px/texel -> terminatore a
+/// bande. Regola: >= 1 texel per PIXEL FISICO (DPR 3 su iPhone/Mac) al raggio massimo previsto.
+const DISC_TEX_SIZE: usize = 1024;
+const NORMAL_TEX_SIZE: usize = 1024;
+const GLOW_TEX_SIZE: u32 = 512;
+
 /// Marker sulla camera (ha già FireflyConfig).
 #[derive(Component)]
 pub struct FireflyCamera;
@@ -80,8 +92,10 @@ impl FromWorld for FireflyTextures {
         let curve = world.resource::<GlowCurve>().clone();
         let mut images = world.resource_mut::<Assets<Image>>();
 
-        // Disco bianco 64x64 con alpha (cerchio pieno) — tinto con sprite.color.
-        let size = 64usize;
+        // Disco bianco con alpha (cerchio pieno) — tinto con sprite.color.
+        // Bordo ANTIALIASATO su 1 texel: con alpha binario lo scalino della
+        // texture si vede non appena il disco supera ~100 px a schermo.
+        let size = DISC_TEX_SIZE;
         let mut pixels = vec![0u8; size * size * 4];
         let center = (size as f32 - 1.0) / 2.0;
         let radius = size as f32 / 2.0 - 1.0;
@@ -90,7 +104,8 @@ impl FromWorld for FireflyTextures {
                 let dx = x as f32 - center;
                 let dy = y as f32 - center;
                 let dist = (dx * dx + dy * dy).sqrt();
-                let alpha = if dist <= radius { 255u8 } else { 0u8 };
+                let coverage = (radius + 0.5 - dist).clamp(0.0, 1.0);
+                let alpha = (coverage * 255.0) as u8;
                 let i = (y * size + x) * 4;
                 pixels[i] = 255;
                 pixels[i + 1] = 255;
@@ -102,7 +117,7 @@ impl FromWorld for FireflyTextures {
 
         // Alone radiale: curva + soft edge dal GlowCurve globale (4321: niente
         // gradino al bordo). Tinto col colore della stella.
-        let glow = images.add(generate_radial_glow_texture(128, &curve));
+        let glow = images.add(generate_radial_glow_texture(GLOW_TEX_SIZE, &curve));
 
         // Normal map sfera: GENERATA proceduralmente (stessa identica immagine
         // della sfera, 256x256) invece di caricarla da file. Motivi:
@@ -112,7 +127,7 @@ impl FromWorld for FireflyTextures {
         //    gamma correction, i valori delle normali sono corretti.
         // 3. Pronta subito: niente attesa del caricamento, niente timing.
         // Vedi generate_sphere_normal_map() in rendering/textures.rs.
-        let nsize = 256usize;
+        let nsize = NORMAL_TEX_SIZE;
         let npixels = generate_sphere_normal_map(nsize);
         let sphere_normal = images.add(build_image(npixels, nsize as u32, nsize as u32));
 
