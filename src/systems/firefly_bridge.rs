@@ -571,7 +571,10 @@ fn sync_body_sprite_sizes(
         (
             Entity,
             &CelestialBody,
-            &Children,
+            // OPTIONAL: i pianeti NON hanno figli (solo le stelle hanno gli
+            // aloni). Con `&Children` il pianeta non entrava mai nel sistema e
+            // il raggio restava senza effetto (bug v0.14.152).
+            Option<&Children>,
             Option<&StarGlow>,
             Option<&BodyTextureSize>,
         ),
@@ -611,7 +614,7 @@ fn sync_body_sprite_sizes(
         }
 
         // 2) Aloni della stella (inner/outer): scala proporzionale al raggio.
-        if let Some(g) = glow {
+        if let (Some(g), Some(children)) = (glow, children) {
             for child in children.iter() {
                 let scale = match sprites.get_mut(child) {
                     Ok((_, true, _)) => g.inner_scale,
@@ -1461,6 +1464,52 @@ mod tests {
             "l'alone inner deve seguire il raggio (2*r*inner_scale)"
         );
         println!("OK radius -> sprite/alone/texture seguono il raggio");
+    }
+
+    /// Forma REALE di un pianeta: nessun child e nessun `StarGlow`. La query
+    /// del sistema chiedeva `&Children` (presente solo sulle stelle con aloni)
+    /// → il pianeta non entrava mai nel sistema e il raggio non aveva effetto.
+    #[test]
+    fn radius_change_resizes_planet_without_children() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_resource::<BodyTextureCache>();
+        app.add_systems(Update, sync_body_sprite_sizes);
+
+        let planet = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    radius: 20.0,
+                    ..Default::default()
+                },
+                Sprite::default(),
+                FireflySpriteAttached,
+                BodyTextureSize(texture_size_for_radius(20.0)),
+            ))
+            .id();
+        assert!(
+            app.world().get::<Children>(planet).is_none(),
+            "il pianeta di prova non deve avere figli (come in app)"
+        );
+
+        app.update();
+        app.world_mut().get_mut::<CelestialBody>(planet).unwrap().radius = 95.0;
+        app.update();
+
+        let world = app.world();
+        let sprite = world.get::<Sprite>(planet).unwrap();
+        assert!(
+            (sprite.custom_size.unwrap().x - 190.0).abs() < 1e-3,
+            "un pianeta SENZA figli deve comunque seguire il raggio: {:?}",
+            sprite.custom_size
+        );
+        assert_eq!(
+            world.get::<BodyTextureSize>(planet).unwrap().0,
+            512,
+            "95*2*2=380 -> bucket 512"
+        );
     }
 
     /// Il disco ha un bordo antialiasato (almeno un texel di transizione).
