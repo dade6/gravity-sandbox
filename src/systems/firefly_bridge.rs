@@ -13,16 +13,17 @@
 //!   occluder (la stella a SpriteHeight alto non viene oscurata dai pianeti).
 //! - Occluder: Occluder2d::circle per ogni corpo non-luminoso.
 
-use avian2d::prelude::LockedAxes;
+use avian2d::prelude::{Collider, LockedAxes};
 use bevy::prelude::*;
 use bevy_firefly::prelude::*;
+use std::collections::HashMap;
 
 use crate::components::celestial::CelestialBody;
 use crate::components::lighting::{
     AmbientLight, GlowCurve, LightFalloff, StarGlow, StarLightSettings,
 };
 use crate::rendering::textures::{
-    build_image, generate_radial_glow_texture, generate_sphere_normal_map,
+    build_image, generate_disc_texture, generate_radial_glow_texture, generate_sphere_normal_map,
 };
 
 /// Configurazione luce: disco circolare della dimensione della stella.
@@ -38,16 +39,19 @@ const LIGHT_HEIGHT: f32 = 0.0;
 /// Altezza stella: con z_sorting, non riceve ombre dai pianeti.
 const STAR_HEIGHT: f32 = 1000.0;
 
-/// Risoluzione delle texture procedurali CONDIVISE (v0.14.149).
+/// Risoluzione delle texture dei corpi (v0.14.151).
 ///
-/// Il disco e la normal map vengono stesi sul quad del corpo
-/// (`custom_size = radius*2`), quindi i texel per pixel a schermo dipendono
-/// dal RAGGIO in unita' mondo: con un preset a scala grande (pianeti da
-/// ~400 px CSS, ~1200 px su Retina) una texture 64² dava 6 px di schermo per texel ->
-/// bordi a scalini; la normal map 256² dava ~1.5 px/texel -> terminatore a
-/// bande. Regola: >= 1 texel per PIXEL FISICO (DPR 3 su iPhone/Mac) al raggio massimo previsto.
-const DISC_TEX_SIZE: usize = 1024;
-const NORMAL_TEX_SIZE: usize = 1024;
+/// Disco e normal map NON sono più una texture unica stirata su ogni corpo:
+/// ogni raggio ha la SUA risoluzione (`texture_size_for_radius`), con cache per
+/// potenza di due così i corpi simili condividono gli handle (RAM + batching).
+/// Il vincolo viene dal fatto che la silhouette del corpo è l'alpha del disco
+/// steso su `custom_size = radius*2`: tenere ~2 texel per unità mondo dà
+/// ~1.2 pixel FISICI per texel su un pianeta da 400 px (DPR 3 di iPhone/Mac).
+const TEXELS_PER_WORLD_UNIT: f32 = 2.0;
+const MIN_BODY_TEX_SIZE: usize = 64;
+const MAX_BODY_TEX_SIZE: usize = 1024;
+/// Lato dell'alone radiale: l'unica texture ancora globale (dipende solo dalla
+/// curva, non dalla dimensione del corpo).
 const GLOW_TEX_SIZE: u32 = 512;
 
 /// Marker sulla camera (ha già FireflyConfig).
@@ -74,11 +78,11 @@ pub struct FireflyGlowInner;
 #[derive(Component)]
 pub struct FireflyGlowOuter;
 
-/// Texture condivise: disco bianco (base sprite), normal map sfera, alone.
+/// Texture globali (indipendenti dalla dimensione del corpo): l'alone radiale,
+/// la cui forma dipende solo dalla curva globale (`GlowCurve`). Disco e normal
+/// map sono invece per-dimensione: vedi `BodyTextureCache`.
 #[derive(Resource)]
 pub struct FireflyTextures {
-    pub disc: Handle<Image>,
-    pub sphere_normal: Handle<Image>,
     /// Disco con gradiente radiale (bianco al centro → trasparente ai bordi),
     /// usato come alone luminoso attorno alle stelle. La curva + soft edge
     /// sono GLOBALI (risorsa `GlowCurve`); `curve` qui serve a rigenerarla al
@@ -91,54 +95,78 @@ impl FromWorld for FireflyTextures {
     fn from_world(world: &mut World) -> Self {
         let curve = world.resource::<GlowCurve>().clone();
         let mut images = world.resource_mut::<Assets<Image>>();
-
-        // Disco bianco con alpha (cerchio pieno) — tinto con sprite.color.
-        // Bordo ANTIALIASATO su 1 texel: con alpha binario lo scalino della
-        // texture si vede non appena il disco supera ~100 px a schermo.
-        let size = DISC_TEX_SIZE;
-        let mut pixels = vec![0u8; size * size * 4];
-        let center = (size as f32 - 1.0) / 2.0;
-        let radius = size as f32 / 2.0 - 1.0;
-        for y in 0..size {
-            for x in 0..size {
-                let dx = x as f32 - center;
-                let dy = y as f32 - center;
-                let dist = (dx * dx + dy * dy).sqrt();
-                let coverage = (radius + 0.5 - dist).clamp(0.0, 1.0);
-                let alpha = (coverage * 255.0) as u8;
-                let i = (y * size + x) * 4;
-                pixels[i] = 255;
-                pixels[i + 1] = 255;
-                pixels[i + 2] = 255;
-                pixels[i + 3] = alpha;
-            }
-        }
-        let disc = images.add(build_image(pixels, size as u32, size as u32));
-
-        // Alone radiale: curva + soft edge dal GlowCurve globale (4321: niente
+        // Alone radiale: curva + soft edge dal GlowCurve globale (niente
         // gradino al bordo). Tinto col colore della stella.
         let glow = images.add(generate_radial_glow_texture(GLOW_TEX_SIZE, &curve));
-
-        // Normal map sfera: GENERATA proceduralmente (stessa identica immagine
-        // della sfera, 256x256) invece di caricarla da file. Motivi:
-        // 1. load_with_settings(is_srgb=false) crashava il WASM su iPhone
-        //    (fetch asset async) -> WASM DEAD -> canvas congelato.
-        // 2. build_image crea Rgba8Unorm NON-sRGB per costruzione: niente
-        //    gamma correction, i valori delle normali sono corretti.
-        // 3. Pronta subito: niente attesa del caricamento, niente timing.
-        // Vedi generate_sphere_normal_map() in rendering/textures.rs.
-        let nsize = NORMAL_TEX_SIZE;
-        let npixels = generate_sphere_normal_map(nsize);
-        let sphere_normal = images.add(build_image(npixels, nsize as u32, nsize as u32));
-
-        Self {
-            disc,
-            sphere_normal,
-            glow,
-            curve,
-        }
+        Self { glow, curve }
     }
 }
+
+/// Coppia disco + normal map generate per UNA risoluzione (lato in texel).
+#[derive(Clone)]
+pub struct BodyTextureSet {
+    pub disc: Handle<Image>,
+    pub normal: Handle<Image>,
+}
+
+/// Cache delle texture per-dimensione, chiave = lato in texel (potenza di 2).
+///
+/// Perché una cache e non una texture per corpo: corpi di dimensioni simili
+/// finiscono nella stessa potenza di due, quindi condividono gli handle (meno
+/// RAM e sprite batchabili), senza però stirare una texture piccola su un
+/// disco grande. Prima della v0.14.151 c'era UNA sola coppia 64²/256² per tutti
+/// i corpi: a raggi grandi la silhouette andava a scalini e la normal map a
+/// bande (il difetto si vede cambiando la scala del preset, ma anche solo
+/// alzando il raggio dal pannello).
+#[derive(Resource, Default)]
+pub struct BodyTextureCache {
+    sets: HashMap<usize, BodyTextureSet>,
+}
+
+impl BodyTextureCache {
+    /// Texture per il lato `size`, generandole la prima volta.
+    pub fn get_or_build(&mut self, size: usize, images: &mut Assets<Image>) -> BodyTextureSet {
+        if let Some(set) = self.sets.get(&size) {
+            return set.clone();
+        }
+        let disc = images.add(generate_disc_texture(size));
+        let normal = images.add(build_image(
+            generate_sphere_normal_map(size),
+            size as u32,
+            size as u32,
+        ));
+        let set = BodyTextureSet { disc, normal };
+        self.sets.insert(size, set.clone());
+        set
+    }
+
+    /// Quante coppie sono state generate (diagnostica/test).
+    pub fn len(&self) -> usize {
+        self.sets.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sets.is_empty()
+    }
+}
+
+/// Lato (texel) della texture adatto al raggio del corpo, in potenza di due.
+///
+/// Il disco viene steso su `radius*2` unità mondo: `TEXELS_PER_WORLD_UNIT`
+/// texel per unità, arrotondati alla potenza di due superiore e limitati a
+/// [64, 1024] (lo stesso budget della v0.14.149, ma assegnato per corpo).
+pub(crate) fn texture_size_for_radius(radius: f32) -> usize {
+    let wanted = (radius.max(1.0) * 2.0 * TEXELS_PER_WORLD_UNIT).ceil() as usize;
+    wanted
+        .max(1)
+        .next_power_of_two()
+        .clamp(MIN_BODY_TEX_SIZE, MAX_BODY_TEX_SIZE)
+}
+
+/// Risoluzione attualmente applicata alla sprite del corpo (per non rigenerare
+/// texture quando il raggio cambia ma resta nello stesso bucket).
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BodyTextureSize(pub usize);
 
 pub struct FireflyBridgePlugin;
 
@@ -146,6 +174,7 @@ impl Plugin for FireflyBridgePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FireflyPlugin)
             .init_resource::<FireflyTextures>()
+            .init_resource::<BodyTextureCache>()
             .init_resource::<GlowCurve>()
             .init_resource::<AmbientLight>()
             // Idempotente: si attiva al primo frame in cui la camera esiste.
@@ -165,6 +194,8 @@ impl Plugin for FireflyBridgePlugin {
                     spawn_star_lights,
                     spawn_planet_occluders,
                     sync_occluders,
+                    sync_body_sprite_sizes,
+                    sync_colliders,
                     sync_sprite_z,
                     apply_star_light_settings,
                     apply_star_glow_settings,
@@ -273,6 +304,8 @@ pub(crate) fn glow_alpha(base_alpha: f32) -> f32 {
 fn convert_bodies_to_sprites(
     mut commands: Commands,
     textures: Res<FireflyTextures>,
+    mut cache: ResMut<BodyTextureCache>,
+    mut images: ResMut<Assets<Image>>,
     bodies: Query<
         (
             Entity,
@@ -285,14 +318,18 @@ fn convert_bodies_to_sprites(
     >,
 ) {
     for (entity, body, _transform, glow, light_settings) in bodies.iter() {
+        // Texture della dimensione giusta per QUESTO corpo (v0.14.151).
+        let tex_size = texture_size_for_radius(body.radius);
+        let set = cache.get_or_build(tex_size, &mut images);
         let mut cmd = commands.entity(entity);
         cmd.remove::<Mesh2d>()
             .remove::<MeshMaterial2d<crate::systems::lighting::LightMaterial>>()
             .remove::<MeshMaterial2d<ColorMaterial>>()
             .insert(FireflySpriteAttached)
+            .insert(BodyTextureSize(tex_size))
             .insert((
                 Sprite {
-                    image: textures.disc.clone(),
+                    image: set.disc.clone(),
                     color: Color::srgba(body.color[0], body.color[1], body.color[2], 1.0),
                     custom_size: Some(Vec2::splat(body.radius * 2.0)),
                     ..default()
@@ -359,7 +396,8 @@ fn convert_bodies_to_sprites(
 /// piatto per sempre. Idempotente: gira finché non tutti i pianeti l'hanno.
 fn attach_normal_maps(
     mut commands: Commands,
-    textures: Res<FireflyTextures>,
+    mut cache: ResMut<BodyTextureCache>,
+    mut images: ResMut<Assets<Image>>,
     planets: Query<
         (Entity, &CelestialBody),
         (
@@ -380,9 +418,10 @@ fn attach_normal_maps(
         if body.luminous {
             continue;
         }
+        let set = cache.get_or_build(texture_size_for_radius(body.radius), &mut images);
         commands
             .entity(entity)
-            .insert(NormalMap::from_image(textures.sphere_normal.clone()));
+            .insert(NormalMap::from_image(set.normal.clone()));
     }
 }
 
@@ -511,6 +550,94 @@ fn sync_occluders(
     }
 }
 
+/// La sprite del corpo deve seguire il raggio, come già fa `sync_occluders`
+/// per il cono d'ombra: senza questo sistema, cambiando Radius dal pannello
+/// il cono cambiava e il disco no (v0.14.151).
+///
+/// Aggiorna, sui corpi cambiati:
+/// - `Sprite.custom_size` = diameter (silhouette del corpo);
+/// - la coppia disco/normal map alla risoluzione del nuovo raggio, quando il
+///   raggio cambia di bucket (potenza di due) — niente rebuild se resta nello
+///   stesso bucket;
+/// - gli sprite degli aloni della stella (child), che sono funzione del raggio.
+///
+/// UNA sola query `&mut Sprite` con `Has<FireflyGlowInner/Outer>` (due query
+/// separate sarebbero un B0001 all'init — vedi pitfall 0b2).
+fn sync_body_sprite_sizes(
+    mut commands: Commands,
+    mut cache: ResMut<BodyTextureCache>,
+    mut images: ResMut<Assets<Image>>,
+    bodies: Query<
+        (
+            Entity,
+            &CelestialBody,
+            &Children,
+            Option<&StarGlow>,
+            Option<&BodyTextureSize>,
+        ),
+        (With<FireflySpriteAttached>, Changed<CelestialBody>),
+    >,
+    mut sprites: Query<(
+        &mut Sprite,
+        Has<FireflyGlowInner>,
+        Has<FireflyGlowOuter>,
+    )>,
+) {
+    for (entity, body, children, glow, applied) in bodies.iter() {
+        // 1) Corpo: diametro + texture alla risoluzione del raggio.
+        let tex_size = texture_size_for_radius(body.radius);
+        let needs_new_texture = applied.map(|a| a.0) != Some(tex_size);
+        let new_set = if needs_new_texture {
+            Some(cache.get_or_build(tex_size, &mut images))
+        } else {
+            None
+        };
+        if let Ok((mut sprite, is_inner, is_outer)) = sprites.get_mut(entity) {
+            if !is_inner && !is_outer {
+                sprite.custom_size = Some(Vec2::splat(body.radius * 2.0));
+                if let Some(set) = &new_set {
+                    sprite.image = set.disc.clone();
+                }
+            }
+        }
+        if needs_new_texture {
+            let set = new_set.as_ref().expect("texture appena generate");
+            if !body.luminous {
+                commands
+                    .entity(entity)
+                    .insert(NormalMap::from_image(set.normal.clone()));
+            }
+            commands.entity(entity).insert(BodyTextureSize(tex_size));
+        }
+
+        // 2) Aloni della stella (inner/outer): scala proporzionale al raggio.
+        if let Some(g) = glow {
+            for child in children.iter() {
+                let scale = match sprites.get_mut(child) {
+                    Ok((_, true, _)) => g.inner_scale,
+                    Ok((_, _, true)) => g.outer_scale,
+                    _ => continue,
+                };
+                if let Ok((mut sp, _, _)) = sprites.get_mut(child) {
+                    sp.custom_size = Some(Vec2::splat(body.radius * 2.0 * scale));
+                }
+            }
+        }
+    }
+}
+
+/// Il collider Avian deve seguire il raggio come la sprite e l'occluder:
+/// altrimenti il corpo appare grande ma collide (e spinge) con la forma
+/// vecchia. `Mass` è esplicita, quindi la forma non tocca la massa.
+fn sync_colliders(
+    mut commands: Commands,
+    bodies: Query<(Entity, &CelestialBody), (Changed<CelestialBody>, With<Collider>)>,
+) {
+    for (entity, body) in bodies.iter() {
+        commands.entity(entity).insert(Collider::circle(body.radius));
+    }
+}
+
 /// z = body-id UNICO per corpo (index): la sprite e il suo occluder child
 /// condividono lo stesso z -> lo shader (patch v0.14.59) skippa SOLO
 /// l'auto-ombra (uguaglianza stencil.g == occ.z). Con z = -y (worker) o z=0
@@ -585,7 +712,7 @@ fn ensure_glow_texture_matches_curve(
     mut images: ResMut<Assets<Image>>,
 ) {
     if curve.is_changed() || textures.curve != *curve {
-        textures.glow = images.add(generate_radial_glow_texture(128, &curve));
+        textures.glow = images.add(generate_radial_glow_texture(GLOW_TEX_SIZE, &curve));
         textures.curve = curve.clone();
     }
 }
@@ -1231,6 +1358,125 @@ mod tests {
         );
         println!(
             "OK meccanismo: il push manuale di un'entita' non visibile a Bevy viene cancellato"
+        );
+    }
+
+    /// v0.14.151: la risoluzione della texture segue il raggio del corpo.
+    #[test]
+    fn texture_size_follows_radius_in_powers_of_two() {
+        assert_eq!(texture_size_for_radius(5.0), 64, "raggi piccoli: minimo 64");
+        assert_eq!(texture_size_for_radius(12.0), 64, "12*2*2=48 -> 64");
+        assert_eq!(texture_size_for_radius(20.0), 128, "20*2*2=80 -> 128");
+        assert_eq!(texture_size_for_radius(50.0), 256, "50*2*2=200 -> 256");
+        assert_eq!(texture_size_for_radius(120.0), 512, "120*2*2=480 -> 512");
+        assert_eq!(texture_size_for_radius(200.0), 1024, "200*2*2=800 -> 1024");
+        assert_eq!(texture_size_for_radius(300.0), 1024, "tetto 1024");
+        // monotona non decrescente: alzare il raggio non deve MAI abbassare la res
+        let mut prev = 0;
+        for r in [1.0, 3.0, 8.0, 16.0, 31.0, 64.0, 128.0, 255.0, 512.0] {
+            let size = texture_size_for_radius(r);
+            assert!(size >= prev, "risoluzione non monotona a raggio {r}");
+            prev = size;
+        }
+    }
+
+    /// La cache riusa la stessa coppia di texture per lo stesso lato.
+    #[test]
+    fn texture_cache_reuses_one_set_per_size() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_resource::<BodyTextureCache>();
+        let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+        let mut cache = BodyTextureCache::default();
+        let a = cache.get_or_build(256, &mut images);
+        let b = cache.get_or_build(256, &mut images);
+        let c = cache.get_or_build(512, &mut images);
+        assert_eq!(cache.len(), 2, "due risoluzioni -> due coppie");
+        assert_eq!(a.disc, b.disc, "stesso lato -> stesso handle (batching)");
+        assert_eq!(a.normal, b.normal);
+        assert_ne!(a.disc, c.disc, "lati diversi -> texture diverse");
+        let img = images.get(&a.normal).expect("normal map generata");
+        assert_eq!(img.width(), 256, "normal map alla risoluzione del bucket");
+    }
+
+    /// Cambiare `radius` (come fa il pannello) deve ridimensionare la sprite e
+    /// rigenerare la texture: prima restava tutto com'era (solo il cono
+    /// d'ombra seguiva il raggio, via `sync_occluders`).
+    #[test]
+    fn radius_change_resizes_sprite_and_swaps_texture() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_resource::<BodyTextureCache>();
+        app.add_systems(Update, sync_body_sprite_sizes);
+
+        let body = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    radius: 20.0,
+                    ..Default::default()
+                },
+                StarGlow::default(),
+                Sprite::default(),
+                FireflySpriteAttached,
+                BodyTextureSize(texture_size_for_radius(20.0)),
+            ))
+            .id();
+        // Child alone (inner): deve seguire il raggio anche lui.
+        let glow_child = app
+            .world_mut()
+            .spawn((FireflyGlowInner, Sprite::default(), ChildOf(body)))
+            .id();
+
+        app.update();
+        let size_before = {
+            let world = app.world();
+            world.get::<Sprite>(body).unwrap().custom_size.unwrap().x
+        };
+        assert!((size_before - 40.0).abs() < 1e-3, "diametro = 2*raggio (20)");
+        let tex_before = app.world().get::<BodyTextureSize>(body).unwrap().0;
+        assert_eq!(tex_before, 128);
+
+        // Il pannello scrive solo `radius`.
+        app.world_mut().get_mut::<CelestialBody>(body).unwrap().radius = 200.0;
+        app.update();
+
+        let world = app.world();
+        let sprite = world.get::<Sprite>(body).unwrap();
+        assert!(
+            (sprite.custom_size.unwrap().x - 400.0).abs() < 1e-3,
+            "la sprite deve seguire il nuovo raggio (400), non restare 40: {:?}",
+            sprite.custom_size
+        );
+        assert_eq!(
+            world.get::<BodyTextureSize>(body).unwrap().0,
+            1024,
+            "la texture deve passare al bucket del nuovo raggio"
+        );
+        let glow = world.get::<Sprite>(glow_child).unwrap();
+        assert!(
+            (glow.custom_size.unwrap().x - 200.0 * 2.0 * 4.0).abs() < 1e-3,
+            "l'alone inner deve seguire il raggio (2*r*inner_scale)"
+        );
+        println!("OK radius -> sprite/alone/texture seguono il raggio");
+    }
+
+    /// Il disco ha un bordo antialiasato (almeno un texel di transizione).
+    #[test]
+    fn disc_texture_edge_is_antialiased() {
+        let size = 128usize;
+        let img = crate::rendering::textures::generate_disc_texture(size);
+        let data = img.data.as_ref().expect("dati del disco").clone();
+        let alpha = |x: usize, y: usize| data[(y * size + x) * 4 + 3];
+        assert_eq!(alpha(size / 2, size / 2), 255, "centro opaco");
+        assert_eq!(alpha(0, 0), 0, "angolo fuori dal cerchio");
+        let row = size / 2;
+        let transitions = (0..size).filter(|&x| (1..255).contains(&alpha(x, row))).count();
+        assert!(
+            transitions >= 1,
+            "bordo a scalino: nessun texel di transizione (alpha binario)"
         );
     }
 }

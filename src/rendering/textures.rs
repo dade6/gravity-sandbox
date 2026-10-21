@@ -131,6 +131,33 @@ pub(crate) fn build_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
     image
 }
 
+/// Disco bianco (RGBA, alpha = cerchio) con bordo ANTIALIASATO su 1 texel.
+/// Usato come immagine base delle sprite dei corpi: la silhouette del corpo è
+/// l'alpha di questa texture, quindi la sua risoluzione deve stare al passo
+/// col raggio in unità mondo (`custom_size = radius*2`) — vedi
+/// `texture_size_for_radius` in firefly_bridge.rs.
+pub(crate) fn generate_disc_texture(size: usize) -> Image {
+    let mut pixels = vec![0u8; size * size * 4];
+    let center = (size as f32 - 1.0) / 2.0;
+    let radius = size as f32 / 2.0 - 1.0;
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            // Coverage su un texel: senza questo lo scalino della texture si
+            // vede appena il disco supera ~100 px a schermo.
+            let coverage = (radius + 0.5 - dist).clamp(0.0, 1.0);
+            let i = (y * size + x) * 4;
+            pixels[i] = 255;
+            pixels[i + 1] = 255;
+            pixels[i + 2] = 255;
+            pixels[i + 3] = (coverage * 255.0) as u8;
+        }
+    }
+    build_image(pixels, size as u32, size as u32)
+}
+
 /// Radial soft-glow texture (luminous source halo): tinted white (the sprite
 /// `color` applies the star tint), with alpha `(1 - t)^falloff_exp` where
 /// `t` is the normalised radius 0 (centre) → 1 (disc edge). The alpha ramps
