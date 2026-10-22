@@ -451,6 +451,10 @@ pub fn wasm_main() {
         FireflyBridgePlugin,
         systems::camera_follow::CameraFollowPlugin,
         systems::gravity::GravityPlugin,
+        // Log di movimento per-frame su file (diagnostica scatti). Attivo da
+        // subito: il buffer è in RAM, JS lo svuota con `drain_motion_log` e lo
+        // spedisce al server, che scrive il CSV.
+        systems::motion_log::MotionLogPlugin,
     ))
     .insert_resource(Gravity::ZERO)
     .init_resource::<SkyDebug>()
@@ -978,6 +982,22 @@ pub fn set_mobile_device(mobile: bool) {
         if let Ok(mut m) = crate::js_bridge::MOBILE_DEVICE.lock() {
             *m = mobile;
         }
+    }
+}
+
+/// JS: svuota il log di movimento e restituisce le righe CSV accumulate
+/// (`motion_log.rs`). Il polling JS lo spedisce al server, che le appende a
+/// `~/gravity-logs/motion-<sessione>.csv`: così i valori per-frame non vanno
+/// letti a occhio dal badge (cambiano troppo in fretta).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn drain_motion_log() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::systems::motion_log::drain()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        String::new()
     }
 }
 

@@ -6,6 +6,7 @@ pub mod keypad;
 pub mod light;
 pub mod lighting;
 pub mod minimap;
+pub mod motion_log;
 pub mod orbit;
 pub mod parallax;
 pub mod persistence;

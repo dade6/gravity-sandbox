@@ -13,6 +13,7 @@ import sys
 from http.server import ThreadingHTTPServer
 
 from precompressed import PrecompressedMixin
+from logsink import append_log, session_from_path
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 9443
 BASE = "/home/ubuntu/workspace/gravity-sandbox/wasm-dist"
@@ -55,6 +56,29 @@ class Handler(PrecompressedMixin):
         # Bottone "Salva" della sandbox: POST /save-preset -> assets/preset.json
         # (il SimpleHTTPRequestHandler base risponde 501 senza questo handler)
         print(f"POST {self.path}", flush=True)
+        # Log di movimento per-frame: POST /log?s=<sessione> -> CSV su file
+        # (~/gravity-logs/motion-<sessione>.csv). Da gestire PRIMA di
+        # /save-preset, che è l'altro unico POST supportato.
+        if self.path.split("?", 1)[0] == "/log":
+            length = int(self.headers.get("Content-Length", 0))
+            if length <= 0:
+                self.send_error(400, "Empty body")
+                return
+            body = self.rfile.read(length)
+            try:
+                path = append_log(session_from_path(self.path), body)
+            except OSError as e:
+                self.send_error(500, f"Write failed: {e}")
+                return
+            payload = json.dumps({"ok": True, "path": path, "bytes": len(body)}).encode()
+            self.send_response(200)
+            self.send_header("Content-type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path != "/save-preset":
             self.send_error(404, "Not Found")
             return
