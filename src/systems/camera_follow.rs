@@ -60,9 +60,18 @@ impl Plugin for CameraFollowPlugin {
                     adapt_follow_position,
                 ),
             )
-            // PostUpdate, DOPO pan/zoom (Update): lo snap vince sul pan e
-            // lo zoom resta sempre agganciato (vedi follow_camera).
-            .add_systems(PostUpdate, follow_camera);
+            // PostUpdate, PRIMA della propagazione dei transform: a questo
+            // punto il `Transform` dei corpi è già quello smussato del frame
+            // (`TranslationInterpolation` scrive in
+            // `RunFixedMainLoop::AfterFixedMainLoop`), quindi camera e corpo
+            // cadono sullo stesso istante e il corpo resta esattamente
+            // centrato. Scrivendo la camera prima di `Propagate` la sua
+            // `GlobalTransform` è fresca nello stesso frame (scrivendola dopo
+            // il render userebbe una camera vecchia di un frame).
+            .add_systems(
+                PostUpdate,
+                follow_camera.before(bevy::transform::TransformSystems::Propagate),
+            );
     }
 }
 
@@ -353,7 +362,12 @@ fn follow_camera(
     touches: Res<Touches>,
     mut touch_origin: Local<Option<Vec2>>,
     mut camera_query: Query<&mut Transform, (With<Camera2d>, With<MainCamera>)>,
-    bodies: Query<&GlobalTransform>,
+    // `Transform` (non `GlobalTransform`): gira PRIMA di
+    // `TransformSystems::Propagate`, dove la GlobalTransform del corpo è
+    // ancora quella del frame precedente. Sui corpi celesti, che sono root,
+    // il Transform è la posizione in world. Il filtro `Without<MainCamera>`
+    // rende la query disgiunta da `camera_query` (altrimenti B0001 all'init).
+    bodies: Query<&Transform, (With<CelestialBody>, Without<MainCamera>)>,
 ) {
     crate::mark_system("follow_camera");
     let Some(target) = follow.0 else {
@@ -389,7 +403,7 @@ fn follow_camera(
         *touch_origin = None;
         return;
     }
-    let Ok(body_pos) = bodies.get(target).map(|t| t.translation()) else {
+    let Ok(body_pos) = bodies.get(target).map(|t| t.translation) else {
         // Corpo cancellato: torna libera invece di restare appesa.
         follow.0 = None;
         return;
@@ -397,5 +411,70 @@ fn follow_camera(
     if let Ok(mut transform) = camera_query.single_mut() {
         transform.translation.x = body_pos.x;
         transform.translation.y = body_pos.y;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::celestial::BodyType;
+
+    /// GATE B0001 + comportamento base: `follow_camera` ha DUE query su
+    /// `Transform` (camera in scrittura, corpi in lettura). Devono essere
+    /// disgiunte per filtro (`With<MainCamera>` / `Without<MainCamera>`),
+    /// altrimenti il sistema panica all'INIT — su WASM = pagina morta, e
+    /// `cargo check` non lo vede. Qui il sistema gira davvero.
+    ///
+    /// Verifica anche che la camera finisca ESATTAMENTE sulla posizione del
+    /// corpo (nessun ritardo di un frame: è quello che rende il follow
+    /// stabile mentre il corpo è interpolato).
+    #[test]
+    fn follow_camera_runs_and_snaps_onto_the_body() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<CameraFollow>()
+            .init_resource::<CameraFollowOpen>()
+            // Input: i plugin di input non sono caricati in headless.
+            .insert_resource(ButtonInput::<MouseButton>::default())
+            .insert_resource(AccumulatedMouseMotion::default())
+            .insert_resource(AccumulatedMouseScroll::default())
+            .insert_resource(Touches::default())
+            .add_systems(PostUpdate, follow_camera);
+
+        let cam = app
+            .world_mut()
+            .spawn((Camera2d, MainCamera, Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "Terra".into(),
+                    body_type: BodyType::Planet,
+                    mass: 1.0,
+                    radius: 5.0,
+                    color: [0.5, 0.5, 0.8],
+                    luminous: false,
+                },
+                Transform::from_xyz(123.0, -45.0, 0.0),
+            ))
+            .id();
+        app.world_mut().resource_mut::<CameraFollow>().0 = Some(body);
+
+        app.update();
+        let tf = app.world().entity(cam).get::<Transform>().unwrap();
+        assert_eq!(
+            (tf.translation.x, tf.translation.y),
+            (123.0, -45.0),
+            "la camera deve cadere esattamente sul corpo, senza ritardo"
+        );
+
+        // Corpo despawnato: la camera torna libera invece di restare appesa.
+        app.world_mut().entity_mut(body).despawn();
+        app.update();
+        assert!(
+            app.world().resource::<CameraFollow>().0.is_none(),
+            "corpo sparito → follow libero"
+        );
     }
 }
