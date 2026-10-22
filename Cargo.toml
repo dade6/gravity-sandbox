@@ -33,10 +33,6 @@ bevy = { version = "0.19", default-features = false, features = [
 ] }
 
 avian2d = "0.7"
-# Stessa versione che Avian 0.7 usa internamente (bevy_transform_interpolation
-# 0.5): serve per leggere `TranslationEasingState` nel sistema che chiude
-# l'easing in pausa. Una sola copia nel grafo.
-bevy_transform_interpolation = "0.5"
 bevy_firefly = "0.19"
 bevy_shader = { version = "0.19", default-features = false }
 libm = "=0.2.11"
