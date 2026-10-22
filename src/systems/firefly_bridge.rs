@@ -16,6 +16,9 @@
 use avian2d::prelude::{Collider, LockedAxes};
 use bevy::prelude::*;
 use bevy_firefly::prelude::*;
+// `TransformEasingSystems` non è riesportato dal prelude di avian2d 0.7:
+// serve per ordinare `sync_sprite_z` prima di `UpdateEnd` (vedi il plugin).
+use bevy_transform_interpolation::TransformEasingSystems;
 use std::collections::HashMap;
 
 use crate::components::celestial::CelestialBody;
@@ -196,12 +199,31 @@ impl Plugin for FireflyBridgePlugin {
                     sync_occluders,
                     sync_body_sprite_sizes,
                     sync_colliders,
-                    sync_sprite_z,
                     apply_star_light_settings,
                     apply_star_glow_settings,
                 )
                     .chain(),
-            );
+            )
+            // `sync_sprite_z` scrive `Transform.z` sui corpi (z-sort di
+            // firefly = distanza dalla stella) e in orbita cambia OGNI frame.
+            // Deve stare DENTRO il fixed step: una scrittura di `Transform` in
+            // `Update` fa azzerare lo stato di interpolazione
+            // (`reset_easing_states_on_transform_change` di
+            // bevy_transform_interpolation) e il moto torna a scatti — è il
+            // difetto della v0.14.154, rollback in v0.14.155 (v0.14.156: z nel
+            // tick). Lo z-sort è una chiave di ordinamento: il tick basta.
+            .add_systems(
+                FixedPostUpdate,
+                sync_sprite_z
+                    .after(avian2d::schedule::PhysicsSystems::Writeback)
+                    .before(TransformEasingSystems::UpdateEnd),
+            )
+            // Da fermo non gira nessun tick: senza questa passata lo z
+            // resterebbe indietro su un corpo trascinato in pausa (ordinamento
+            // sbagliato finché non si riprende). Scrive solo al cambio, quindi
+            // un corpo fermo non tocca `Transform` (niente restart del ghost,
+            // bug v0.14.93).
+            .add_systems(Update, sync_sprite_z.run_if(simulation_is_paused));
     }
 }
 
@@ -690,6 +712,14 @@ pub(crate) fn sync_sprite_z(
     }
 }
 
+/// Condizione per la passata in `Update` di `sync_sprite_z`: da fermo non gira
+/// nessun tick fisico, quindi lo z-sort va ricalcolato qui (es. corpo
+/// trascinato in pausa). `Option`: gli harness headless possono non avere il
+/// resource `SimulationState`.
+fn simulation_is_paused(sim: Option<Res<crate::systems::timeline::SimulationState>>) -> bool {
+    sim.map(|s| s.paused).unwrap_or(false)
+}
+
 // ============================================================
 // Ticket 19 — star light / glow / ambient apply systems
 // ============================================================
@@ -827,6 +857,116 @@ fn apply_star_glow_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A/B (v0.14.156): la scrittura di `z` per lo z-sort NON deve distruggere
+    /// l'interpolazione del moto.
+    ///
+    /// `sync_sprite_z` scrive `Transform.z` sui corpi e in orbita il valore
+    /// cambia a ogni frame. In `Update` quella scrittura fa scattare
+    /// `reset_easing_states_on_transform_change` (bevy_transform_interpolation
+    /// azzera lo stato di easing a ogni `Transform` modificato fuori dal fixed
+    /// step) → il corpo alterna posizione smussata e posizione fisica
+    /// quantizzata: passi irregolari, peggio del caso senza easing (è il
+    /// difetto della v0.14.154, rollback in v0.14.155). Dentro il fixed step,
+    /// dopo il writeback di Avian, lo stesso sistema non tocca l'easing.
+    #[test]
+    fn z_sort_in_the_tick_keeps_body_motion_smooth() {
+        use avian2d::prelude::*;
+
+        fn steps(z_in_update: bool) -> Vec<f32> {
+            use avian2d::prelude::*;
+            use bevy_transform_interpolation::TransformEasingSystems;
+            let mut app = App::new();
+            app.add_plugins((
+                MinimalPlugins,
+                bevy::transform::TransformPlugin,
+                PhysicsPlugins::default(),
+                crate::systems::gravity::GravityPlugin,
+            ))
+            .insert_resource(Gravity::ZERO)
+            .insert_resource(crate::systems::persistence::GravitationalConstant(0.0))
+            .insert_resource(crate::systems::timeline::SimulationState::default())
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f64(1.0 / 120.0),
+            ));
+            if z_in_update {
+                app.add_systems(Update, sync_sprite_z);
+            } else {
+                app.add_systems(
+                    FixedPostUpdate,
+                    sync_sprite_z
+                        .after(avian2d::schedule::PhysicsSystems::Writeback)
+                        .before(TransformEasingSystems::UpdateEnd),
+                );
+            }
+            app.finish();
+            spawn_body(app.world_mut(), "Sole", Vec2::ZERO, 30.0, true);
+            let planet = app
+                .world_mut()
+                .spawn((
+                    CelestialBody {
+                        name: "Terra".into(),
+                        body_type: crate::components::celestial::BodyType::Planet,
+                        mass: 10.0,
+                        radius: 5.0,
+                        color: [0.5, 0.5, 0.8],
+                        luminous: false,
+                    },
+                    Transform::from_xyz(0.0, 300.0, 0.0),
+                    Position::from_xy(0.0, 300.0),
+                    RigidBody::Dynamic,
+                    Collider::circle(5.0),
+                    Mass(10.0),
+                    LinearVelocity(Vec2::new(120.0, 0.0)),
+                    Sprite::default(),
+                ))
+                .id();
+            for _ in 0..4 {
+                app.update();
+            }
+            let mut ys = Vec::new();
+            for _ in 0..12 {
+                app.update();
+                ys.push(
+                    app.world()
+                        .entity(planet)
+                        .get::<Transform>()
+                        .unwrap()
+                        .translation
+                        .x,
+                );
+            }
+            ys.windows(2).map(|w| w[1] - w[0]).collect()
+        }
+
+        fn spread(v: &[f32]) -> f32 {
+            v.iter().cloned().fold(f32::NEG_INFINITY, f32::max)
+                - v.iter().cloned().fold(f32::INFINITY, f32::min)
+        }
+
+        let bad = steps(true);
+        let good = steps(false);
+        eprintln!(
+            "SPIKE z in Update : spread={:.4} passi={bad:?}",
+            spread(&bad)
+        );
+        eprintln!(
+            "SPIKE z nel tick  : spread={:.4} passi={good:?}",
+            spread(&good)
+        );
+        assert!(
+            spread(&good) < 0.05,
+            "z nel tick: passi uniformi (spread={:.4})",
+            spread(&good)
+        );
+        assert!(
+            spread(&bad) > spread(&good) * 2.0,
+            "z in Update deve degradare l'easing: spread bad={:.4} good={:.4}",
+            spread(&bad),
+            spread(&good)
+        );
+    }
+
 
     fn spawn_body(world: &mut World, name: &str, pos: Vec2, radius: f32, luminous: bool) {
         world.spawn((

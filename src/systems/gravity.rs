@@ -3,9 +3,11 @@ use avian2d::dynamics::solver::schedule::SubstepSchedule;
 use avian2d::dynamics::solver::solver_body::SolverBody;
 use avian2d::prelude::*;
 use bevy::prelude::*;
+use bevy_transform_interpolation::TranslationEasingState;
 
 use crate::components::celestial::CelestialBody;
 use crate::systems::persistence::{GravitationalConstant, SOFTENING};
+use crate::systems::timeline::SimulationState;
 
 /// Plugin gravità (v0.14.104): registra il sistema per-substep.
 /// Un solo punto di registrazione per prod WASM (`lib.rs`), nativo
@@ -24,6 +26,30 @@ impl Plugin for GravityPlugin {
         // ogni `CelestialBody` resta sempre integrato — presente, passato e
         // futuro — e sim vera e ghost vedono la stessa fisica.
         app.register_required_components::<CelestialBody, SleepingDisabled>();
+        // Smussamento visivo del moto (v0.14.156).
+        //
+        // La fisica integra a passi fissi (1/64 s) e Avian scrive `Transform`
+        // SOLO nel tick: a 120 Hz metà dei frame non muovono niente e gli altri
+        // saltano di un tick intero → il pianeta "scatta" (si vede col follow
+        // camera, nella parallasse delle stelle).
+        // `TranslationInterpolation` scrive il `Transform` interpolato in
+        // `RunFixedMainLoop::AfterFixedMainLoop`, PRIMA di `Update`, quindi ogni
+        // lettore di posizione vede già la posizione smussata.
+        //
+        // GATE (pagato con la v0.14.154, rollback in v0.14.155): l'easing si
+        // azzera a OGNI scrittura di `Transform` fuori dal fixed step
+        // (`reset_easing_states_on_transform_change`). Per questo `sync_sprite_z`
+        // — che scrive `z` sui corpi per lo z-sort di firefly — è stato spostato
+        // DENTRO il tick (firefly_bridge.rs). Se domani si aggiunge un altro
+        // scrittore per-frame di `Transform` sui corpi, lo smussamento sparisce
+        // in silenzio: va spostato anche quello.
+        app.register_required_components::<CelestialBody, TranslationInterpolation>();
+        app.add_systems(
+            RunFixedMainLoop,
+            snap_eased_transforms_while_paused
+                .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
+                .after(TransformEasingSystems::Ease),
+        );
         app.add_systems(
             SubstepSchedule,
             substep_gravity_system
@@ -40,6 +66,48 @@ pub fn pair_force(delta: Vec2, dist_sq: f32, m1: f32, m2: f32, g: f32) -> Vec2 {
     let force_magnitude = g * m1 * m2 / (dist_sq + SOFTENING * SOFTENING);
     let direction = delta / dist_sq.sqrt();
     direction * force_magnitude
+}
+
+/// In pausa la posizione renderizzata deve essere quella VERA di fine tick.
+///
+/// L'easing lascia il corpo a `lerp(start, end, overstep_fraction)`: con gli
+/// orologi fermi quella frazione resta congelata, quindi un singolo Step
+/// mostrerebbe il corpo ancora in `start` (visivamente "non si muove") e la
+/// pausa lo lascerebbe fino a un tick indietro.
+///
+/// Si scrive SOLO al cambio reale: una scrittura per frame di `Transform` in
+/// pausa tiene caldo `Changed<Transform>`, e `ghost_dirty_triggers` (che lo
+/// guarda solo da fermo) riavvierebbe la previsione ogni frame — le curve
+/// future resterebbero congelate a 1 chunk (stesso sintomo del bug v0.14.93).
+///
+/// Si usa `end` (stato dell'easing) e NON `Position`: se il corpo è stato
+/// spostato fuori dal fixed loop (drag, pannello, reset)
+/// `reset_easing_states_on_transform_change` ha già azzerato lo stato (`None`)
+/// e questo sistema non tocca niente.
+fn snap_eased_transforms_while_paused(
+    sim_state: Option<Res<SimulationState>>,
+    mut bodies: Query<(&mut Transform, &mut TranslationEasingState)>,
+    mut was_paused: Local<bool>,
+) {
+    crate::mark_system("snap_eased_transforms_while_paused");
+    // `Option`: gli harness headless aggiungono `GravityPlugin` senza
+    // `TimelinePlugin`; senza il resource si assume "non in pausa".
+    let paused = sim_state.map(|s| s.paused).unwrap_or(false);
+    if !paused && !*was_paused {
+        return;
+    }
+    *was_paused = paused;
+    for (mut transform, mut easing) in &mut bodies {
+        let Some(end) = easing.end else { continue };
+        if transform.translation != end {
+            transform.translation = end;
+        }
+        // Al ritorno in play `start` = `end` evita il saltino INDIETRO del
+        // primo frame (mostrerebbe `lerp(start, end, frazione)`).
+        if easing.start != Some(end) {
+            easing.start = Some(end);
+        }
+    }
 }
 
 /// N-body gravity: kick di velocità per-substep (v0.14.104).
@@ -291,6 +359,205 @@ mod spike_tests {
         assert!(
             moved > 1e-4,
             "la stella deve muoversi sotto l'attrazione del pianeta (mossa={moved:.6})"
+        );
+    }
+}
+
+#[cfg(test)]
+mod smoothing_tests {
+    use super::*;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    use crate::components::celestial::BodyType;
+    use crate::systems::timeline::SimulationState;
+
+    fn paused_app() -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+            GravityPlugin,
+        ))
+        .insert_resource(Gravity::ZERO)
+        .insert_resource(GravitationalConstant(0.0))
+        .insert_resource(SimulationState::default())
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 120.0,
+        )));
+        app.finish();
+        let body = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "Terra".into(),
+                    body_type: BodyType::Planet,
+                    mass: 10.0,
+                    radius: 5.0,
+                    color: [0.5, 0.5, 0.8],
+                    luminous: false,
+                },
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Position::from_xy(0.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::circle(5.0),
+                Mass(10.0),
+                LinearVelocity(Vec2::new(120.0, 0.0)),
+            ))
+            .id();
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<SimulationState>().paused = true;
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        app.world_mut().resource_mut::<Time<Physics>>().pause();
+        (app, body)
+    }
+
+    /// L'interpolazione è SOLO visiva: le `Position` della fisica devono essere
+    /// identiche a quelle di una run senza easing (`NoTranslationEasing`).
+    ///
+    /// Serve perché "la traiettoria è cambiata" è il sintomo che ha fatto
+    /// sospettare (a torto) il motore: con e senza easing le posizioni fisiche
+    /// coincidono, quindi se le orbite SEMBRANO diverse il colpevole è un
+    /// consumatore della posizione (previsione ghost, camera, z-sort).
+    #[test]
+    fn interpolation_does_not_perturb_the_physics() {
+        fn track(no_easing: bool, ticks: usize) -> Vec<Vec2> {
+            let g = 5000.0f32;
+            let (m_star, m_planet, r) = (5000.0f32, 50.0f32, 200.0f32);
+            let v_circ = (g * m_star * r / (r * r + 25.0)).sqrt();
+            let mut app = App::new();
+            app.add_plugins((
+                MinimalPlugins,
+                bevy::transform::TransformPlugin,
+                PhysicsPlugins::default(),
+                GravityPlugin,
+            ))
+            .insert_resource(Gravity::ZERO)
+            .insert_resource(GravitationalConstant(g))
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+                1.0 / 64.0,
+            )));
+            app.finish();
+            let spawn = |world: &mut World, pos: Vec2, vel: Vec2, mass: f32, radius: f32| {
+                let mut e = world.spawn((
+                    CelestialBody {
+                        name: "b".into(),
+                        body_type: BodyType::Planet,
+                        mass,
+                        radius,
+                        color: [0.5, 0.5, 0.8],
+                        luminous: false,
+                    },
+                    Transform::from_xyz(pos.x, pos.y, 0.0),
+                    Position::from_xy(pos.x, pos.y),
+                    RigidBody::Dynamic,
+                    Collider::circle(radius),
+                    Mass(mass),
+                    LinearVelocity(vel),
+                ));
+                if no_easing {
+                    e.insert(NoTranslationEasing);
+                }
+                e.id()
+            };
+            let star = spawn(app.world_mut(), Vec2::ZERO, Vec2::ZERO, m_star, 30.0);
+            let planet = spawn(
+                app.world_mut(),
+                Vec2::new(r, 0.0),
+                Vec2::new(0.0, v_circ),
+                m_planet,
+                12.0,
+            );
+            let mut out = Vec::with_capacity(ticks);
+            for _ in 0..ticks {
+                app.update();
+                let w = app.world();
+                let sp = w.entity(star).get::<Position>().unwrap().0;
+                let pp = w.entity(planet).get::<Position>().unwrap().0;
+                out.push(pp - sp);
+            }
+            out
+        }
+
+        let with_easing = track(false, 200);
+        let without = track(true, 200);
+        let mut max_d = 0.0f32;
+        let mut at = 0;
+        for (i, (a, b)) in with_easing.iter().zip(without.iter()).enumerate() {
+            let d = (*a - *b).length();
+            if d > max_d {
+                max_d = d;
+                at = i;
+            }
+        }
+        eprintln!("SPIKE easing: max delta orbita = {max_d:.4} al tick {at} (r=200)");
+        assert!(
+            max_d < 1e-3,
+            "l'easing non deve toccare la fisica: delta max {max_d:.4} unità al tick {at}"
+        );
+    }
+
+    /// Lo snap in pausa deve scrivere `Transform` SOLO quando serve.
+    ///
+    /// Esperienza v0.14.154: scrivendolo a ogni frame, `Changed<Transform>`
+    /// restava caldo e `ghost_dirty_triggers` (che lo guarda solo da fermo)
+    /// riavviava la previsione ogni frame → curve future congelate a 1 chunk e
+    /// "traiettoria cambiata" a schermo (stesso sintomo del bug v0.14.93).
+    #[test]
+    fn paused_snap_writes_only_on_change() {
+        let (mut app, _body) = paused_app();
+        // Primo frame di pausa: lo snap chiude l'easing (una scrittura vera).
+        app.update();
+        let mut q = app
+            .world_mut()
+            .query_filtered::<Entity, (With<CelestialBody>, Changed<Transform>)>();
+        let mut frames_with_write = 0;
+        for _ in 0..5 {
+            app.update();
+            if q.iter(app.world()).count() > 0 {
+                frames_with_write += 1;
+            }
+        }
+        assert_eq!(
+            frames_with_write, 0,
+            "in pausa, con gli orologi fermi, il corpo non si muove: nessuna \
+             scrittura di Transform dopo lo snap (frame con scritture: {frames_with_write}/5)"
+        );
+    }
+
+    /// In pausa il `Transform` mostrato deve essere la posizione VERA di fine
+    /// tick, e un singolo Step deve spostare il corpo di un tick intero.
+    #[test]
+    fn paused_body_shows_true_position_and_step_moves_it() {
+        let (mut app, body) = paused_app();
+        app.update();
+        let w = app.world();
+        let tf = w.entity(body).get::<Transform>().unwrap().translation.x;
+        let pos = w.entity(body).get::<Position>().unwrap().0.x;
+        assert!(
+            (tf - pos).abs() < 1e-3,
+            "in pausa Transform deve coincidere con Position: tf={tf:.4} pos={pos:.4}"
+        );
+
+        let timestep = app.world().resource::<Time<Fixed>>().timestep();
+        app.world_mut()
+            .resource_mut::<Time<Fixed>>()
+            .accumulate_overstep(timestep);
+        app.world_mut().resource_mut::<Time<Physics>>().unpause();
+        app.update();
+        app.world_mut().resource_mut::<Time<Physics>>().pause();
+        let w = app.world();
+        let tf2 = w.entity(body).get::<Transform>().unwrap().translation.x;
+        let pos2 = w.entity(body).get::<Position>().unwrap().0.x;
+        assert!(
+            (tf2 - pos2).abs() < 1e-3,
+            "dopo lo Step Transform deve coincidere con Position: tf={tf2:.4} pos={pos2:.4}"
+        );
+        assert!(
+            tf2 - tf > 1.0,
+            "lo Step deve VEDERSI: prima={tf:.4} dopo={tf2:.4} (un tick = 1.875 unità)"
         );
     }
 }
