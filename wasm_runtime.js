@@ -296,6 +296,11 @@ export async function loadWasmLifecycle(url, opts = {}) {
             throttleMs: opts.throttleMs,
             fetchImpl: opts.fetchImpl,
             signal: opts.signal,
+            // opts.request: init di fetch passato al download (es.
+            // {cache:'default'} per lasciare che il wasm versionato ?v=...
+            // resti nella cache disco del browser invece di essere
+            // riscaricato a ogni ricarica).
+            request: opts.request,
             onProgress: (p) => {
                 if (p.phase === 'start') {
                     emit(events, 'download-start', { loaded: 0, total: p.total, fraction: p.fraction });

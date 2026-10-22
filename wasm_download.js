@@ -99,15 +99,15 @@ export async function downloadWasm(url, opts = {}) {
     if (!r.ok) throw new Error('wasm fetch HTTP ' + r.status);
 
     // ---- totale affidabile per la % ------------------------------------
-    // gzip  -> il reader emette byte DECOMPRESSI: il totale vero è la
-    //          taglia decompressa (header X-... o sidecar), NON il
+    // gzip / brotli -> il reader emette byte DECOMPRESSI: il totale vero è
+    //          la taglia decompressa (header X-... o sidecar), NON il
     //          Content-Length (che è la taglia compressa).
     // identico -> il reader emette i byte grezzi: Content-Length è il
     //          totale esatto; sidecar solo se CL manca (chunked).
     const enc = (r.headers.get('Content-Encoding') || '').toLowerCase();
-    const gzip = enc.indexOf('gzip') >= 0 || enc.indexOf('deflate') >= 0;
+    const compressed = enc.indexOf('gzip') >= 0 || enc.indexOf('deflate') >= 0 || enc.indexOf('br') >= 0;
     let total = null;
-    if (gzip) {
+    if (compressed) {
         const hDec = parsePositiveInt(r.headers.get('X-Wasm-Decompressed-Length'));
         total = hDec != null ? hDec : sideSize;
     } else {

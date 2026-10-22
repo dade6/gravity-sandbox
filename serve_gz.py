@@ -15,7 +15,9 @@ import os
 import shutil
 import sys
 import time
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
+
+from precompressed import PrecompressedMixin
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8081
 DIR = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(os.path.abspath(__file__))
@@ -34,35 +36,14 @@ def ensure_preset_exists():
             print(f'WARN: impossibile creare preset.json: {e}', flush=True)
 
 
-class GzHandler(SimpleHTTPRequestHandler):
+class GzHandler(PrecompressedMixin):
+    """Handler con brotli/gzip precompresso (logica in precompressed.py)."""
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIR, **kwargs)
 
-    def end_headers(self):
-        self.send_header("Cache-Control", "no-cache")
-        super().end_headers()
-
-    def send_head(self):
-        # Se il client accetta gzip e il .gz esiste, serviamo il precompresso.
-        accepts_gzip = "gzip" in (self.headers.get("Accept-Encoding") or "")
-        gz_path = self.translate_path(self.path) + ".gz"
-        if accepts_gzip and not self.path.endswith(".gz") and os.path.isfile(gz_path):
-            try:
-                f = open(gz_path, "rb")
-            except OSError:
-                return super().send_head()
-            ctype = self.guess_type(gz_path)
-            self.send_response(200)
-            self.send_header("Content-type", ctype)
-            self.send_header("Content-Encoding", "gzip")
-            self.send_header("Content-Length", str(os.fstat(f.fileno()).st_size))
-            self.send_header("Last-Modified", self.date_time_string(os.fstat(f.fileno()).st_mtime))
-            self.end_headers()
-            return f
-        return super().send_head()
-
     def guess_type(self, path):
-        if path.endswith(".wasm") or path.endswith(".wasm.gz"):
+        if path.endswith(".wasm") or path.endswith(".wasm.gz") or path.endswith(".wasm.br"):
             return "application/wasm"
         return super().guess_type(path)
 
@@ -103,12 +84,16 @@ class GzHandler(SimpleHTTPRequestHandler):
         except OSError as e:
             self.send_error(500, f'Write failed: {e}')
             return
+        payload = json.dumps({'ok': True, 'path': PRESET_PATH}).encode()
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Access-Control-Allow-Origin', '*')
+        # HTTP/1.1 + keep-alive: senza Content-Length il client resterebbe
+        # in attesa di altro corpo fino al timeout.
+        self.send_header('Content-Length', str(len(payload)))
         self.end_headers()
-        self.wfile.write(json.dumps({'ok': True, 'path': PRESET_PATH}).encode())
+        self.wfile.write(payload)
 
 
 if __name__ == "__main__":

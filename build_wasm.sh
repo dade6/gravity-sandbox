@@ -19,24 +19,43 @@ rm -f wasm-dist/gravity_sandbox_[0-9]*.js \
       wasm-dist/gravity_sandbox_[0-9]*_bg.wasm \
       wasm-dist/gravity_sandbox_[0-9]*.d.ts \
       wasm-dist/gravity_sandbox_[0-9]*_bg.wasm.d.ts \
-      wasm-dist/gravity_sandbox.js.gz wasm-dist/gravity_sandbox_bg.wasm.gz
+      wasm-dist/*.br wasm-dist/*.gz
 
-# Build WASM: --no-opt evita il timeout di wasm-opt su binary ~110MB.
+# Build WASM: --no-opt evita il timeout di wasm-opt su binary da decine di MB.
 # Target dir condiviso configurato in .cargo/config.toml.
 RUSTFLAGS='--cfg getrandom_backend="wasm_js"' \
     wasm-pack build --target web --no-opt --out-dir wasm-dist --out-name gravity_sandbox
 
-# Gzip precompresso del wasm: da iPhone (Tailscale/DERP) il fetch di 112MB si
-# tronca a metà e Safari lo segnala come errore CORS ("due to access control
-# checks"); il server serve il .gz (Content-Encoding: gzip) a chi lo accetta.
-# 16.8MB invece di 112MB -> il fetch passa anche su connessioni lente.
-gzip -kf wasm-dist/gravity_sandbox_bg.wasm
+WASM=wasm-dist/gravity_sandbox_bg.wasm
 
-# Sidecar progresso caricamento: taglia DECOMPRESSA del wasm (quello che il
-# reader del browser emette anche quando il server manda il .gz). index.html
-# lo legge per mostrare la % REALE di download sotto gzip (Content-Length è la
-# taglia compressa, non confrontabile coi byte decompressi letti dal reader).
-stat -c %s wasm-dist/gravity_sandbox_bg.wasm > wasm-dist/gravity_sandbox_bg.wasm.size
+# Node serve per brotli (zlib ha BROTLI_PARAM_QUALITY 11, il CLI brotli non
+# e' installato). In una shell non interattiva node non e' nel PATH: lo
+# cerchiamo anche dove lo installa Hermes.
+NODE="$(command -v node 2>/dev/null || true)"
+if [ -z "$NODE" ]; then
+    NODE="$(ls -d "$HOME"/.hermes/tools/node-*/bin/node 2>/dev/null | head -1)"
+fi
+if [ -z "$NODE" ]; then
+    echo "ERRORE: node non trovato (serve per comprimere in brotli)" >&2
+    exit 1
+fi
+
+# Strip della sezione custom `name`: rustc la emette anche in release e nel
+# nostro build pesava ~55MB su 111MB (meta' del download) senza servire a
+# nulla a runtime. Il wasm resta valido: la spec la considera opzionale.
+python3 scripts/strip_wasm_name.py "$WASM"
+
+# Precompressione. Ordine di preferenza nel server (precompressed.py):
+#   .br -> brotli q11, ~6.6MB sul wasm attuale (il piu' piccolo)
+#   .gz -> gzip -9, fallback per i client senza brotli
+# Il sidecar .size e' la taglia DECOMPRESSA: il reader del browser emette
+# byte decompressi anche quando il server manda il .br/.gz, quindi la
+# percentuale della loading bar si calcola su questo valore.
+"$NODE" scripts/brotli_compress.js "$WASM" "$WASM.br"
+gzip -9 -kf "$WASM"
+stat -c %s "$WASM" > "$WASM.size"
+
+echo "wasm: $(stat -c %s "$WASM") byte grezzi, $(stat -c %s "$WASM.gz") gzip, $(stat -c %s "$WASM.br") brotli"
 
 # Asset serviti via HTTP (modificabili senza ricompilare il WASM)
 mkdir -p wasm-dist/assets
@@ -63,5 +82,15 @@ cp wasm_runtime.js wasm-dist/wasm_runtime.js
 # agli eventi del loader (integrazione t_8553586d); test:
 # webtests/run_loading_bar_tests.mjs + webtests/run_integration_tests.mjs
 cp loading_bar.js wasm-dist/loading_bar.js
+
+# Precompressione degli asset di testo sulla critical path: glue JS (166KB),
+# loader (wasm_download/wasm_runtime), barra di caricamento e index.html.
+# Va DOPO le copie qui sopra, altrimenti comprimerebbe i file vecchi.
+for f in wasm-dist/gravity_sandbox.js wasm-dist/wasm_download.js \
+         wasm-dist/wasm_runtime.js wasm-dist/loading_bar.js wasm-dist/index.html; do
+    [ -f "$f" ] || continue
+    gzip -9 -kf "$f"
+    "$NODE" scripts/brotli_compress.js "$f" "$f.br" | sed 's/^/  /'
+done
 
 echo "Build OK: wasm-dist aggiornato (gravity_sandbox + assets + index.html)"
