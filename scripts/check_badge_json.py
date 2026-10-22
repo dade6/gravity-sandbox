@@ -40,8 +40,9 @@ for suffix in ('"#,', '",'):
         body = body[: -len(suffix)]
         break
 
-placeholders = len(re.findall(r"\{:\.[0-9]\}", body)) + len(re.findall(r"\{\}", body))
-rebuilt = body.replace("{:.0}", "0").replace("{}", "0")
+placeholder_re = re.compile(r"(?<!\{)\{(?!\{)[^{}]*\}")
+placeholders = len(placeholder_re.findall(body))
+rebuilt = placeholder_re.sub("0", body)
 rebuilt = rebuilt.replace("{{", "{").replace("}}", "}")
 
 print(f"letterale: {len(body)} char, {placeholders} placeholder")

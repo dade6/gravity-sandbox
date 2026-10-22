@@ -1152,6 +1152,19 @@ struct SkyDebug {
     sectors: usize,
     lod: u8,
     fps: f32,
+    /// `overstep_fraction` di `Time<Fixed>`: deve avanzare in modo continuo
+    /// (a 120 Hz con tick 1/64 s fa un dente di sega 0→1 ogni ~2 frame).
+    fract: f32,
+    /// Scarto massimo in unità mondo fra `Transform` (reso) e `Position`
+    /// (fisica): se è sempre ~0 l'interpolazione NON sta girando (qualcosa
+    /// azzera lo stato di easing); se oscilla fra 0 e un tick, pure.
+    gap: f32,
+    /// Corpi senza stato di easing attivo (`end == None`): dovrebbe restare 0
+    /// durante il gioco (a parte il primo frame).
+    easing_off: usize,
+    /// Frame time massimo (ms) sugli ultimi ~60 frame: distingue gli scatti da
+    /// temporizzazione (regolare) da quelli da carico GPU/CPU (picchi).
+    dt_max_ms: f32,
 }
 
 /// Riempie `SkyDebug`. Sistema separato: `debug_state_snapshot` è già al
@@ -1159,10 +1172,20 @@ struct SkyDebug {
 #[cfg(target_arch = "wasm32")]
 fn debug_sky_snapshot(
     time: Res<Time>,
+    fixed: Res<Time<Fixed>>,
     mut sky: ResMut<SkyDebug>,
     stars: Query<(), With<crate::systems::parallax::Star>>,
     sectors: Res<crate::systems::parallax::StarSectors>,
     lod: Res<crate::systems::parallax::SkyLod>,
+    mut frames: Local<Vec<f32>>,
+    bodies: Query<
+        (
+            &Transform,
+            &avian2d::prelude::Position,
+            &bevy_transform_interpolation::TranslationEasingState,
+        ),
+        With<crate::components::celestial::CelestialBody>,
+    >,
 ) {
     crate::mark_system("debug_sky_snapshot");
     // Media mobile esponenziale: un FPS istantaneo è illeggibile su screenshot.
@@ -1174,10 +1197,30 @@ fn debug_sky_snapshot(
         } else {
             instant
         };
+        frames.push(dt * 1000.0);
+        if frames.len() > 60 {
+            frames.remove(0);
+        }
+        sky.dt_max_ms = frames.iter().cloned().fold(0.0f32, f32::max);
     }
     sky.stars = stars.iter().count();
     sky.sectors = sectors.len();
     sky.lod = lod.0;
+    sky.fract = fixed.overstep_fraction();
+    let mut gap = 0.0f32;
+    let mut off = 0usize;
+    for (transform, position, easing) in &bodies {
+        gap = gap.max(
+            (transform.translation.truncate() - position.0)
+                .length()
+                .abs(),
+        );
+        if easing.end.is_none() {
+            off += 1;
+        }
+    }
+    sky.gap = gap;
+    sky.easing_off = off;
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1307,7 +1350,7 @@ fn debug_state_snapshot(
         bevy_firefly::extract::LIGHT_FALLOFF_MODE.load(ord),
     );
     let json = format!(
-        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0},"vpush":{},"vnoclass":{},"vitems":{},"vgpu":"{}"}},"star":"{}","field_rects":[{}],"bodies":[{}],"sky":{{"stars":{},"sectors":{},"lod":{},"fps":{:.0}}}}}"#,
+        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0},"vpush":{},"vnoclass":{},"vitems":{},"vgpu":"{}"}},"star":"{}","field_rects":[{}],"bodies":[{}],"sky":{{"stars":{},"sectors":{},"lod":{},"fps":{:.0},"fr":{:.2},"gap":{:.2},"eoff":{},"dtmax":{:.0}}}}}"#,
         last_system,
         frame,
         tool,
@@ -1340,7 +1383,11 @@ fn debug_state_snapshot(
         sky.stars,
         sky.sectors,
         sky.lod,
-        sky.fps
+        sky.fps,
+        sky.fract,
+        sky.gap,
+        sky.easing_off,
+        sky.dt_max_ms
     );
     // v0.14.120: guardia di sviluppo. Se il payload non è JSON valido il badge
     // JS entra in "🛑 DEAD" (JSON.parse fallisce 4 volte) nascondendo la causa
