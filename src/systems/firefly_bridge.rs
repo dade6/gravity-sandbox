@@ -1668,4 +1668,88 @@ mod tests {
             "bordo a scalino: nessun texel di transizione (alpha binario)"
         );
     }
+
+    /// L'anello NERO attorno alla stella (v0.14.165) non deve tornare.
+    ///
+    /// `apply_lightmap.wgsl` MOLTIPLICA la scena per la lightmap, quindi dove
+    /// la lightmap vale 0 lo sfondo diventa nero e opaco. Il core della luce
+    /// usa `LightCore::falloff` di default (InverseSquare) che vale 1 al
+    /// centro e **0 esattamente a core_radius**: senza il pavimento a
+    /// `surface`, lo sfondo tra il disco della stella e core_radius (1.5×
+    /// raggio) veniva moltiplicato per ~0 → anello nero non controllabile dal
+    /// pannello e più evidente alzando Halo Brightness.
+    ///
+    /// Gate sul testo della shader (come `sprite_shader_normal_write_...`):
+    /// il ramo del core DEVE clampare a `surface` e `surface` deve essere
+    /// calcolato PRIMA dei due rami.
+    #[test]
+    fn star_core_never_multiplies_the_sky_below_the_halo_level() {
+        let src = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/create_lightmap.wgsl")
+            .expect("vendored create_lightmap shader must be present");
+        let surface_at = src
+            .find("let surface = select(light.intensity, halo")
+            .expect("`surface` must still choose intensity vs halo");
+        let core_at = src
+            .find("if dist <= light.core_radius {")
+            .expect("core branch must be present");
+        assert!(
+            surface_at < core_at,
+            "`surface` va calcolato PRIMA del ramo del core: serve come pavimento"
+        );
+        let tail = &src[core_at..];
+        let core_block = &tail[..tail.find("else {").unwrap_or(tail.len())];
+        assert!(
+            core_block.contains("max(core_term, surface)"),
+            "il ramo del core deve usare max(core_term, surface): senza, la lightmap \
+             va a 0 a core_radius e disegna l'anello nero attorno alla stella"
+        );
+    }
+
+    /// Il blocco del core, preso DAL FILE che spediamo, deve essere WGSL valido.
+    ///
+    /// Il test di testo sopra controlla l'INTENZIONE; questo controlla che la
+    /// sintassi passi davvero il parser/validator (naga) usato da Bevy: una
+    /// shader non compilabile = schermo nero sul device, e `cargo check` non
+    /// la vede. Il blocco viene estratto dal sorgente e incastrato in uno stub
+    /// con i soli simboli che usa (`light`, `surface`, `normale`, `res`).
+    #[test]
+    fn star_core_block_is_valid_wgsl() {
+        let src = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/create_lightmap.wgsl")
+            .expect("vendored create_lightmap shader must be present");
+        let start = src
+            .find("let surface = select(light.intensity, halo")
+            .expect("`surface` definition");
+        let rest = &src[start..];
+        let end = rest.find("else {").expect("else branch");
+        let block = &rest[..end];
+
+        // Concatenazione, NON format!: il blocco WGSL contiene `{`/`}` che
+        // format! interpreterebbe come placeholder.
+        let mut stub = String::new();
+        stub.push_str("enable f16;\n");
+        stub.push_str("fn falloff(x: f32, f: u32, fi: f32) -> f32 { return 1.0; }\n");
+        stub.push_str(
+            "struct Light { intensity: f32, core_radius: f32, core_boost: f32, \
+             core_falloff: u32, core_falloff_intensity: f32 }\n",
+        );
+        stub.push_str("@compute @workgroup_size(1)\nfn main() {\n");
+        stub.push_str("    var res = vec4f(0.0);\n");
+        stub.push_str("    let light = Light(3.0, 450.0, 3.0, 0u, 0.0);\n");
+        stub.push_str("    let dist = 500.0;\n");
+        stub.push_str("    let light_color = vec4f(1.0, 0.9, 0.3, 0.25);\n");
+        stub.push_str("    let angle_multi = 1.0;\n");
+        stub.push_str("    let normal_multi = 1.0;\n");
+        stub.push_str("    let normal = vec4f(0.0);\n");
+        stub.push_str("    let halo = 0.25;\n");
+        stub.push_str(block);
+        stub.push_str("\n    _ = res;\n}\n");
+        let module = naga::front::wgsl::parse_str(&stub)
+            .unwrap_or_else(|e| panic!("WGSL PARSE FAILED (core block): {e}\n---\n{stub}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("WGSL VALIDATION FAILED (core block): {e:?}"));
+    }
 }

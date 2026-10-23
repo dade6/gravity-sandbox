@@ -143,27 +143,40 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             normal_multi = 1.0;
         }
 
+        // Patch v0.14.165 (anello nero attorno alla stella, segnalato da Davide):
+        // `surface` va calcolato PRIMA dei due rami, perché serve anche dentro
+        // il core come PAVIMENTO. Il core usa `LightCore::falloff` di default
+        // (InverseSquare) che vale 1 al centro e **0 esattamente a
+        // core_radius**: la lightmap scendeva a zero sul bordo del core, e
+        // siccome `apply_lightmap` MOLTIPLICA la scena per la lightmap, lo
+        // sfondo lì veniva moltiplicato per ~0 → anello NERO e opaco tra il
+        // disco della stella (fine del gradiente) e core_radius (1.5× raggio),
+        // con salto netto al livello dell'alone subito fuori. Non era
+        // controllabile dal pannello (core_radius_factor e il falloff del core
+        // non sono esposti) e alzando Halo Brightness il salto peggiorava.
+        // - Pixel CON normal map (pianeti, normal.a > 0) -> light.intensity
+        // - Pixel SENZA normal map (alone, spazio vuoto) -> `halo`
+        // - Sprite opachi SENZA normal map (normal dummy b == 0.1: nuclei
+        //   delle stelle di sfondo, dischi) -> `halo` (emissivi).
+        let surface = select(light.intensity, halo, normal.a == 0.0 || normal.b == f32(f16(0.1)));
+
         if dist <= light.core_radius {
             // Patch v0.14.77 (Ticket 20): disco stella separato da intensity.
             // Solo core_boost contribuisce al disco: intensity pilota SOLO
             // la luce sui pianeti (path else, * light.intensity).
-            res = vec4f(light_color.xyz, 0) * angle_multi * normal_multi * (light.core_boost * falloff(dist / light.core_radius, light.core_falloff, light.core_falloff_intensity));
+            let core_term = light.core_boost
+                * falloff(dist / light.core_radius, light.core_falloff, light.core_falloff_intensity);
+            // PATCH v0.14.165: mai sotto `surface`. Il core resta più chiaro
+            // al centro (boost) e si raccorda al livello dell'alone sul bordo,
+            // invece di cadere a 0 e disegnare l'anello nero.
+            res = vec4f(light_color.xyz, 0) * angle_multi * normal_multi * max(core_term, surface);
         }
         else {
             let x = (dist - light.core_radius) / (light.radius - light.core_radius);
             // Patch v0.14.79 (Ticket 20): SEPARAZIONE alone/luce pianeti.
-            // - Pixel CON normal map (pianeti, normal.a > 0) -> light.intensity
-            //   (Planet Light dal pannello).
-            // - Pixel SENZA normal map (normal.a == 0: alone, spazio vuoto,
-            //   aloni di stelle) -> `halo` (Halo Brightness, trasportato
-            //   dall'alpha del colore della luce).
-            // - Sprite opachi SENZA normal map (normal dummy b == 0.1:
-            //   nuclei delle stelle di sfondo, dischi delle stelle) ->
-            //   `halo` come lo sfondo (sono emissivi, mai toccati da
-            //   Planet Light). v0.14.132.
-            // Così il disco di luce attorno alla stella risponde a Halo
-            // Brightness e MAI a Planet Light.
-            let surface = select(light.intensity, halo, normal.a == 0.0 || normal.b == f32(f16(0.1)));
+            // Vedi sopra: `surface` sceglie intensity (pianeti) o halo (tutto
+            // il resto). Così il disco di luce attorno alla stella risponde a
+            // Halo Brightness e MAI a Planet Light.
             res = vec4f(light_color.xyz, 0) * surface * angle_multi * normal_multi * falloff(x, light.falloff, light.falloff_intensity);
         }
 
