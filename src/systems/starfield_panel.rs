@@ -651,7 +651,10 @@ fn sync_starfield_fields_on_tuning_change(
 
 /// Posizione di scroll dopo un delta, mai oltre i bordi. `visible`/`content`
 /// sono in pixel logici e `delta` è positivo quando il contenuto deve salire.
-fn clamped_scroll_y(current: f32, delta: f32, visible: f32, content: f32) -> f32 {
+///
+/// `pub(crate)`: la stessa matematica serve al pannello proprietà
+/// (`ui::scroll_property_panel`), che è scorrevole con lo stesso schema.
+pub(crate) fn clamped_scroll_y(current: f32, delta: f32, visible: f32, content: f32) -> f32 {
     let max = (content - visible).max(0.0);
     (current + delta).clamp(0.0, max)
 }
@@ -660,7 +663,7 @@ fn clamped_scroll_y(current: f32, delta: f32, visible: f32, content: f32) -> f32
 /// mentre è premuto; `None` se non c'è nessun contatto. Diversa da
 /// `ui_press_position` (che risponde solo al PRIMO frame di pressione): lo
 /// scroll deve seguire il movimento.
-fn held_position(
+pub(crate) fn held_position(
     windows: &Query<&Window>,
     cameras: &Query<
         (&Camera, &GlobalTransform),
@@ -687,7 +690,7 @@ fn held_position(
 
 /// Posizione del cursore in pixel fisici viewport-relativi (stessa convenzione
 /// dei riquadri UI); `None` se il cursore non è sulla finestra.
-fn cursor_position(
+pub(crate) fn cursor_position(
     windows: &Query<&Window>,
     cameras: &Query<
         (&Camera, &GlobalTransform),
@@ -853,8 +856,7 @@ mod tests {
                 .add_message::<MouseWheel>()
                 .add_systems(Update, scroll_starfield_panel);
             let mut window = Window::default();
-            window
-                .set_physical_cursor_position(Some(DVec2::new(cursor.x as f64, cursor.y as f64)));
+            window.set_physical_cursor_position(Some(DVec2::new(cursor.x as f64, cursor.y as f64)));
             app.world_mut().spawn(window);
             app.world_mut().spawn((
                 StarfieldBox,

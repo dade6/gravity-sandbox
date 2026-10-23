@@ -34,6 +34,50 @@ macro_rules! no_modal_open {
     };
 }
 
+/// Riquadri UI che POSSIEDONO il gesto (trascinamento e rotellina): i modali
+/// scorrevoli ("Sfondo", Impostazioni) e il pannello proprietà, che è sempre
+/// visibile e scorrevole quando c'è una selezione. Sopra questi riquadri la
+/// camera sta ferma e il gesto scorre i parametri; fuori torna alla scena.
+macro_rules! ui_scroll_boxes {
+    () => {
+        Query<
+            (&ComputedNode, &UiGlobalTransform),
+            Or<(
+                With<crate::systems::starfield_panel::StarfieldBox>,
+                With<crate::systems::settings::SettingsBox>,
+                With<crate::systems::ui::PropertyPanel>,
+            )>,
+        >
+    };
+}
+
+/// Il punto (px FISICI viewport-relativi) cade sopra uno dei riquadri?
+fn point_over_ui_boxes<'a>(
+    boxes: impl Iterator<Item = (&'a ComputedNode, &'a UiGlobalTransform)>,
+    pos: Vec2,
+) -> bool {
+    boxes
+        .into_iter()
+        .any(|(n, g)| crate::systems::settings::point_in_node(n, g, pos))
+}
+
+/// Da px LOGICI (posizione dei touch) a px FISICI viewport-relativi, la
+/// convenzione dei riquadri UI (`ComputedNode.size` / `UiGlobalTransform`).
+fn touch_physical(
+    windows: &Query<&Window>,
+    camera_view: &Query<&Camera, (With<Camera2d>, With<MainCamera>)>,
+    logical: Vec2,
+) -> Option<Vec2> {
+    let window = windows.iter().next()?;
+    let viewport_min = camera_view
+        .iter()
+        .next()
+        .and_then(|cam| cam.physical_viewport_rect())
+        .map(|r| r.min.as_vec2())
+        .unwrap_or_default();
+    Some(logical * window.scale_factor() - viewport_min)
+}
+
 /// Sistemi di controllo camera (pan/zoom/pinch) in `Update`.
 ///
 /// Serve come ancora di ordinamento: il follow camera deve girare DOPO (lo
@@ -132,11 +176,30 @@ fn scroll_pan(
         ),
     >,
     modals: no_modal_open!(),
+    windows: Query<&Window>,
+    camera_view: Query<&Camera, (With<Camera2d>, With<MainCamera>)>,
+    ui_boxes: ui_scroll_boxes!(),
 ) {
     crate::mark_system("scroll_pan");
 
     if modals.iter().next().is_some() {
         return;
+    }
+    // Rotellina/trackpad sopra un riquadro scorrevole (pannello proprietà o
+    // modale): il gesto è del pannello, la scena non si sposta. Fuori dal
+    // riquadro resta pan della scena, come prima.
+    if let Some(window) = windows.iter().next() {
+        let viewport_min = camera_view
+            .iter()
+            .next()
+            .and_then(|cam| cam.physical_viewport_rect())
+            .map(|r| r.min.as_vec2())
+            .unwrap_or_default();
+        if let Some(cursor) = window.physical_cursor_position().map(|p| p - viewport_min) {
+            if point_over_ui_boxes(ui_boxes.iter(), cursor) {
+                return;
+            }
+        }
     }
     if drag_state.active {
         return;
@@ -160,15 +223,9 @@ fn zoom_camera(
     drag_state: Res<MoveDragState>,
     windows: Query<&Window>,
     mut camera_query: Query<(&mut Projection, &Camera), (With<Camera2d>, With<MainCamera>)>,
-    // I riquadri dei modali scorrevoli: sopra di essi la rotellina (lo stesso
-    // gesto a due dita del trackpad) è del pannello, non della scena.
-    modal_boxes: Query<
-        (&ComputedNode, &UiGlobalTransform),
-        Or<(
-            With<crate::systems::starfield_panel::StarfieldBox>,
-            With<crate::systems::settings::SettingsBox>,
-        )>,
-    >,
+    // I riquadri UI che possiedono il gesto: sopra di essi la rotellina (lo
+    // stesso gesto a due dita del trackpad) è del pannello, non della scena.
+    ui_boxes: ui_scroll_boxes!(),
 ) {
     crate::mark_system("zoom_camera");
 
@@ -189,10 +246,7 @@ fn zoom_camera(
             .map(|r| r.min.as_vec2())
             .unwrap_or_default();
         if let Some(cursor) = window.physical_cursor_position().map(|p| p - viewport_min) {
-            if modal_boxes
-                .iter()
-                .any(|(node, gt)| crate::systems::settings::point_in_node(node, gt, cursor))
-            {
+            if point_over_ui_boxes(ui_boxes.iter(), cursor) {
                 return;
             }
         }
@@ -228,9 +282,19 @@ fn touch_pan(
         ),
     >,
     modals: no_modal_open!(),
+    windows: Query<&Window>,
+    camera_view: Query<&Camera, (With<Camera2d>, With<MainCamera>)>,
+    ui_boxes: ui_scroll_boxes!(),
+    // Il gesto appartiene alla camera solo se è INIZIATO fuori dai riquadri
+    // scorrevoli: un dito che parte sul pannello proprietà scorre i suoi campi
+    // e la scena non si muove (prima facevano entrambe le cose).
+    mut started_on_ui: Local<bool>,
 ) {
     crate::mark_system("touch_pan");
 
+    if touches.iter().count() == 0 {
+        *started_on_ui = false;
+    }
     if modals.iter().next().is_some() {
         state.active = false;
         return;
@@ -242,8 +306,15 @@ fn touch_pan(
     if touches.iter().count() == 1 {
         if let Some(touch) = touches.iter().next() {
             if touches.just_pressed(touch.id()) {
-                state.active = true;
+                *started_on_ui = touch_physical(&windows, &camera_view, touch.position())
+                    .map(|p| point_over_ui_boxes(ui_boxes.iter(), p))
+                    .unwrap_or(false);
+                state.active = !*started_on_ui;
                 state.prev_pos = touch.position();
+            }
+            if *started_on_ui {
+                state.active = false;
+                return;
             }
             if state.active && touches.get_pressed(touch.id()).is_some() {
                 let pos = touch.position();
@@ -271,6 +342,11 @@ fn touch_zoom(
     drag_state: Res<MoveDragState>,
     mut camera_query: Query<&mut Projection, (With<Camera2d>, With<MainCamera>)>,
     modals: no_modal_open!(),
+    windows: Query<&Window>,
+    camera_view: Query<&Camera, (With<Camera2d>, With<MainCamera>)>,
+    ui_boxes: ui_scroll_boxes!(),
+    // Pinch iniziato sopra il pannello proprietà: il gesto non è della scena.
+    mut on_ui: Local<bool>,
 ) {
     crate::mark_system("touch_zoom");
 
@@ -291,10 +367,17 @@ fn touch_zoom(
             if !state.active {
                 state.active = true;
                 state.prev_dist = dist;
+                // Le DUE dita sono entrambe sopra un riquadro scorrevole?
+                // Allora il pinch è del pannello, non della scena.
+                *on_ui = positions.iter().all(|p| {
+                    touch_physical(&windows, &camera_view, *p)
+                        .map(|q| point_over_ui_boxes(ui_boxes.iter(), q))
+                        .unwrap_or(false)
+                });
             } else {
                 let delta = dist - state.prev_dist;
                 state.prev_dist = dist;
-                if delta.abs() > 2.0 {
+                if delta.abs() > 2.0 && !*on_ui {
                     if let Ok(mut projection) = camera_query.single_mut() {
                         if let Projection::Orthographic(ortho) = &mut *projection {
                             let factor = 1.0 - (delta * 0.005).clamp(-0.2, 0.2);
@@ -306,6 +389,7 @@ fn touch_zoom(
         }
     } else {
         state.active = false;
+        *on_ui = false;
     }
 }
 
@@ -451,6 +535,58 @@ mod tests {
         );
 
         let mut outside = build(true, Vec2::new(900.0, 900.0));
+        outside
+            .world_mut()
+            .resource_mut::<AccumulatedMouseScroll>()
+            .delta = Vec2::new(0.0, 3.0);
+        outside.update();
+        assert!(
+            (camera_scale(&mut outside) - 1.0).abs() > 1e-6,
+            "fuori dal pannello la rotellina deve zoomare la scena"
+        );
+    }
+
+    /// Il pannello proprietà NON è un modale (convive con la scena), ma è
+    /// scorrevole: sopra di lui rotellina e trascinamento appartengono al
+    /// pannello. Fuori dal riquadro la camera si muove come prima — senza
+    /// questa distinzione si scorrevano i campi E si spostava la scena nello
+    /// stesso gesto (stessa classe di bug della v0.14.143).
+    #[test]
+    fn property_panel_takes_the_gesture_and_the_camera_stays_put() {
+        fn add_panel(app: &mut App) {
+            // Riquadro centrato in (300,300), 200×400: cursore (300,300)
+            // DENTRO, (900,900) fuori. Nessun marker di modale.
+            app.world_mut().spawn((
+                crate::systems::ui::PropertyPanel,
+                ComputedNode {
+                    size: Vec2::new(200.0, 400.0),
+                    content_size: Vec2::new(200.0, 1200.0),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(300.0, 300.0),
+                ScrollPosition::default(),
+            ));
+        }
+
+        let mut over = build(false, Vec2::new(300.0, 300.0));
+        add_panel(&mut over);
+        over.world_mut()
+            .resource_mut::<AccumulatedMouseScroll>()
+            .delta = Vec2::new(0.0, 3.0);
+        over.update();
+        assert_eq!(
+            camera_scale(&mut over),
+            1.0,
+            "sopra il pannello la rotellina non deve zoomare la scena"
+        );
+        assert_eq!(
+            camera_x(&mut over),
+            0.0,
+            "sopra il pannello la rotellina non deve spostare la scena"
+        );
+
+        let mut outside = build(false, Vec2::new(900.0, 900.0));
+        add_panel(&mut outside);
         outside
             .world_mut()
             .resource_mut::<AccumulatedMouseScroll>()

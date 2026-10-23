@@ -25,9 +25,11 @@
 //!   <https://github.com/gfx-rs/wgpu/issues/2399>
 
 use avian2d::prelude::*;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
 use bevy::ui::widget::TextScroll;
+use bevy::ui::ScrollPosition;
 
 use bevy::input_focus::InputFocus;
 use bevy::text::{EditableText, TextCursorStyle};
@@ -57,6 +59,7 @@ impl Plugin for SandboxUIPlugin {
             (
                 handle_ui_buttons,
                 update_property_panel,
+                scroll_property_panel,
                 sync_property_input_to_body,
                 update_field_focus_feedback,
                 update_timeline_buttons,
@@ -75,9 +78,11 @@ impl Plugin for SandboxUIPlugin {
 pub struct TimelinBtn(pub &'static str);
 
 /// Marker per il pannello proprietà
-
+///
+/// `pub(crate)`: serve alle guardie di `camera.rs` (sopra il pannello il
+/// gesto scorre i campi e NON muove la scena).
 #[derive(Component)]
-struct PropertyPanel;
+pub(crate) struct PropertyPanel;
 
 /// Markers per i campi del property panel (label)
 
@@ -350,6 +355,14 @@ fn spawn_property_panel(commands: &mut Commands) {
     commands
         .spawn((
             PropertyPanel,
+            // Il pannello è SCORREVOLE: con una stella selezionata i campi
+            // sono 19 (9 base + 5 Luce + 5 Alone) e su un telefono non
+            // entra. `max_height` gli dà il tetto (top 60px + 82% resta
+            // dentro lo schermo anche in landscape), `Overflow::scroll_y`
+            // fa il clip e `ScrollPosition` sposta il contenuto — chi lo
+            // muove è `scroll_property_panel` (Bevy NON scorre da solo le
+            // aree in overflow).
+            ScrollPosition::default(),
             // GlobalZIndex basso: il property panel deve restare SOTTO il
             // keypad (200), il dialog di conferma delete (300) e qualunque
             // overlay futuro. vedi keypad.rs per il contesto del fix.
@@ -359,11 +372,13 @@ fn spawn_property_panel(commands: &mut Commands) {
                 top: Val::Px(60.0),
                 right: Val::Px(10.0),
                 width: Val::Px(220.0),
+                max_height: Val::Percent(82.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(12.0)),
                 row_gap: Val::Px(5.0),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::px(8.0, 8.0, 8.0, 8.0),
+                overflow: Overflow::scroll_y(),
                 display: Display::None, // hidden initially
                 ..default()
             },
@@ -828,6 +843,125 @@ fn update_property_panel(
             _ => continue,
         };
         text.0 = value;
+    }
+}
+
+// ============================================================
+// Scroll del pannello proprietà
+// ============================================================
+//
+// Stessa verità del pannello "Sfondo": `Overflow::scroll_y()` fa il clip ma
+// NON scorre niente da sé — `ScrollArea` di bevy_ui_widgets gestisce solo la
+// rotellina (eventi di picking `Pointer<Scroll>`), che su iPhone non esiste.
+// Con una stella selezionata i campi sono 19 e non entrano in nessuno schermo
+// di telefono, quindi lo scroll è qui: il contenuto segue il DITO (drag) e la
+// rotellina funziona su Mac. La matematica del clamp è la stessa
+// (`starfield_panel::clamped_scroll_y`, pura e testata).
+
+/// Scroll del pannello proprietà: trascinamento col dito/mouse + rotellina.
+fn scroll_property_panel(
+    mut panels: Query<
+        (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
+        With<PropertyPanel>,
+    >,
+    // I bottoni DENTRO il pannello (es. "Orbita periodica"): un tap su un
+    // bottone non deve diventare un trascinamento.
+    buttons: Query<
+        (&ComputedNode, &UiGlobalTransform),
+        (With<Interaction>, Without<PropertyPanel>),
+    >,
+    // Un modale aperto (Sfondo, Impostazioni, conferma delete) copre il
+    // pannello: il gesto è SUO, il pannello dietro non deve scorrere in
+    // silenzio (i riquadri si sovrappongono sul lato destro dello schermo).
+    modals: Query<
+        (),
+        Or<(
+            With<DeleteDialog>,
+            With<crate::systems::settings::SettingsDialog>,
+            With<crate::systems::starfield_panel::StarfieldDialog>,
+        )>,
+    >,
+    mut wheel: MessageReader<MouseWheel>,
+    touches: Res<Touches>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    cameras: Query<
+        (&Camera, &GlobalTransform),
+        (With<Camera2d>, With<crate::systems::camera::MainCamera>),
+    >,
+    mut last: Local<Option<Vec2>>,
+) {
+    crate::mark_system("scroll_property_panel");
+    let Ok((node, gt, mut scroll)) = panels.single_mut() else {
+        *last = None;
+        return;
+    };
+    if modals.iter().next().is_some() {
+        *last = None;
+        return;
+    }
+    let inv = node.inverse_scale_factor;
+    let visible = node.size() * inv;
+    let content = node.content_size() * inv;
+
+    // Cambio di selezione (stella → pianeta = molti campi in meno) o pannello
+    // nascosto: uno scroll rimasto in fondo mostrerebbe il vuoto. Il clamp vale
+    // anche senza gesto, quindi si riallinea a ogni frame.
+    scroll.y =
+        crate::systems::starfield_panel::clamped_scroll_y(scroll.y, 0.0, visible.y, content.y);
+
+    // 1) Dito/mouse: il contenuto segue il trascinamento.
+    match crate::systems::starfield_panel::held_position(
+        &windows,
+        &cameras,
+        &touches,
+        &mouse_buttons,
+    ) {
+        None => *last = None,
+        Some(current) => match *last {
+            None => {
+                if crate::systems::settings::point_in_node(node, gt, current)
+                    && !buttons
+                        .iter()
+                        .any(|(n, g)| crate::systems::settings::point_in_node(n, g, current))
+                {
+                    *last = Some(current);
+                }
+            }
+            Some(prev) => {
+                *last = Some(current);
+                // Dito che sale → delta positivo → il contenuto sale.
+                let delta_y = (prev.y - current.y) * inv;
+                if delta_y.abs() > 0.1 {
+                    scroll.y = crate::systems::starfield_panel::clamped_scroll_y(
+                        scroll.y, delta_y, visible.y, content.y,
+                    );
+                }
+            }
+        },
+    }
+
+    // 2) Rotellina/trackpad (Mac): SOLO col cursore sopra il riquadro; lo
+    //    stesso gesto fuori dal pannello resta zoom della scena (vedi la
+    //    guardia in `zoom_camera`). I messaggi si consumano SEMPRE: senza
+    //    `read` resterebbero in coda e scatterebbero appena il cursore entra.
+    let over_box = crate::systems::starfield_panel::cursor_position(&windows, &cameras)
+        .map(|p| crate::systems::settings::point_in_node(node, gt, p))
+        .unwrap_or(false);
+    for ev in wheel.read() {
+        if !over_box {
+            continue;
+        }
+        let step = match ev.unit {
+            MouseScrollUnit::Line => 24.0,
+            MouseScrollUnit::Pixel => 1.0,
+        };
+        scroll.y = crate::systems::starfield_panel::clamped_scroll_y(
+            scroll.y,
+            -ev.y * step,
+            visible.y,
+            content.y,
+        );
     }
 }
 
@@ -1641,5 +1775,128 @@ fn parse_hex_color(hex: &str) -> Option<[f32; 3]> {
         ])
     } else {
         None
+    }
+}
+
+// ============================================================
+// Tests
+// ============================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::math::DVec2;
+    use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform};
+
+    /// App minimale col pannello proprietà: i sistemi girano DAVVERO (niente
+    /// GPU) → è anche il gate B0001 per le query di `scroll_property_panel`.
+    fn build(cursor: Vec2, content_height: f32) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Touches>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_message::<MouseWheel>()
+            .add_systems(Update, scroll_property_panel);
+        let mut window = Window::default();
+        window.set_physical_cursor_position(Some(DVec2::new(cursor.x as f64, cursor.y as f64)));
+        app.world_mut().spawn(window);
+        // Riquadro centrato in (150,100), 300×200 visibili.
+        app.world_mut().spawn((
+            PropertyPanel,
+            ComputedNode {
+                size: Vec2::new(300.0, 200.0),
+                content_size: Vec2::new(300.0, content_height),
+                ..default()
+            },
+            UiGlobalTransform::from_xy(150.0, 100.0),
+            ScrollPosition::default(),
+        ));
+        app
+    }
+
+    fn wheel(app: &mut App, y_px: f32) {
+        app.world_mut()
+            .resource_mut::<Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: bevy::input::mouse::MouseScrollUnit::Line,
+                x: 0.0,
+                y: y_px,
+                window: Entity::PLACEHOLDER,
+                phase: bevy::input::touch::TouchPhase::Moved,
+            });
+    }
+
+    fn scroll_y(app: &mut App) -> f32 {
+        let world = app.world_mut();
+        world
+            .query_filtered::<&ScrollPosition, With<PropertyPanel>>()
+            .single(world)
+            .expect("pannello")
+            .y
+    }
+
+    fn set_scroll_y(app: &mut App, y: f32) {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<&mut ScrollPosition, With<PropertyPanel>>();
+        if let Ok(mut scroll) = q.single_mut(world) {
+            scroll.y = y;
+        }
+    }
+
+    /// La rotellina scorre i campi SOLO col cursore sopra il pannello: fuori
+    /// dal pannello lo stesso gesto è zoom/pan della scena, quindi non deve
+    /// muovere i parametri (regola v0.14.144, applicata qui al pannello
+    /// proprietà che è sempre visibile).
+    #[test]
+    fn property_panel_wheel_scrolls_only_when_the_pointer_is_over_it() {
+        let mut over = build(Vec2::new(150.0, 100.0), 1200.0);
+        wheel(&mut over, -3.0); // contenuto in su
+        over.update();
+        assert!(
+            scroll_y(&mut over) > 0.1,
+            "col cursore sul pannello la rotellina deve scorrere i campi"
+        );
+
+        let mut outside = build(Vec2::new(900.0, 900.0), 1200.0);
+        wheel(&mut outside, -3.0);
+        outside.update();
+        assert_eq!(
+            scroll_y(&mut outside),
+            0.0,
+            "col cursore fuori dal pannello la rotellina non deve scorrere i campi"
+        );
+    }
+
+    /// Lo scroll non esce mai dal contenuto, e se il contenuto si accorcia
+    /// (cambio selezione stella → pianeta: molti campi in meno) torna dentro i
+    /// bordi da solo, senza restare a mostrare il vuoto in fondo.
+    #[test]
+    fn property_panel_scroll_stops_at_the_content_end_and_recovers() {
+        let mut long = build(Vec2::new(150.0, 100.0), 1200.0);
+        // 60 tacche da 3 righe: ben oltre il fondo (max = 1200 - 200 = 1000).
+        for _ in 0..60 {
+            wheel(&mut long, -3.0);
+            long.update();
+        }
+        assert_eq!(
+            scroll_y(&mut long),
+            1000.0,
+            "lo scroll deve fermarsi al fondo del contenuto"
+        );
+        for _ in 0..60 {
+            wheel(&mut long, 3.0);
+            long.update();
+        }
+        assert_eq!(scroll_y(&mut long), 0.0, "sopra la cima non si scorre");
+
+        // Contenuto più corto del visibile, con lo scroll già in fondo.
+        let mut short = build(Vec2::new(150.0, 100.0), 150.0);
+        set_scroll_y(&mut short, 900.0);
+        short.update();
+        assert_eq!(
+            scroll_y(&mut short),
+            0.0,
+            "se il contenuto entra nel pannello lo scroll deve tornare in cima"
+        );
     }
 }
