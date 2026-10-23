@@ -69,10 +69,28 @@ class PrecompressedMixin(SimpleHTTPRequestHandler):
             return None  # gia' un file compresso: niente doppia codifica
         ae = self.headers.get("Accept-Encoding") or ""
         base = self.translate_path(self.path.split("?", 1)[0])
+        try:
+            source_mtime = os.path.getmtime(base)
+        except OSError:
+            source_mtime = None
         for ext, enc in VARIANTS:
             candidate = base + ext
-            if _accepts(ae, enc) and os.path.isfile(candidate):
-                return candidate, enc
+            if not (_accepts(ae, enc) and os.path.isfile(candidate)):
+                continue
+            # GUARDIA ANTI-STANTIO: se il sorgente e' stato aggiornato dopo la
+            # variante, quella variante contiene la versione PRECEDENTE del
+            # file. Servirla (con Cache-Control: no-cache + 304) incolla il
+            # browser alla build vecchia: e' successo con index.html.br/.gz
+            # rimasti alla 0.14.161 mentre il wasm era alla 0.14.163 ("in
+            # console vedo ancora la 161"). Meglio il file in chiaro: piu'
+            # grosso ma CORRETTO.
+            if source_mtime is not None and os.path.getmtime(candidate) < source_mtime:
+                print(
+                    f"[stale-variant] {candidate} precedente a {base}: servito in chiaro",
+                    flush=True,
+                )
+                continue
+            return candidate, enc
         return None
 
     def send_head(self):
@@ -81,6 +99,12 @@ class PrecompressedMixin(SimpleHTTPRequestHandler):
             return super().send_head()
 
         variant_path, encoding = picked
+        # Il contenuto "vero" e' il file NON compresso: la sua mtime decide la
+        # revalidation (ricomprimere non cambia il contenuto da mostrare).
+        try:
+            content_mtime = os.path.getmtime(self.translate_path(self.path.split("?", 1)[0]))
+        except OSError:
+            content_mtime = None
         try:
             f = open(variant_path, "rb")
         except OSError:
@@ -88,6 +112,7 @@ class PrecompressedMixin(SimpleHTTPRequestHandler):
 
         try:
             st = os.fstat(f.fileno())
+            last_modified = content_mtime if content_mtime is not None else st.st_mtime
             # Revalidation: se il client ha gia' questa versione, 304 senza
             # corpo (vale per gli asset non versionati).
             ims = self.headers.get("If-Modified-Since")
@@ -95,7 +120,7 @@ class PrecompressedMixin(SimpleHTTPRequestHandler):
             if ims:
                 try:
                     ims_ts = parsedate_to_datetime(ims).timestamp()
-                    not_modified = int(st.st_mtime) <= int(ims_ts)
+                    not_modified = int(last_modified) <= int(ims_ts)
                 except (TypeError, ValueError, OverflowError):
                     not_modified = False
             if not_modified:
@@ -110,7 +135,7 @@ class PrecompressedMixin(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", self.guess_type(self.path.split("?", 1)[0]))
             self.send_header("Content-Encoding", encoding)
             self.send_header("Content-Length", str(st.st_size))
-            self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+            self.send_header("Last-Modified", self.date_time_string(last_modified))
             # Vary: senza, una cache intermedia potrebbe servire il .br a un
             # client che non lo accetta.
             self.send_header("Vary", "Accept-Encoding")
