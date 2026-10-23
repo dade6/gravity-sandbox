@@ -62,7 +62,24 @@ impl Plugin for CameraFollowPlugin {
             )
             // PostUpdate, DOPO pan/zoom (Update): lo snap vince sul pan e
             // lo zoom resta sempre agganciato (vedi follow_camera).
-            .add_systems(PostUpdate, follow_camera);
+            // PostUpdate, PRIMA della propagazione dei transform: a questo
+            // punto il `Transform` dei corpi è già quello smussato del frame
+            // (`TranslationInterpolation` scrive in
+            // `RunFixedMainLoop::AfterFixedMainLoop`), quindi camera e corpo
+            // cadono sullo stesso istante e il corpo resta esattamente
+            // centrato.
+            //
+            // TRAPPOLA MISURATA SUL DEVICE (v0.14.159): leggendo
+            // `GlobalTransform` senza ordinamento, la camera finiva sulla
+            // `Position` di UN TICK PRIMA (2156 frame su 2352, scarto 0.000):
+            // Avian propaga la GlobalTransform all'inizio del tick
+            // (`propagate_before_physics`), quindi prima che l'easing scriva il
+            // valore smussato; il pianeta scorreva avanti nel tick e la camera
+            // restava indietro → lo "scatto" residuo visibile col follow.
+            .add_systems(
+                PostUpdate,
+                follow_camera.before(bevy::transform::TransformSystems::Propagate),
+            );
     }
 }
 
@@ -353,7 +370,7 @@ fn follow_camera(
     touches: Res<Touches>,
     mut touch_origin: Local<Option<Vec2>>,
     mut camera_query: Query<&mut Transform, (With<Camera2d>, With<MainCamera>)>,
-    bodies: Query<&GlobalTransform>,
+    bodies: Query<&Transform, (With<CelestialBody>, Without<MainCamera>)>,
 ) {
     crate::mark_system("follow_camera");
     let Some(target) = follow.0 else {
@@ -389,7 +406,7 @@ fn follow_camera(
         *touch_origin = None;
         return;
     }
-    let Ok(body_pos) = bodies.get(target).map(|t| t.translation()) else {
+    let Ok(body_pos) = bodies.get(target).map(|t| t.translation) else {
         // Corpo cancellato: torna libera invece di restare appesa.
         follow.0 = None;
         return;
@@ -397,5 +414,161 @@ fn follow_camera(
     if let Ok(mut transform) = camera_query.single_mut() {
         transform.translation.x = body_pos.x;
         transform.translation.y = body_pos.y;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use avian2d::prelude::*;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
+
+    use crate::components::celestial::BodyType;
+    use crate::systems::gravity::GravityPlugin;
+
+    /// Versione "vecchia" del follow: `GlobalTransform`, nessun ordinamento.
+    /// È quella che ha prodotto il difetto misurato sul device.
+    fn legacy_follow(
+        follow: Res<CameraFollow>,
+        mut cam: Query<&mut Transform, (With<Camera2d>, With<MainCamera>)>,
+        bodies: Query<&GlobalTransform>,
+    ) {
+        let Some(target) = follow.0 else { return };
+        let Ok(pos) = bodies.get(target).map(|g| g.translation()) else {
+            return;
+        };
+        if let Ok(mut tf) = cam.single_mut() {
+            tf.translation.x = pos.x;
+            tf.translation.y = pos.y;
+        }
+    }
+
+    fn setup(legacy: bool) -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::transform::TransformPlugin,
+            PhysicsPlugins::default(),
+            GravityPlugin,
+        ))
+        .insert_resource(Gravity::ZERO)
+        .insert_resource(crate::systems::persistence::GravitationalConstant(0.0))
+        .insert_resource(crate::systems::timeline::SimulationState::default())
+        .init_resource::<CameraFollow>()
+        .init_resource::<CameraFollowOpen>()
+        .insert_resource(ButtonInput::<MouseButton>::default())
+        .insert_resource(AccumulatedMouseMotion::default())
+        .insert_resource(AccumulatedMouseScroll::default())
+        .insert_resource(Touches::default())
+        .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(
+            1.0 / 120.0,
+        )));
+        if legacy {
+            app.add_systems(PostUpdate, legacy_follow);
+        } else {
+            app.add_systems(
+                PostUpdate,
+                follow_camera.before(bevy::transform::TransformSystems::Propagate),
+            );
+        }
+        app.finish();
+        let cam = app
+            .world_mut()
+            .spawn((Camera2d, MainCamera, Transform::from_xyz(0.0, 0.0, 0.0)))
+            .id();
+        let body = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    name: "Terra".into(),
+                    body_type: BodyType::Planet,
+                    mass: 10.0,
+                    radius: 5.0,
+                    color: [0.5, 0.5, 0.8],
+                    luminous: false,
+                },
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                Position::from_xy(0.0, 0.0),
+                RigidBody::Dynamic,
+                Collider::circle(5.0),
+                Mass(10.0),
+                LinearVelocity(Vec2::new(120.0, 0.0)),
+            ))
+            .id();
+        app.world_mut().resource_mut::<CameraFollow>().0 = Some(body);
+        for _ in 0..4 {
+            app.update();
+        }
+        (app, cam, body)
+    }
+
+    /// GATE B0001 + comportamento base: `follow_camera` ha DUE query su
+    /// `Transform` (camera in scrittura, corpi in lettura), disgiunte per
+    /// filtro (`With<MainCamera>` / `Without<MainCamera>`).
+    #[test]
+    fn follow_camera_runs_and_snaps_onto_the_body() {
+        let (mut app, cam, body) = setup(false);
+        app.update();
+        let w = app.world();
+        let c = w.entity(cam).get::<Transform>().unwrap().translation;
+        let b = w.entity(body).get::<Transform>().unwrap().translation;
+        assert!(
+            (c - b).truncate().length() < 1e-3,
+            "la camera deve cadere esattamente sul corpo"
+        );
+
+        // Il corpo è interpolato: Transform ≠ Position (se no il test sopra
+        // sarebbe vero per caso, senza easing in gioco).
+        let pos = w.entity(body).get::<Position>().unwrap().0;
+        assert!(
+            (b.truncate() - pos).length() > 1e-3,
+            "senza interpolazione attiva questo test non prova niente"
+        );
+    }
+
+    /// A/B sul ritardo della camera — MISURATO SUL DEVICE (v0.14.158): con
+    /// `GlobalTransform` e senza ordinamento la camera cadeva sulla `Position`
+    /// di UN TICK PRIMA in 2156 frame su 2352 (scarto 0.000), mentre il corpo
+    /// era già smussato: il pianeta scorreva avanti dentro il tick e la camera
+    /// restava indietro → scatto residuo, tanto più visibile quanto più si
+    /// zooma.
+    ///
+    /// Causa: Avian propaga la `GlobalTransform` all'INIZIO del tick
+    /// (`propagate_before_physics`), quindi prima che l'easing scriva il
+    /// valore smussato.
+    #[test]
+    fn follow_camera_tracks_the_eased_body_without_lag() {
+        let (mut app, cam, body) = setup(false);
+        let mut max = 0.0f32;
+        for _ in 0..10 {
+            app.update();
+            let w = app.world();
+            let c = w.entity(cam).get::<Transform>().unwrap().translation;
+            let b = w.entity(body).get::<Transform>().unwrap().translation;
+            max = max.max((c - b).truncate().length());
+        }
+        eprintln!("SPIKE follow nuovo: scarto max = {max:.4} unita'");
+        assert!(
+            max < 1e-3,
+            "il follow deve cadere ESATTAMENTE sul corpo smussato: scarto {max:.4} \
+             (un tick a 120 u/s = 1.875 unita')"
+        );
+
+        let (mut legacy_app, cam2, body2) = setup(true);
+        let mut max_legacy = 0.0f32;
+        for _ in 0..10 {
+            legacy_app.update();
+            let w = legacy_app.world();
+            let c = w.entity(cam2).get::<Transform>().unwrap().translation;
+            let b = w.entity(body2).get::<Transform>().unwrap().translation;
+            max_legacy = max_legacy.max((c - b).truncate().length());
+        }
+        eprintln!("SPIKE follow vecchio: scarto max = {max_legacy:.4} unita'");
+        assert!(
+            max_legacy > 0.5,
+            "la versione con GlobalTransform deve mostrare il ritardo di un tick \
+             (scarto {max_legacy:.4}): se è ~0 il test non riproduce il bug"
+        );
     }
 }
