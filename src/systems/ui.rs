@@ -28,8 +28,8 @@ use avian2d::prelude::*;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::text::{FontSize, FontSource};
-use bevy::ui::widget::TextScroll;
 use bevy::ui::ScrollPosition;
+use bevy::ui::widget::TextScroll;
 
 use bevy::input_focus::InputFocus;
 use bevy::text::{EditableText, TextCursorStyle};
@@ -349,6 +349,23 @@ fn spawn_timeline(commands: &mut Commands) {
         });
 }
 
+/// Distanza del pannello proprietà dal bordo superiore (sotto la toolbar).
+const PROPERTY_PANEL_TOP: f32 = 60.0;
+/// Margine lasciato in fondo allo schermo.
+const PROPERTY_PANEL_BOTTOM_MARGIN: f32 = 12.0;
+
+/// Altezza massima del pannello proprietà per una finestra alta `window_h`
+/// (px logici).
+///
+/// In PIXEL, non in percentuale: `max_height: Val::Percent(..)` su un nodo
+/// assoluto con altezza automatica non ha vincolato niente sul device (il
+/// pannello stella continuava a uscire dallo schermo), mentre un tetto in px
+/// è esatto per costruzione. Con una stella selezionata i campi sono 19 e
+/// senza tetto il riquadro esce dal fondo.
+fn property_panel_max_height(window_h: f32) -> f32 {
+    (window_h - PROPERTY_PANEL_TOP - PROPERTY_PANEL_BOTTOM_MARGIN).max(160.0)
+}
+
 fn spawn_property_panel(commands: &mut Commands) {
     crate::mark_system("spawn_property_panel");
 
@@ -357,8 +374,8 @@ fn spawn_property_panel(commands: &mut Commands) {
             PropertyPanel,
             // Il pannello è SCORREVOLE: con una stella selezionata i campi
             // sono 19 (9 base + 5 Luce + 5 Alone) e su un telefono non
-            // entra. `max_height` gli dà il tetto (top 60px + 82% resta
-            // dentro lo schermo anche in landscape), `Overflow::scroll_y`
+            // entrano. Il tetto di altezza arriva da
+            // `property_panel_max_height` (px, non %), `Overflow::scroll_y`
             // fa il clip e `ScrollPosition` sposta il contenuto — chi lo
             // muove è `scroll_property_panel` (Bevy NON scorre da solo le
             // aree in overflow).
@@ -369,10 +386,12 @@ fn spawn_property_panel(commands: &mut Commands) {
             GlobalZIndex(10),
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(60.0),
+                top: Val::Px(PROPERTY_PANEL_TOP),
                 right: Val::Px(10.0),
                 width: Val::Px(220.0),
-                max_height: Val::Percent(82.0),
+                // Il tetto di altezza lo scrive `update_property_panel` in
+                // PIXEL dalla finestra (`property_panel_max_height`): una
+                // percentuale qui non vincolava il contenuto.
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(12.0)),
                 row_gap: Val::Px(5.0),
@@ -686,6 +705,8 @@ fn update_property_panel(
     bodies_query: Query<(&CelestialBody, &GlobalTransform), Without<PropertyPanel>>,
     velocity_query: Query<&LinearVelocity>,
     sim_state: Res<SimulationState>,
+    // Serve per il tetto di altezza del pannello (`property_panel_max_height`).
+    windows: Query<&Window>,
     // ResMut: al cambio di selezione il focus del campo va azzerato qui
     // (bug v0.14.75: il campo focussato restava attivo passando il valore
     // del corpo precedente a quello appena selezionato).
@@ -715,6 +736,16 @@ fn update_property_panel(
     if let Ok(mut panel_node) = node_queries.p0().single_mut() {
         if selected.0.is_some() {
             panel_node.display = Display::Flex;
+            // Tetto di altezza in PIXEL dalla finestra: senza, con una stella
+            // selezionata (19 campi) il pannello esce dal fondo dello
+            // schermo. Si scrive solo se cambia: una scrittura per frame
+            // farebbe un relayout per frame.
+            if let Some(window) = windows.iter().next() {
+                let max_h = Val::Px(property_panel_max_height(window.height()));
+                if panel_node.max_height != max_h {
+                    panel_node.max_height = max_h;
+                }
+            }
         } else {
             panel_node.display = Display::None;
             return;
@@ -1865,6 +1896,63 @@ mod tests {
             0.0,
             "col cursore fuori dal pannello la rotellina non deve scorrere i campi"
         );
+    }
+
+    /// Il tetto di altezza del pannello è in PIXEL, non in percentuale, e
+    /// lascia il pannello dentro lo schermo a qualunque altezza di finestra:
+    /// in % il device non lo applicava e il pannello stella usciva dal fondo.
+    #[test]
+    fn property_panel_max_height_keeps_the_panel_on_screen() {
+        for h in [320.0, 390.0, 568.0, 844.0, 1200.0] {
+            let max_h = property_panel_max_height(h);
+            assert!(
+                max_h <= h - PROPERTY_PANEL_TOP,
+                "il pannello deve stare sotto la toolbar e dentro lo schermo (h={h}, max={max_h})"
+            );
+            assert!(
+                max_h >= 160.0,
+                "su schermi bassi deve restare usabile (h={h}, max={max_h})"
+            );
+        }
+        assert!(
+            property_panel_max_height(390.0) < property_panel_max_height(844.0),
+            "il tetto deve seguire l'altezza della finestra"
+        );
+    }
+
+    /// `update_property_panel` scrive il tetto in px sulla radice del pannello
+    /// quando c'è una selezione. Il sistema gira davvero: è anche il gate
+    /// B0001 per il parametro `windows` aggiunto qui.
+    #[test]
+    fn update_property_panel_sets_the_pixel_max_height() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SelectedBody>()
+            .init_resource::<SimulationState>()
+            .init_resource::<InputFocus>()
+            .add_systems(Update, update_property_panel);
+        let mut window = Window::default();
+        window.resolution.set(390.0, 844.0);
+        app.world_mut().spawn(window);
+        let panel = app.world_mut().spawn((PropertyPanel, Node::default())).id();
+        let body = app
+            .world_mut()
+            .spawn((CelestialBody::default(), GlobalTransform::default()))
+            .id();
+        app.world_mut().resource_mut::<SelectedBody>().0 = Some(body);
+
+        app.update();
+
+        let node = app.world().entity(panel).get::<Node>().expect("pannello");
+        assert_eq!(node.display, Display::Flex);
+        match node.max_height {
+            Val::Px(px) => assert!(
+                (px - property_panel_max_height(844.0)).abs() < 0.01,
+                "tetto atteso {} px, trovato {px}",
+                property_panel_max_height(844.0)
+            ),
+            other => panic!("il tetto deve essere in px, trovato {other:?}"),
+        }
     }
 
     /// Lo scroll non esce mai dal contenuto, e se il contenuto si accorcia
