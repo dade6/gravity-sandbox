@@ -68,7 +68,10 @@ fn sample_motion(
         ),
         Without<MainCamera>,
     >,
-    stars: Query<(Entity, &Transform), (With<crate::systems::parallax::Star>, Without<MainCamera>)>,
+    stars: Query<
+        (Entity, &GlobalTransform),
+        (With<crate::systems::parallax::Star>, Without<MainCamera>),
+    >,
 ) {
     let Ok((cam_tf, projection)) = camera.single() else {
         return;
@@ -117,10 +120,11 @@ fn sample_motion(
     let mut star = (u32::MAX, Vec2::ZERO);
     let mut best = f32::INFINITY;
     for (entity, transform) in &stars {
-        let d = (transform.translation.truncate() - cam).length();
+        let world = transform.translation().truncate();
+        let d = (world - cam).length();
         if d < best {
             best = d;
-            star = (entity.index().index(), transform.translation.truncate());
+            star = (entity.index().index(), world);
         }
     }
 
