@@ -162,6 +162,8 @@ fn prepare_config(
                 false => 0,
             },
 
+            shadow_algorithm: config.shadow_algorithm,
+
             z_sorting: match config.z_sorting {
                 false => 0,
                 true => 1,

@@ -26,6 +26,7 @@ use bevy::ui::widget::TextScroll;
 
 use crate::components::lighting::{AmbientLight, GlowCurve};
 use crate::components::trajectory::TrajectoryConfig;
+use crate::systems::firefly_bridge::ShadowAlgo;
 use crate::systems::keypad::Keypad;
 use crate::systems::persistence::GravitationalConstant;
 use crate::systems::tools::PendingDelete;
@@ -64,6 +65,10 @@ pub struct SettingsCloseBtn;
 #[derive(Component)]
 pub struct SettingsToggleBtn;
 
+/// Bottone toggle v1/v2 dell'algoritmo dei coni d'ombra (`ShadowAlgo`).
+#[derive(Component)]
+pub struct ShadowAlgoBtn;
+
 /// Header di sezione del modale (stile ILLUMINAZIONE PIANETI / ALONE STELLA).
 #[derive(Component)]
 pub struct SettingsSection;
@@ -93,6 +98,7 @@ impl Plugin for SettingsPlugin {
                 handle_settings_button,
                 apply_settings_on_confirm,
                 update_settings_toggle,
+                update_shadow_algo_toggle,
                 sync_settings_fields_on_resource_change,
                 close_settings_on_delete_dialog,
             ),
@@ -412,6 +418,55 @@ fn spawn_settings_dialog(
                     for (key, label) in TRAJECTORY_FIELDS {
                         spawn_field_row(dialog, key, label, settings_field_value(key, &ctx));
                     }
+
+                    // === OMBRE: A/B algoritmo coni ===
+                    spawn_section_header(dialog, "OMBRE");
+                    dialog
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.0),
+                            width: Val::Percent(100.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Coni:"),
+                                TextFont {
+                                    font: FontSource::default(),
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(TEXT_COLOR),
+                            ));
+                            row.spawn((
+                                Button,
+                                ShadowAlgoBtn,
+                                Node {
+                                    margin: UiRect::left(Val::Px(8.0)),
+                                    padding: UiRect::axes(Val::Px(14.0), Val::Px(4.0)),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
+                                    ..default()
+                                },
+                                // Lo stato vero lo scrive `update_shadow_algo_toggle`
+                                // al primo frame dopo l'apertura del modale
+                                // (il builder non riceve la risorsa).
+                                BackgroundColor(shadow_algo_color(false)),
+                                BorderColor::all(BORDER_COLOR),
+                            ))
+                            .with_child((
+                                Text::new(shadow_algo_label(false)),
+                                TextFont {
+                                    font: FontSource::default(),
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                            ));
+                        });
                 });
         });
 }
@@ -429,6 +484,59 @@ fn toggle_color(enabled: bool) -> Color {
         Color::srgba(0.15, 0.5, 0.25, 0.7)
     } else {
         Color::srgba(0.45, 0.15, 0.15, 0.7)
+    }
+}
+
+/// Etichetta del toggle coni: dice QUALE algoritmo è attivo, non solo ON/OFF.
+fn shadow_algo_label(v2: bool) -> &'static str {
+    if v2 {
+        "v2 umbra"
+    } else {
+        "v1 soft"
+    }
+}
+
+fn shadow_algo_color(v2: bool) -> Color {
+    if v2 {
+        Color::srgba(0.15, 0.35, 0.6, 0.7)
+    } else {
+        Color::srgba(0.2, 0.2, 0.3, 0.6)
+    }
+}
+
+/// Click sul toggle coni: inverte `ShadowAlgo.v2` immediatamente.
+/// `apply_shadow_algo` (firefly_bridge) scrive il valore nella `FireflyConfig`
+/// della camera e la shader cambia strada al frame dopo. Rinfresca label e
+/// colore SENZA early-return: il modale viene ricostruito a ogni apertura e il
+/// bottone nasce con lo stato di default, non con quello della risorsa.
+fn update_shadow_algo_toggle(
+    toggle: Query<(&Interaction, &Children), With<ShadowAlgoBtn>>,
+    mut texts: Query<&mut Text>,
+    mut bgs: Query<&mut BackgroundColor, With<ShadowAlgoBtn>>,
+    mut algo: ResMut<ShadowAlgo>,
+) {
+    crate::mark_system("update_shadow_algo_toggle");
+    let mut pressed = false;
+    for (interaction, _) in toggle.iter() {
+        if *interaction == Interaction::Pressed {
+            pressed = true;
+        }
+    }
+    if pressed {
+        algo.v2 = !algo.v2;
+    }
+    let label = shadow_algo_label(algo.v2);
+    for (_, children) in toggle.iter() {
+        for child in children.iter() {
+            if let Ok(mut text) = texts.get_mut(child) {
+                if text.0 != label {
+                    text.0 = label.to_string();
+                }
+            }
+        }
+    }
+    for mut bg in bgs.iter_mut() {
+        bg.0 = shadow_algo_color(algo.v2);
     }
 }
 

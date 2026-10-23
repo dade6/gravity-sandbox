@@ -45,6 +45,16 @@ pub struct FireflyConfig {
     /// **Default:** true.
     pub soft_shadows: bool,
 
+    /// Algoritmo dei coni d'ombra (A/B live dal pannello Impostazioni).
+    ///
+    /// `0` = v1, il test poligonale/archi di firefly (soft shadows
+    /// approssimate sui vertici dell'occluder). `1` = v2 "Shadow System 3.0":
+    /// cono analitico umbra+penombra costruito dal disco solare
+    /// (`light.core_radius`), vedi `desmos_round_check` nella shader.
+    ///
+    /// **Default:** 0.
+    pub shadow_algorithm: u32,
+
     /// Whether to use occlusion z-sorting or not.
     ///
     /// If this is enabled, shadows cast by occluders won't affect sprites with a higher z position.
@@ -171,6 +181,7 @@ impl Default for FireflyConfig {
             ambient_brightness: 0.0,
             light_bands: None,
             soft_shadows: true,
+            shadow_algorithm: 0,
             z_sorting: true,
             z_sorting_error_margin: 0.0,
             normal_mode: NormalMode::None,
@@ -190,6 +201,7 @@ pub struct UniformFireflyConfig {
     pub ambient_brightness: f32,
     pub light_bands: f32,
     pub soft_shadows: u32,
+    pub shadow_algorithm: u32,
     pub z_sorting: u32,
     pub z_sorting_error_margin: f32,
     pub normal_mode: u32,

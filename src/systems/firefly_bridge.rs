@@ -173,6 +173,20 @@ pub struct BodyTextureSize(pub usize);
 
 pub struct FireflyBridgePlugin;
 
+/// Algoritmo dei coni d'ombra, selezionabile a caldo dal pannello Impostazioni
+/// (A/B sullo stesso device e sullo stesso preset: niente branch da
+/// ricompilare per confrontare le due rese).
+///
+/// - `v2 = false` → v1: test poligonale/archi di firefly (`round_check`),
+///   penombra approssimata sui vertici dell'occluder.
+/// - `v2 = true` → v2 "Shadow System 3.0" (Desmos `pql2tb3dhv`): cono
+///   analitico umbra+penombra costruito dal disco solare
+///   (`light.core_radius`), vedi `desmos_round_check` nella shader.
+#[derive(Resource, Default)]
+pub struct ShadowAlgo {
+    pub v2: bool,
+}
+
 impl Plugin for FireflyBridgePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(FireflyPlugin)
@@ -180,13 +194,18 @@ impl Plugin for FireflyBridgePlugin {
             .init_resource::<BodyTextureCache>()
             .init_resource::<GlowCurve>()
             .init_resource::<AmbientLight>()
+            .init_resource::<ShadowAlgo>()
             // Idempotente: si attiva al primo frame in cui la camera esiste.
             .add_systems(Update, setup_firefly_camera)
             // Ticket 19: rigenera la glow texture al cambio curva globale e
             // sincronizza l'ambient dalla risorsa AmbientLight (preset.json).
             .add_systems(
                 Update,
-                (ensure_glow_texture_matches_curve, apply_ambient_light),
+                (
+                    ensure_glow_texture_matches_curve,
+                    apply_ambient_light,
+                    apply_shadow_algo,
+                ),
             )
             .add_systems(
                 Update,
@@ -766,6 +785,22 @@ fn apply_ambient_light(
     for mut cfg in &mut cameras {
         cfg.ambient_brightness = ambient.intensity;
         cfg.ambient_color = color;
+    }
+}
+
+/// Scrive l'algoritmo scelto nella `FireflyConfig` della camera: la shader
+/// legge `config.shadow_algorithm` (0 = v1, 1 = v2). Come
+/// `apply_ambient_light`, scrive solo al cambio della risorsa — la config è
+/// già a 0 di default, quindi al primo frame non serve altro.
+fn apply_shadow_algo(
+    algo: Res<ShadowAlgo>,
+    mut cameras: Query<&mut FireflyConfig, With<FireflyCamera>>,
+) {
+    if !algo.is_changed() {
+        return;
+    }
+    for mut cfg in &mut cameras {
+        cfg.shadow_algorithm = if algo.v2 { 1 } else { 0 };
     }
 }
 

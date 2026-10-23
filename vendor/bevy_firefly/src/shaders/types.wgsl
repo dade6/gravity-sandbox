@@ -71,6 +71,8 @@ struct FireflyConfig {
     ambient_brightness: f32, 
     light_bands: f32,
     soft_shadows: u32,
+    // v2 (Shadow System 3.0): 0 = cono v1 (firefly), 1 = cono analitico umbra+penombra
+    shadow_algorithm: u32,
     z_sorting: u32,
     z_sorting_error_margin: f32,
     // 0 - none, 1 - simple, 2 - topdown

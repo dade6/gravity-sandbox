@@ -812,6 +812,48 @@ mod tests {
         );
     }
 
+    /// v2 coni d'ombra: il blocco WGSL estratto dalla shader vendored deve
+    /// passare naga parse+validate. La shader completa non è validabile in
+    /// isolamento (importa `bevy_render::view::View`), ma
+    /// `desmos_round_check` dipende solo da `lights`/`round_occluders`/
+    /// `light_index`: la si avvolge in uno stub coi campi realmente usati.
+    /// Una shader non compilabile = schermo nero e `cargo check` non la vede.
+    #[test]
+    fn shadow_v2_cone_is_valid_wgsl() {
+        let raw = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/create_lightmap.wgsl")
+            .expect("vendor shader");
+        let start = raw.find("// @@SHADOW_V2_BEGIN").expect("marker begin");
+        let end = raw.find("// @@SHADOW_V2_END").expect("marker end");
+        assert!(end > start, "marker v2 invertiti");
+        let body = &raw[start..end];
+        assert!(
+            body.contains("fn desmos_round_check"),
+            "funzione v2 mancante nel blocco estratto"
+        );
+        let stub = format!(
+            "\
+struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
+struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}
+@group(1) @binding(1) var<storage> lights: array<PointLightStub>;
+@group(1) @binding(2) var<storage> light_index: u32;
+@group(1) @binding(3) var<storage> round_occluders: array<RoundOccluderStub>;
+{body}
+@fragment
+fn fragment() -> @location(0) vec4f {{
+    return vec4f(desmos_round_check(vec2f(0.0, 0.0), 0u));
+}}
+"
+        );
+        let module = naga::front::wgsl::parse_str(&stub)
+            .unwrap_or_else(|e| panic!("WGSL PARSE FAILED (shadow v2): {e}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("WGSL VALIDATION FAILED (shadow v2): {e:#?}"));
+    }
+
     /// Compila light_material.wgsl in GLSL esattamente come fa wgpu su
     /// WebGL2 (Safari/Chrome): se naga fallisce o panica qui, è lui il
     /// colpevole del trap "Unreachable" del primo frame su Mac/iPhone.

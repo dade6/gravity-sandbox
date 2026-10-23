@@ -56,6 +56,65 @@ const PI2: f32 = 6.28318530717958647692528676655900577;
 const PI: f32 = 3.14159265358979323846264338327950288;
 const PIDIV2: f32 = 1.57079632679489661923132169163975144; 
 
+// ============================================================
+// v2 "Shadow System 3.0" — cono analitico umbra + penombra
+// ============================================================
+// Riferimento: calcolatore Desmos "Shadow System 3.0" (pql2tb3dhv).
+//
+// Invece del test poligonale/archi della v1 (`round_check`), l'ombra di un
+// occluder tondo e' un cono con due semilarghezze che evolvono linearmente
+// oltre il corpo. Con t = distanza percorsa lungo l'asse stella->corpo
+// misurata dal CENTRO del corpo e r_sun = raggio del disco della luce:
+//
+//   umbra:    w_u(t) = r_body - t·(r_sun - r_body)/d
+//   penombra: w_p(t) = r_body + t·(r_sun + r_body)/d
+//
+// Se r_sun > r_body l'umbra CONVERGE e si chiude a
+// t = r_body·d/(r_sun - r_body): e' esattamente il centro di omotetia
+// `P_intersect` del calcolatore. Se r_sun < r_body diverge e il cono si
+// allarga (il caso che rende visibili i coni lunghi). La differenza
+// sostanziale rispetto alla v1 e' che qui il sole ha un RAGGIO: la penombra
+// non e' un'approssimazione sui vertici dell'occluder ma la geometria esatta
+// delle due tangenti al disco solare.
+//
+// I marker @@SHADOW_V2_BEGIN/END delimitano il blocco che il test
+// `shadow_v2_cone_is_valid_wgsl` estrae e valida con naga in isolamento.
+//
+// @@SHADOW_V2_BEGIN
+fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
+    let light = lights[light_index];
+    let occ = round_occluders[index];
+    let r_body = occ.radius;
+    if r_body <= 0.0 {
+        return 0.0;
+    }
+    let to_body = occ.pos - light.pos;
+    let d = length(to_body);
+    if d <= r_body {
+        // La stella e' dentro (o sulla superficie del) corpo: nessun cono.
+        return 0.0;
+    }
+    let axis = to_body / d;
+    let perp = vec2f(-axis.y, axis.x);
+    let q = pos - light.pos;
+    let t = dot(q, axis) - d;    // distanza oltre il centro del corpo
+    if t < 0.0 {
+        return 0.0;              // davanti al corpo: illuminato
+    }
+    let b = abs(dot(q, perp));   // distanza dall'asse del cono
+    let r_sun = max(light.core_radius, 0.0);
+    let w_umbra = max(r_body - t * (r_sun - r_body) / d, 0.0);
+    let w_pen = r_body + t * (r_sun + r_body) / d;
+    if b <= w_umbra {
+        return 1.0;              // umbra piena
+    }
+    if b >= w_pen {
+        return 0.0;              // fuori dalla penombra
+    }
+    return 1.0 - (b - w_umbra) / max(w_pen - w_umbra, 0.0001);
+}
+// @@SHADOW_V2_END
+
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
     // return vec4f(0.5);
@@ -234,7 +293,17 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
                     }
                 }
 
-                let result = round_check(pos, occluder_index); 
+                var result: f32;
+                if config.shadow_algorithm == 1
+                    && round_occluders[occluder_index].radius > 0.0
+                    && round_occluders[occluder_index].half_width <= 0.0
+                    && round_occluders[occluder_index].half_height <= 0.0 {
+                    // v2: cono analitico dal disco solare (solo cerchi; i
+                    // rettangoli arrotondati restano sulla v1).
+                    result = desmos_round_check(pos, occluder_index);
+                } else {
+                    result = round_check(pos, occluder_index); 
+                }
 
 
                 if result > 0.0 {
