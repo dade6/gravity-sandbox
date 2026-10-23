@@ -184,7 +184,12 @@ impl Plugin for ParallaxPlugin {
                     apply_sky_lod,
                     update_star_drift,
                 )
-                    .chain(),
+                    .chain()
+                    // DOPO lo snap del follow: le stelle devono usare la
+                    // camera di QUESTO frame. Con il follow in `PostUpdate`
+                    // la parallasse lavorava con un frame di ritardo, e
+                    // l'errore in pixel cresce con lo zoom (v0.14.160).
+                    .after(crate::systems::camera_follow::FollowSystems),
             );
     }
 }

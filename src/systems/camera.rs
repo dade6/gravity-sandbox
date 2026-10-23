@@ -34,6 +34,16 @@ macro_rules! no_modal_open {
     };
 }
 
+/// Sistemi di controllo camera (pan/zoom/pinch) in `Update`.
+///
+/// Serve come ancora di ordinamento: il follow camera deve girare DOPO (lo
+/// snap vince sul pan nello stesso frame) e la parallasse DOPO il follow (le
+/// stelle devono usare la camera di QUESTO frame, non quella del precedente:
+/// con `follow_camera` in `PostUpdate` la parallasse lavorava con un frame di
+/// ritardo, e l'errore in pixel cresce con lo zoom).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CameraControlSystems;
+
 /// Plugin per il controllo della camera (pan & zoom)
 pub struct CameraControllerPlugin;
 
@@ -43,7 +53,9 @@ impl Plugin for CameraControllerPlugin {
             .init_resource::<TouchPanState>()
             .add_systems(
                 Update,
-                (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom).ambiguous_with_all(),
+                (pan_camera, zoom_camera, scroll_pan, touch_pan, touch_zoom)
+                    .in_set(CameraControlSystems)
+                    .ambiguous_with_all(),
             );
     }
 }

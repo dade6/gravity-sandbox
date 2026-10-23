@@ -15,7 +15,7 @@ LOG_DIR = os.path.expanduser(os.environ.get("GRAVITY_LOG_DIR", "~/gravity-logs")
 # Deve combaciare con l'ordine dei campi scritti da `motion_log.rs`.
 HEADER = (
     "t_ms,dt_ms,zoom,cam_x,cam_y,followed,body_idx,body_x,body_y,"
-    "phys_x,phys_y,gap,fract,ease,speed\n"
+    "phys_x,phys_y,gap,fract,ease,speed,star_idx,star_x,star_y\n"
 )
 
 MAX_BYTES = 64 * 1024 * 1024  # ~500k righe: oltre, il file viene ruotato

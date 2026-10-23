@@ -68,6 +68,7 @@ fn sample_motion(
         ),
         Without<MainCamera>,
     >,
+    stars: Query<(Entity, &Transform), (With<crate::systems::parallax::Star>, Without<MainCamera>)>,
 ) {
     let Ok((cam_tf, projection)) = camera.single() else {
         return;
@@ -110,10 +111,23 @@ fn sample_motion(
     };
     let gap = (body_pos.truncate() - phys).length();
 
-    let mut line = String::with_capacity(128);
+    // Stella più vicina al centro schermo: serve a misurare la parallasse (è
+    // l'unica cosa che si muove quando la camera è agganciata a un corpo).
+    // `star_idx` permette di scartare i frame in cui la stella scelta cambia.
+    let mut star = (u32::MAX, Vec2::ZERO);
+    let mut best = f32::INFINITY;
+    for (entity, transform) in &stars {
+        let d = (transform.translation.truncate() - cam).length();
+        if d < best {
+            best = d;
+            star = (entity.index().index(), transform.translation.truncate());
+        }
+    }
+
+    let mut line = String::with_capacity(160);
     let _ = writeln!(
         line,
-        "{:.1},{:.3},{:.4},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{:.4},{:.4},{},{}",
+        "{:.1},{:.3},{:.4},{:.3},{:.3},{},{},{:.3},{:.3},{:.3},{:.3},{:.4},{:.4},{},{},{},{:.3},{:.3}",
         time.elapsed_secs_f64() * 1000.0,
         time.delta_secs_f64() * 1000.0,
         zoom,
@@ -129,6 +143,9 @@ fn sample_motion(
         fixed.overstep_fraction(),
         ease,
         sim.speed,
+        star.0,
+        star.1.x,
+        star.1.y,
     );
 
     if let Ok(mut buf) = MOTION_LOG.lock() {

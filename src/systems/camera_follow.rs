@@ -42,6 +42,11 @@ pub struct FollowOption {
     pub name: String,
 }
 
+/// Ancora di ordinamento per tutto ciò che dipende dalla posizione della camera
+/// (parallasse/streaming del cielo): deve girare DOPO lo snap del follow.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FollowSystems;
+
 pub struct CameraFollowPlugin;
 
 impl Plugin for CameraFollowPlugin {
@@ -60,25 +65,20 @@ impl Plugin for CameraFollowPlugin {
                     adapt_follow_position,
                 ),
             )
-            // PostUpdate, DOPO pan/zoom (Update): lo snap vince sul pan e
-            // lo zoom resta sempre agganciato (vedi follow_camera).
-            // PostUpdate, PRIMA della propagazione dei transform: a questo
-            // punto il `Transform` dei corpi è già quello smussato del frame
-            // (`TranslationInterpolation` scrive in
-            // `RunFixedMainLoop::AfterFixedMainLoop`), quindi camera e corpo
-            // cadono sullo stesso istante e il corpo resta esattamente
-            // centrato.
+            // `Update`, DOPO pan/zoom: lo snap vince sul pan nello stesso
+            // frame, e la camera è definitiva PRIMA che la parallasse
+            // (`FollowSystems` → `update_star_drift`) la legga: con il follow
+            // in `PostUpdate` le stelle usavano la camera del frame
+            // precedente, errore in pixel che cresce con lo zoom.
             //
-            // TRAPPOLA MISURATA SUL DEVICE (v0.14.159): leggendo
-            // `GlobalTransform` senza ordinamento, la camera finiva sulla
-            // `Position` di UN TICK PRIMA (2156 frame su 2352, scarto 0.000):
-            // Avian propaga la GlobalTransform all'inizio del tick
-            // (`propagate_before_physics`), quindi prima che l'easing scriva il
-            // valore smussato; il pianeta scorreva avanti nel tick e la camera
-            // restava indietro → lo "scatto" residuo visibile col follow.
+            // Legge il `Transform` del corpo (non `GlobalTransform`: è quello
+            // del frame precedente / di inizio tick, vedi pitfall 0v5) con
+            // query disgiunta da quella della camera via `Without<MainCamera>`.
             .add_systems(
-                PostUpdate,
-                follow_camera.before(bevy::transform::TransformSystems::Propagate),
+                Update,
+                follow_camera
+                    .in_set(FollowSystems)
+                    .after(crate::systems::camera::CameraControlSystems),
             );
     }
 }
@@ -467,10 +467,9 @@ mod tests {
         if legacy {
             app.add_systems(PostUpdate, legacy_follow);
         } else {
-            app.add_systems(
-                PostUpdate,
-                follow_camera.before(bevy::transform::TransformSystems::Propagate),
-            );
+            // Wiring di produzione: `Update`, nel set `FollowSystems`, dopo i
+            // controlli camera (qui il set dei controlli è vuoto).
+            app.add_systems(Update, follow_camera.in_set(FollowSystems));
         }
         app.finish();
         let cam = app
@@ -524,6 +523,35 @@ mod tests {
         assert!(
             (b.truncate() - pos).length() > 1e-3,
             "senza interpolazione attiva questo test non prova niente"
+        );
+    }
+
+    /// Il wiring di produzione deve garantire che chi dipende dalla camera
+    /// (parallasse/streaming del cielo) veda la posizione di QUESTO frame e non
+    /// quella del precedente: con il follow in `PostUpdate` le stelle usavano
+    /// la camera di un frame prima, errore in pixel che cresce con lo zoom.
+    #[test]
+    fn systems_after_follow_see_the_current_frame_camera() {
+        #[derive(Resource, Default)]
+        struct Seen(Vec2);
+
+        fn probe(cam: Query<&Transform, With<MainCamera>>, mut seen: ResMut<Seen>) {
+            if let Ok(t) = cam.single() {
+                seen.0 = t.translation.truncate();
+            }
+        }
+
+        let (mut app, _cam, body) = setup(false);
+        app.init_resource::<Seen>()
+            .add_systems(Update, probe.after(FollowSystems));
+        app.update();
+        let w = app.world();
+        let seen = w.resource::<Seen>().0;
+        let body_pos = w.entity(body).get::<Transform>().unwrap().translation.truncate();
+        assert!(
+            (seen - body_pos).length() < 1e-3,
+            "chi gira dopo il follow deve vedere la camera già sincronizzata \
+             (vista {seen:?}, corpo {body_pos:?})"
         );
     }
 

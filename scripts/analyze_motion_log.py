@@ -32,6 +32,7 @@ import sys
 COLS = [
     "t_ms", "dt_ms", "zoom", "cam_x", "cam_y", "followed", "body_idx",
     "body_x", "body_y", "phys_x", "phys_y", "gap", "fract", "ease", "speed",
+    "star_idx", "star_x", "star_y",
 ]
 
 
@@ -73,6 +74,34 @@ def zoom_events(rows, min_rel=0.005, group_ms=1000.0):
                 events.append(r["t_ms"])
         prev = z
     return events
+
+
+def star_stats(rows, t0, t1):
+    """Passi a schermo di UNA stella (stesso `star_idx`): è ciò che si muove
+    quando la camera è agganciata a un corpo."""
+    idx = [r for r in rows if t0 <= r["t_ms"] <= t1 and r.get("star_idx", -1) >= 0]
+    if len(idx) < 6:
+        return None
+    out = []
+    prev = None
+    for r in idx:
+        z = r.get("zoom") or 1.0
+        sx = (r.get("star_x", 0.0) - r.get("cam_x", 0.0)) / z
+        sy = (r.get("star_y", 0.0) - r.get("cam_y", 0.0)) / z
+        if prev is not None and prev[0] == r.get("star_idx"):
+            out.append(((sx - prev[1]) ** 2 + (sy - prev[2]) ** 2) ** 0.5)
+        prev = (r.get("star_idx"), sx, sy)
+    if len(out) < 5:
+        return None
+    med = st.median(out)
+    return {
+        "n": len(out),
+        "med": med,
+        "p90": sorted(out)[int(0.9 * (len(out) - 1))],
+        "max": max(out),
+        "ratio": (max(out) / med) if med > 1e-9 else float("inf"),
+        "frozen": sum(1 for s in out if s == 0.0),
+    }
 
 
 def window_stats(rows, offs, t0, t1):
@@ -182,6 +211,10 @@ def main():
             print(f"   tick visti={w['ticks']} (attesi ~{w['ticks_expected']:.0f})  "
                   f"frazione ferma={w['frac_stuck_pct']:.1f}%")
             print(f"   passi: {sparkline(w['steps'])}")
+            s = star_stats(rows, ev - pad, ev + pad)
+            if s:
+                print(f"   STELLA: passi px mediana={s['med']:.3f} p90={s['p90']:.3f} "
+                      f"max={s['max']:.3f} ratio={s['ratio']:.1f}  fermi={s['frozen']}/{s['n']}")
 
 
 if __name__ == "__main__":
