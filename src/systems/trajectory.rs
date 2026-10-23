@@ -98,6 +98,52 @@ fn render_trajectories(
 }
 
 // ============================================================
+// Ghost visibility toggle (v0.14.126)
+// ============================================================
+
+/// Nasconde/mostra le traiettorie FUTURE (mesh ghost) in base a
+/// `TrajectoryConfig.enabled`, scrivendo `Visibility` sulle entità
+/// `GhostTrailLine`.
+///
+/// v0.14.126 — causa radice del bug "toggle off: le scie passate spariscono,
+/// le future no": il vecchio nascondimento faceva
+/// `meshes.remove()` / `materials.remove()`, ma il render world evicta i
+/// render-asset GPU preparati (RenderMesh, PreparedMaterial2d/bind group)
+/// SOLO su `AssetEvent::Unused` — cioè quando l'ultimo handle forte viene
+/// droppato. `Assets::remove` emette solo `AssetEvent::Removed`, che
+/// `extract_render_asset` (bevy_render) ignora esplicitamente. Le entità
+/// GhostTrailLine tengono vive gli handle forti (`Mesh2d`, `MeshMaterial2d`)
+/// → il materiale e la mesh restavano in `RenderAssets` e la fase retained
+/// `Transparent2d` continuava a disegnarle ogni frame. Le scie passate sono
+/// Gizmos che leggono `config.enabled` direttamente: da lì l'asimmetria.
+///
+/// La Visibility è il meccanismo canonico: `ViewVisibility=false` fa
+/// rimuovere l'entità da `RenderMaterial2dInstances`/`RenderMesh2dInstances`
+/// e dalla `VisibleEntities` della vista → dequeue dalla fase retained + draw
+/// commands che saltano. Nessun asset viene toccato: al riattivazione le
+/// curve ricompaiono costruite dai dati ghost correnti.
+///
+/// Scritto solo al cambio effettivo (niente `Changed<Visibility>` inutili a
+/// ogni frame verso il render world).
+fn sync_ghost_trails_visibility(
+    config: Res<TrajectoryConfig>,
+    mut q_trails: Query<(&GhostTrailLine, &mut Visibility)>,
+) {
+    crate::mark_system("sync_ghost_trails_visibility");
+
+    let target = if config.enabled {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for (_, mut visibility) in q_trails.iter_mut() {
+        if *visibility != target {
+            *visibility = target;
+        }
+    }
+}
+
+// ============================================================
 // JS sync system (T11-A)
 // ============================================================
 
@@ -201,9 +247,14 @@ impl Plugin for TrajectoryPlugin {
                 PostUpdate,
                 (
                     render_trajectories,
+                    // v0.14.126: PRIMA di CheckVisibility così il cambio di
+                    // Visibility delle mesh ghost è visto da ViewVisibility
+                    // nello stesso frame (toggle on/off senza frame di ritardo).
+                    sync_ghost_trails_visibility,
                     render_ghost_mesh_system,
                     sync_trajectory_config_to_js,
-                ),
+                )
+                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
             );
     }
 }
@@ -800,11 +851,12 @@ pub fn render_ghost_mesh_system(
     crate::mark_system("render_ghost_mesh_system");
 
     if !config.enabled {
-        // Hide all trail meshes when trajectories are off
-        for (_, _, mesh_h, mat_h) in q_trails.iter() {
-            meshes.remove(mesh_h.id());
-            materials.remove(mat_h.id());
-        }
+        // v0.14.126: il nascondimento è di `sync_ghost_trails_visibility`
+        // (Visibility sulle entità GhostTrailLine). QUI non si toccano gli
+        // asset: `Assets::remove` è inerte per il render world (evicta solo
+        // su `AssetEvent::Unused`, vedi la doc del sistema sopra) e in più
+        // avrebbe rotto il re-attivazione (il ramo `existing` non
+        // re-inseriva mai il materiale rimosso).
         return;
     }
 
@@ -882,7 +934,9 @@ pub fn render_ghost_mesh_system(
                     Mesh2d(mesh_h),
                     MeshMaterial2d(mat_h),
                     Transform::default(),
-                    Visibility::default(),
+                    // Esplicita: `sync_ghost_trails_visibility` la porta a
+                    // Hidden/Visible in base a TrajectoryConfig.enabled.
+                    Visibility::Visible,
                     RenderLayers::layer(1), // visible from main camera, not minimap
                 ));
             }
@@ -1076,6 +1130,135 @@ mod tests {
             .positions
             .len();
         assert_eq!(len, 0, "paused physics must not sample");
+    }
+
+    // ---------- v0.14.126: toggle enabled nasconde ANCHE le traiettorie future ----------
+
+    #[test]
+    fn ghost_trails_visibility_follows_enabled_toggle() {
+        // Regression (bug segnalato da Davide): il toggle "Traiettorie" deve
+        // far sparire/ricomparire TUTTE le traiettorie, passate E future.
+        // Pre-fix le future restavano visibili con enabled=false perché il
+        // nascondimento usava `Assets::remove`, che è inerte per il render
+        // world (evicta solo su AssetEvent::Unused = ultimo handle forte
+        // droppato; le entità GhostTrailLine tengono gli handle forti) — la
+        // fase retained Transparent2d continuava a disegnarle.
+        // Qui si verifica il contratto del nuovo sistema
+        // `sync_ghost_trails_visibility`: Visibility Hidden ⇔ !enabled.
+        let mut app = App::new();
+        app.init_resource::<TrajectoryConfig>()
+            .add_systems(Update, sync_ghost_trails_visibility);
+
+        let e1 = app
+            .world_mut()
+            .spawn((GhostTrailLine { ghost_index: 0 }, Visibility::Visible))
+            .id();
+        let e2 = app
+            .world_mut()
+            .spawn((GhostTrailLine { ghost_index: 1 }, Visibility::Visible))
+            .id();
+
+        // Toggle OFF: entrambe le traiettorie future devono sparire.
+        app.world_mut().resource_mut::<TrajectoryConfig>().enabled = false;
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(e1).unwrap(),
+            Visibility::Hidden,
+            "ghost trail 0 must hide when trajectories are disabled"
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(e2).unwrap(),
+            Visibility::Hidden,
+            "ghost trail 1 must hide when trajectories are disabled"
+        );
+
+        // Toggle ON: devono ricomparire (nessun asset è stato rimosso,
+        // quindi il render world le ridisegna dai dati ghost correnti).
+        app.world_mut().resource_mut::<TrajectoryConfig>().enabled = true;
+        app.update();
+        assert_eq!(
+            *app.world().get::<Visibility>(e1).unwrap(),
+            Visibility::Visible,
+            "ghost trail 0 must reappear when trajectories are re-enabled"
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(e2).unwrap(),
+            Visibility::Visible,
+            "ghost trail 1 must reappear when trajectories are re-enabled"
+        );
+    }
+
+    #[test]
+    fn ghost_trails_visibility_is_idempotent_no_changed_storm() {
+        // Scrittura solo al cambio effettivo: un update nello stato stazionario
+        // non deve toccare Visibility (altrimenti Changed<Visibility> ogni
+        // frame → re-extract inutile nel render world, la classe di bug già
+        // incontrata con sync_sprite_z / v0.14.93).
+        // Misura col vero meccanismo change-detection: un sistema lettore che
+        // gira DOPO il sync vede `is_changed()` true SOLO nei frame in cui il
+        // sync ha scritto.
+        #[derive(Resource, Default)]
+        struct VisChangedFlags(Vec<bool>);
+
+        fn record_vis_changed(
+            q: Query<Ref<Visibility>, With<GhostTrailLine>>,
+            mut log: ResMut<VisChangedFlags>,
+        ) {
+            log.0.push(q.iter().any(|v| v.is_changed()));
+        }
+
+        let mut app = App::new();
+        app.init_resource::<TrajectoryConfig>()
+            .init_resource::<VisChangedFlags>()
+            .add_systems(
+                Update,
+                (sync_ghost_trails_visibility, record_vis_changed).chain(),
+            );
+        let e = app
+            .world_mut()
+            .spawn((GhostTrailLine { ghost_index: 0 }, Visibility::Visible))
+            .id();
+
+        // Frame 1: primo run del lettore → vede lo spawn (changed). Preveduto.
+        app.update();
+        // Frame 2 (stazionario ON): il sync non deve aver scritto.
+        app.update();
+        let flags = app.world().resource::<VisChangedFlags>().0.clone();
+        assert_eq!(
+            flags,
+            vec![true, false],
+            "steady ON must not rewrite Visibility"
+        );
+
+        // Toggle OFF: un solo changed, poi stazionario.
+        app.world_mut().resource_mut::<TrajectoryConfig>().enabled = false;
+        app.update();
+        app.update();
+        let flags = &app.world().resource::<VisChangedFlags>().0;
+        assert_eq!(
+            &flags[2..],
+            &[true, false],
+            "exactly one write on toggle OFF, then steady"
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(e).unwrap(),
+            Visibility::Hidden
+        );
+
+        // Toggle ON: un solo changed, poi stazionario.
+        app.world_mut().resource_mut::<TrajectoryConfig>().enabled = true;
+        app.update();
+        app.update();
+        let flags = &app.world().resource::<VisChangedFlags>().0;
+        assert_eq!(
+            &flags[4..],
+            &[true, false],
+            "exactly one write on toggle ON, then steady"
+        );
+        assert_eq!(
+            *app.world().get::<Visibility>(e).unwrap(),
+            Visibility::Visible
+        );
     }
 }
 
