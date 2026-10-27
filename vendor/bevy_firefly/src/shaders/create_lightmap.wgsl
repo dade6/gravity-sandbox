@@ -87,15 +87,14 @@ const PIDIV2: f32 = 1.57079632679489661923132169163975144;
 // dove il cono si interrompeva, ben visibile sui corpi che lo attraversavano.
 const PENUMBRA_EXP: f32 = 0.25;
 
-// Scurimento massimo della penombra OLTRE il punto di incrocio dei bordi
-// dell'umbra (`P_intersect`). Là il corpo è più piccolo del disco solare visto
-// dal pixel, quindi non può esserci ombra piena: senza questo tetto il profilo
-// ripartiva da 1.0 sull'asse e nasceva un TRIANGOLO OPPOSTO scuro che si
-// allargava oltre l'incrocio (antumbra). Il valore effettivo è
-// `min(questo, ratio²)` — quindi il velo si assottiglia anche con la distanza.
-// 0.35 = oltre l'incrocio resta un velo chiaro, coerente con il poligono
-// "primary shadows" del calcolatore.
-const PENUMBRA_ANTUMBRA_MAX: f32 = 0.35;
+// Oltre il punto di incrocio dei bordi dell'umbra (`P_intersect`) il corpo
+// copre solo una PARTE del disco solare, quindi non può esserci ombra piena.
+// Il massimo scurimento lì è `cov²`, con `cov = clamp(ratio, 0, 1)` e
+// `ratio` = (r_body/dist_corpo) / (r_sun/dist_pixel): ratio >= 1 significa
+// disco solare coperto per intero. v0.14.172 usava
+// `select(1.0, min(TETTO, ratio²), ratio < 1.0)`: il confine `ratio = 1` è un
+// CERCHIO DI APOLLONIO attorno al corpo, quindi lo scurimento si interrompeva
+// con un taglio netto AD ARCO. Ora è continuo, senza rami.
 
 fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let light = lights[light_index];
@@ -134,10 +133,14 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // Oltre l'incrocio il corpo copre solo una PARTE del disco solare: il
     // massimo scurimento non è più 1.0. Rapporto dei raggi angolari
     // α_corpo/α_sole = (r/q)·(s/r_sun): sotto 1 → antumbra (velo chiaro).
+    // v0.14.173: NIENTE `select` sul confine `ratio < 1.0` — quel confine è un
+    // cerchio di Apollonio attorno al corpo e produceva un taglio netto ad
+    // arco nella penombra. `clamp` + quadrato è continuo ovunque.
     let dist_pixel = length(q);
     let q_body = distance(pos, occ.pos);
     let ratio = r_body * dist_pixel / max(r_sun * q_body, 0.0001);
-    let peak = select(1.0, min(PENUMBRA_ANTUMBRA_MAX, ratio * ratio), ratio < 1.0);
+    let cov = clamp(ratio, 0.0, 1.0);
+    let peak = cov * cov;
     let x = (b - w_umbra) / max(w_cone - w_umbra, 0.0001);
     return peak * pow(1.0 - x, PENUMBRA_EXP);
 }

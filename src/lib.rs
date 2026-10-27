@@ -859,10 +859,23 @@ mod tests {
         // Oltre l'incrocio il corpo copre solo parte del disco solare: senza
         // il tetto la penombra riparte da 1.0 sull'asse e si allarga come
         // triangolo opposto scuro.
+        // Gate di continuità (v0.14.173): il picco della penombra non deve
+        // avere rami. Il confine `ratio < 1.0` di una `select` è un cerchio di
+        // Apollonio → taglio netto ad arco, visibile sui pianeti e sul velo.
+        // NB: i controlli negativi girano sul CODICE senza commenti, altrimenti
+        // il commento che spiega il fix fa fallire il gate (successo davvero).
+        let code_only = body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            body.contains("PENUMBRA_ANTUMBRA_MAX"),
-            "antumbra senza tetto: oltre P_intersect nasce un triangolo \
-             opposto scuro che continua ad allargarsi"
+            code_only.contains("let cov = clamp(ratio, 0.0, 1.0);"),
+            "picco della penombra non continuo: reintrodotto un taglio ad arco"
+        );
+        assert!(
+            !code_only.contains("select(1.0, min("),
+            "select sul picco della penombra: il confine ratio=1 e' un arco"
         );
         assert!(
             !body.contains("PENUMBRA_MIN_DARKENING"),
