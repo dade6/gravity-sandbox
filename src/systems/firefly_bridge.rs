@@ -288,6 +288,7 @@ fn setup_firefly_camera(
     mut commands: Commands,
     cameras: Query<(Entity, &Camera), Without<FireflyCamera>>,
     ambient: Res<AmbientLight>,
+    algo: Res<ShadowAlgo>,
 ) {
     for (entity, _cam) in cameras.iter() {
         commands.entity(entity).insert((
@@ -326,6 +327,10 @@ fn setup_firefly_camera(
                 // ATTENZIONE: attenuation è mix(normal, 0, t) — più ALTO =
                 // più piatto! 0.2 = rilievo deciso, quasi pieno.
                 normal_attenuation: 0.2,
+                // v0.14.171: l'algoritmo va scritto GIA' qui. `apply_shadow_algo`
+                // al primo frame può girare prima che questa config esista, e
+                // con `..default()` (0 = v1) la shader resterebbe sulla v1.
+                shadow_algorithm: if algo.v2 { 1 } else { 0 },
                 ..default()
             },
         ));
@@ -806,11 +811,17 @@ fn apply_shadow_algo(
     algo: Res<ShadowAlgo>,
     mut cameras: Query<&mut FireflyConfig, With<FireflyCamera>>,
 ) {
-    if !algo.is_changed() {
-        return;
-    }
+    // NIENTE early-return su `algo.is_changed()` (v0.14.171): al primo frame la
+    // camera con `FireflyConfig` non esiste ancora, quindi la scrittura andava
+    // persa; dal frame dopo la risorsa non era piu' "changed" e il valore non
+    // arrivava MAI alla shader -> si restava sulla v1 credendo di guardare la
+    // v2 (sintomo: penombra ad archi di cerchio, tipica della v1 di firefly).
+    // Costo trascurabile (una camera): si scrive solo al cambio effettivo.
+    let want = if algo.v2 { 1 } else { 0 };
     for mut cfg in &mut cameras {
-        cfg.shadow_algorithm = if algo.v2 { 1 } else { 0 };
+        if cfg.shadow_algorithm != want {
+            cfg.shadow_algorithm = want;
+        }
     }
 }
 
@@ -902,6 +913,54 @@ fn apply_star_glow_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// v0.14.171: il toggle deve arrivare alla `FireflyConfig` della camera
+    /// anche quando la camera nasce DOPO il primo frame (è quello che fa
+    /// `setup_firefly_camera`). Con l'early-return su `is_changed()` la
+    /// scrittura al primo frame andava persa e la shader restava sulla v1 per
+    /// sempre: si vedeva una penombra ad archi di cerchio (v1) credendo di
+    /// guardare la v2.
+    #[test]
+    fn shadow_algorithm_reaches_a_camera_created_after_the_first_frame() {
+        let mut app = App::new();
+        app.insert_resource(ShadowAlgo { v2: true })
+            .add_systems(Update, apply_shadow_algo);
+        // frame 1: nessuna camera con FireflyConfig
+        app.update();
+        // frame 2: la camera nasce con la config di default (v1)
+        let cam = app
+            .world_mut()
+            .spawn((FireflyCamera, FireflyConfig::default()))
+            .id();
+        app.update();
+        let cfg = app.world().get::<FireflyConfig>(cam).unwrap();
+        assert_eq!(
+            cfg.shadow_algorithm, 1,
+            "il toggle non raggiunge la camera nata dopo il primo frame: si \
+             resta sulla v1 (penombra ad archi di cerchio)"
+        );
+    }
+
+    /// Il valore viaggia in entrambe le direzioni (v1 ⇄ v2) e non riscrive
+    /// quando è già corretto.
+    #[test]
+    fn shadow_algorithm_follows_the_toggle_both_ways() {
+        let mut app = App::new();
+        app.insert_resource(ShadowAlgo { v2: false })
+            .add_systems(Update, apply_shadow_algo);
+        let cam = app
+            .world_mut()
+            .spawn((FireflyCamera, FireflyConfig::default()))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<FireflyConfig>(cam).unwrap().shadow_algorithm, 0);
+        app.world_mut().resource_mut::<ShadowAlgo>().v2 = true;
+        app.update();
+        assert_eq!(app.world().get::<FireflyConfig>(cam).unwrap().shadow_algorithm, 1);
+        app.world_mut().resource_mut::<ShadowAlgo>().v2 = false;
+        app.update();
+        assert_eq!(app.world().get::<FireflyConfig>(cam).unwrap().shadow_algorithm, 0);
+    }
 
     /// A/B (v0.14.156): la scrittura di `z` per lo z-sort NON deve distruggere
     /// l'interpolazione del moto.
