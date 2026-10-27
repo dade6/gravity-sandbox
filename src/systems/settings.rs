@@ -27,6 +27,7 @@ use bevy::ui::widget::TextScroll;
 use crate::components::lighting::{AmbientLight, GlowCurve};
 use crate::components::trajectory::TrajectoryConfig;
 use crate::systems::firefly_bridge::ShadowAlgo;
+use crate::systems::shadow_gizmos::ShadowGizmos;
 use crate::systems::keypad::Keypad;
 use crate::systems::persistence::GravitationalConstant;
 use crate::systems::tools::PendingDelete;
@@ -69,6 +70,10 @@ pub struct SettingsToggleBtn;
 #[derive(Component)]
 pub struct ShadowAlgoBtn;
 
+/// Bottone toggle ON/OFF dei bordi gizmo dei coni (diagnostica).
+#[derive(Component)]
+pub struct ShadowGizmoBtn;
+
 /// Header di sezione del modale (stile ILLUMINAZIONE PIANETI / ALONE STELLA).
 #[derive(Component)]
 pub struct SettingsSection;
@@ -99,6 +104,7 @@ impl Plugin for SettingsPlugin {
                 apply_settings_on_confirm,
                 update_settings_toggle,
                 update_shadow_algo_toggle,
+                update_shadow_gizmo_toggle,
                 sync_settings_fields_on_resource_change,
                 close_settings_on_delete_dialog,
             ),
@@ -466,6 +472,40 @@ fn spawn_settings_dialog(
                                 },
                                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
                             ));
+                            // Bordi gizmo dei coni (diagnostica geometria).
+                            row.spawn((
+                                Text::new("Bordi:"),
+                                TextFont {
+                                    font: FontSource::default(),
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(TEXT_COLOR),
+                            ));
+                            row.spawn((
+                                Button,
+                                ShadowGizmoBtn,
+                                Node {
+                                    margin: UiRect::left(Val::Px(8.0)),
+                                    padding: UiRect::axes(Val::Px(14.0), Val::Px(4.0)),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
+                                    ..default()
+                                },
+                                BackgroundColor(toggle_color(false)),
+                                BorderColor::all(BORDER_COLOR),
+                            ))
+                            .with_child((
+                                Text::new(toggle_label(false)),
+                                TextFont {
+                                    font: FontSource::default(),
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                            ));
                         });
                 });
         });
@@ -537,6 +577,38 @@ fn update_shadow_algo_toggle(
     }
     for mut bg in bgs.iter_mut() {
         bg.0 = shadow_algo_color(algo.v2);
+    }
+}
+
+/// Click sul toggle bordi: inverte `ShadowGizmos.show`. Il sistema che disegna
+/// (`shadow_gizmos.rs`) legge la risorsa ogni frame, quindi le linee appaiono
+/// e spariscono al frame dopo, senza rebuild. Come per l'algoritmo, label e
+/// colore vengono riallineati a ogni frame perché il modale rinasce a ogni
+/// apertura col valore di default.
+fn update_shadow_gizmo_toggle(
+    toggle: Query<(&Interaction, &Children), With<ShadowGizmoBtn>>,
+    mut texts: Query<&mut Text>,
+    mut bgs: Query<&mut BackgroundColor, With<ShadowGizmoBtn>>,
+    mut gizmos: ResMut<ShadowGizmos>,
+) {
+    crate::mark_system("update_shadow_gizmo_toggle");
+    for (interaction, _) in toggle.iter() {
+        if *interaction == Interaction::Pressed {
+            gizmos.show = !gizmos.show;
+        }
+    }
+    let label = toggle_label(gizmos.show);
+    for (_, children) in toggle.iter() {
+        for child in children.iter() {
+            if let Ok(mut text) = texts.get_mut(child) {
+                if text.0 != label {
+                    text.0 = label.to_string();
+                }
+            }
+        }
+    }
+    for mut bg in bgs.iter_mut() {
+        bg.0 = toggle_color(gizmos.show);
     }
 }
 

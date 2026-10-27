@@ -16,6 +16,7 @@ pub mod selection;
 pub mod settings;
 pub mod starfield_panel;
 pub mod shadow;
+pub mod shadow_gizmos;
 pub mod timeline;
 pub mod tools;
 pub mod trajectory;

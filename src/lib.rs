@@ -24,6 +24,7 @@ use systems::property_editor::PropertyEditorPlugin;
 use systems::reset::ResetPlugin;
 use systems::selection::SelectionPlugin;
 use systems::shadow::ShadowPlugin;
+use systems::shadow_gizmos::ShadowGizmoPlugin;
 use systems::timeline::TimelinePlugin;
 use systems::tools::ToolPlugin;
 use systems::trajectory::TrajectoryPlugin;
@@ -455,6 +456,9 @@ pub fn wasm_main() {
         // subito: il buffer è in RAM, JS lo svuota con `drain_motion_log` e lo
         // spedisce al server, che scrive il CSV.
         systems::motion_log::MotionLogPlugin,
+        // Bordi dei coni d'ombra come linee Gizmo (diagnostica: confronta la
+        // geometria calcolata con quella disegnata dalla luce).
+        ShadowGizmoPlugin,
     ))
     .insert_resource(Gravity::ZERO)
     .init_resource::<SkyDebug>()
