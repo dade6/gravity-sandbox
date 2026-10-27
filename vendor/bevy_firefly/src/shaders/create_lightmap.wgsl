@@ -61,32 +61,31 @@ const PIDIV2: f32 = 1.57079632679489661923132169163975144;
 // ============================================================
 // Riferimento: calcolatore Desmos "Shadow System 3.0" (pql2tb3dhv).
 //
-// Invece del test poligonale/archi della v1 (`round_check`), l'ombra di un
-// occluder tondo e' un cono con due semilarghezze che evolvono linearmente
-// oltre il corpo. Con t = distanza percorsa lungo l'asse stella->corpo
-// misurata dal CENTRO del corpo e r_sun = raggio del disco della luce:
-//
-//   umbra:    w_u(t) = r_body - t·(r_sun - r_body)/d
-//   penombra: w_p(t) = r_body + t·(r_sun + r_body)/d
-//
-// Se r_sun > r_body l'umbra CONVERGE e si chiude a
-// t = r_body·d/(r_sun - r_body): e' esattamente il centro di omotetia
-// `P_intersect` del calcolatore. Se r_sun < r_body diverge e il cono si
-// allarga (il caso che rende visibili i coni lunghi). La differenza
-// sostanziale rispetto alla v1 e' che qui il sole ha un RAGGIO: la penombra
-// non e' un'approssimazione sui vertici dell'occluder ma la geometria esatta
-// delle due tangenti al disco solare.
+// Tre zone, come i poligoni del calcolatore:
+//   cono (primary shadows):   w_c(t) = r_body + t·r_body/d
+//   umbra (secondo poligono): w_u(t) = r_body - t·(r_sun - r_body)/d
+//   penombra: la banda fra w_u e w_c, scurimento decrescente verso w_c.
+// `t` = distanza lungo l'asse stella->corpo misurata dal CENTRO del corpo.
+// Il bordo esterno è la SILHOUETTE del corpo vista dal centro del sole (un
+// punto): il raggio solare entra SOLO nell'umbra. Se r_sun > r_body l'umbra
+// converge a t = r_body·d/(r_sun - r_body), esattamente il `P_intersect` del
+// calcolatore; se r_sun < r_body diverge e il cono resta pieno più a lungo.
+// Mettere il disco solare anche sul bordo esterno (v0.14.167) allargava il
+// cono con pendenza (r_sun + r)/d: con r_sun = 450 era ~2× troppo largo.
 //
 // I marker @@SHADOW_V2_BEGIN/END delimitano il blocco che il test
 // `shadow_v2_cone_is_valid_wgsl` estrae e valida con naga in isolamento.
 //
 // @@SHADOW_V2_BEGIN
-// Scurimento al BORDO ESTERNO della penombra, in frazione dell'ombra piena.
-// 0.0 = penombra fisica che sfuma a zero (invisibile sui corpi lontani: un
-// corpo investito dalla penombra larga di un sole grande risultava quasi
-// intatto), 1.0 = bordo esterno nero come l'umbra. 0.3 = velo scuro su tutta
-// la penombra, sempre MENO dell'umbra.
-const PENUMBRA_MIN_DARKENING: f32 = 0.3;
+// Profilo della penombra: scurimento = (1 - x)^PENUMBRA_EXP, con x = 0 sul
+// bordo dell'umbra e x = 1 sul bordo del cono.
+//   1.0  = rampa lineare (fisica)
+//   0.25 = penombra ~2× più scura della rampa lineare nella banda centrale
+//   ->0  = quasi umbra
+// Il valore arriva a 0 ESATTAMENTE sul bordo del cono: nessuno scalino. La
+// v0.14.167 usava una soglia minima (0.3) e il velo finiva con un bordo netto
+// dove il cono si interrompeva, ben visibile sui corpi che lo attraversavano.
+const PENUMBRA_EXP: f32 = 0.25;
 
 fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let light = lights[light_index];
@@ -111,20 +110,18 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let b = abs(dot(q, perp));   // distanza dall'asse del cono
     let r_sun = max(light.core_radius, 0.0);
     let w_umbra = max(r_body - t * (r_sun - r_body) / d, 0.0);
-    let w_pen = r_body + t * (r_sun + r_body) / d;
+    // Bordo del cono = silhouette del corpo vista dal centro del sole.
+    let w_cone = r_body + t * r_body / d;
     if b <= w_umbra {
         return 1.0;              // umbra piena
     }
-    if b >= w_pen {
-        return 0.0;              // fuori dalla penombra
+    if b >= w_cone {
+        return 0.0;              // fuori dal cono
     }
-    // v0.14.167: la penombra scurisce SEMPRE qualcosa, non sfuma a zero.
-    // Prima `1 - x` arrivava a 0 sul bordo esterno: con un sole grande la
-    // penombra e' larghissima (Beta dietro Alpha: 92.7% del disco in
-    // penombra) e i corpi ci finivano dentro quasi intatti, dando
-    // l'impressione che solo la parte in umbra fosse oscurata.
-    let x = (b - w_umbra) / max(w_pen - w_umbra, 0.0001);
-    return mix(1.0, PENUMBRA_MIN_DARKENING, x);
+    // v0.14.168: banda di penombra sempre più scura verso l'umbra e a zero
+    // esatto sul bordo del cono (nessuno scalino, nessuna soglia minima).
+    let x = (b - w_umbra) / max(w_cone - w_umbra, 0.0001);
+    return pow(1.0 - x, PENUMBRA_EXP);
 }
 // @@SHADOW_V2_END
 

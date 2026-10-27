@@ -830,18 +830,24 @@ mod tests {
             body.contains("fn desmos_round_check"),
             "funzione v2 mancante nel blocco estratto"
         );
-        // Gate di comportamento: la penombra deve scurire SEMPRE qualcosa.
-        // Con la vecchia rampa `1 - x` il bordo esterno tornava a 0 e un corpo
-        // investito dalla penombra larga di un sole grande restava quasi
-        // intatto ("oscurato solo dalla parte in ombra").
+        // Gate di geometria e comportamento (v0.14.168):
+        // - il bordo del cono è la silhouette (pendenza r/d), NON il disco
+        //   solare: con r_sun=450 il cono era ~2× troppo largo rispetto al
+        //   calcolatore di riferimento;
+        // - la penombra scende a 0 esattamente sul bordo (nessuno scalino).
         assert!(
-            body.contains("PENUMBRA_MIN_DARKENING"),
-            "penombra senza soglia minima: il bordo esterno torna a 0 e i corpi \
-             in penombra restano illuminati"
+            body.contains("let w_cone = r_body + t * r_body / d;"),
+            "bordo del cono non è la silhouette dal centro del sole: con un \
+             sole grande il cono si allarga il doppio del dovuto"
         );
         assert!(
-            body.contains("mix(1.0, PENUMBRA_MIN_DARKENING, x)"),
-            "la penombra deve interpolare fra ombra piena e soglia minima"
+            body.contains("pow(1.0 - x, PENUMBRA_EXP)"),
+            "la penombra deve seguire la curva (1-x)^PENUMBRA_EXP fino a 0 sul bordo"
+        );
+        assert!(
+            !body.contains("PENUMBRA_MIN_DARKENING"),
+            "soglia minima reintrodotta: il velo di penombra finirebbe con un \
+             bordo netto dove il cono si interrompe"
         );
         let stub = format!(
             "\
