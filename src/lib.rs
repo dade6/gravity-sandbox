@@ -848,6 +848,22 @@ mod tests {
             body.contains("pow(1.0 - x, PENUMBRA_EXP)"),
             "la penombra deve seguire la curva (1-x)^PENUMBRA_EXP fino a 0 sul bordo"
         );
+        // L'umbra deve esistere solo se ha spessore: senza `w_umbra > 0.0`
+        // il ramo scatta anche oltre l'incrocio e lascia una riga piena
+        // sull'asse (il "triangolo opposto" dell'antumbra).
+        assert!(
+            body.contains("w_umbra > 0.0 && b <= w_umbra"),
+            "umbra senza guardia sullo spessore: oltre l'incrocio dei bordi \
+             resterebbe una riga di ombra piena lungo l'asse"
+        );
+        // Oltre l'incrocio il corpo copre solo parte del disco solare: senza
+        // il tetto la penombra riparte da 1.0 sull'asse e si allarga come
+        // triangolo opposto scuro.
+        assert!(
+            body.contains("PENUMBRA_ANTUMBRA_MAX"),
+            "antumbra senza tetto: oltre P_intersect nasce un triangolo \
+             opposto scuro che continua ad allargarsi"
+        );
         assert!(
             !body.contains("PENUMBRA_MIN_DARKENING"),
             "soglia minima reintrodotta: il velo di penombra finirebbe con un \

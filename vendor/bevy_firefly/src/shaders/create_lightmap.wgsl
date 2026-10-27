@@ -87,6 +87,16 @@ const PIDIV2: f32 = 1.57079632679489661923132169163975144;
 // dove il cono si interrompeva, ben visibile sui corpi che lo attraversavano.
 const PENUMBRA_EXP: f32 = 0.25;
 
+// Scurimento massimo della penombra OLTRE il punto di incrocio dei bordi
+// dell'umbra (`P_intersect`). Là il corpo è più piccolo del disco solare visto
+// dal pixel, quindi non può esserci ombra piena: senza questo tetto il profilo
+// ripartiva da 1.0 sull'asse e nasceva un TRIANGOLO OPPOSTO scuro che si
+// allargava oltre l'incrocio (antumbra). Il valore effettivo è
+// `min(questo, ratio²)` — quindi il velo si assottiglia anche con la distanza.
+// 0.35 = oltre l'incrocio resta un velo chiaro, coerente con il poligono
+// "primary shadows" del calcolatore.
+const PENUMBRA_ANTUMBRA_MAX: f32 = 0.35;
+
 fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let light = lights[light_index];
     let occ = round_occluders[index];
@@ -112,16 +122,24 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let w_umbra = max(r_body - t * (r_sun - r_body) / d, 0.0);
     // Bordo del cono = silhouette del corpo vista dal centro del sole.
     let w_cone = r_body + t * r_body / d;
-    if b <= w_umbra {
+    // L'umbra ESISTE solo se ha spessore: quando si è chiusa (w_umbra = 0,
+    // cioè oltre `P_intersect`) il ramo sotto non deve scattare, altrimenti
+    // resterebbe una riga piena di ombra esattamente sull'asse.
+    if w_umbra > 0.0 && b <= w_umbra {
         return 1.0;              // umbra piena
     }
     if b >= w_cone {
         return 0.0;              // fuori dal cono
     }
-    // v0.14.168: banda di penombra sempre più scura verso l'umbra e a zero
-    // esatto sul bordo del cono (nessuno scalino, nessuna soglia minima).
+    // Oltre l'incrocio il corpo copre solo una PARTE del disco solare: il
+    // massimo scurimento non è più 1.0. Rapporto dei raggi angolari
+    // α_corpo/α_sole = (r/q)·(s/r_sun): sotto 1 → antumbra (velo chiaro).
+    let dist_pixel = length(q);
+    let q_body = distance(pos, occ.pos);
+    let ratio = r_body * dist_pixel / max(r_sun * q_body, 0.0001);
+    let peak = select(1.0, min(PENUMBRA_ANTUMBRA_MAX, ratio * ratio), ratio < 1.0);
     let x = (b - w_umbra) / max(w_cone - w_umbra, 0.0001);
-    return pow(1.0 - x, PENUMBRA_EXP);
+    return peak * pow(1.0 - x, PENUMBRA_EXP);
 }
 // @@SHADOW_V2_END
 
