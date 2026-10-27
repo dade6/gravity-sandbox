@@ -182,9 +182,19 @@ pub struct FireflyBridgePlugin;
 /// - `v2 = true` → v2 "Shadow System 3.0" (Desmos `pql2tb3dhv`): cono
 ///   analitico umbra+penombra costruito dal disco solare
 ///   (`light.core_radius`), vedi `desmos_round_check` nella shader.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct ShadowAlgo {
     pub v2: bool,
+}
+
+impl Default for ShadowAlgo {
+    /// Default = **v2**. Il ramo esiste per sviluppare l'algoritmo nuovo e
+    /// l'A/B non è persistito nel preset: con default `false` un reload della
+    /// pagina riportava silenziosamente alla v1 e si finiva a diagnosticare la
+    /// v1 credendo di guardare la v2 (successo alla prima verifica su device).
+    fn default() -> Self {
+        Self { v2: true }
+    }
 }
 
 impl Plugin for FireflyBridgePlugin {

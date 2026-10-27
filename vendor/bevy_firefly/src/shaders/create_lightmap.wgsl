@@ -81,6 +81,13 @@ const PIDIV2: f32 = 1.57079632679489661923132169163975144;
 // `shadow_v2_cone_is_valid_wgsl` estrae e valida con naga in isolamento.
 //
 // @@SHADOW_V2_BEGIN
+// Scurimento al BORDO ESTERNO della penombra, in frazione dell'ombra piena.
+// 0.0 = penombra fisica che sfuma a zero (invisibile sui corpi lontani: un
+// corpo investito dalla penombra larga di un sole grande risultava quasi
+// intatto), 1.0 = bordo esterno nero come l'umbra. 0.3 = velo scuro su tutta
+// la penombra, sempre MENO dell'umbra.
+const PENUMBRA_MIN_DARKENING: f32 = 0.3;
+
 fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let light = lights[light_index];
     let occ = round_occluders[index];
@@ -111,7 +118,13 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     if b >= w_pen {
         return 0.0;              // fuori dalla penombra
     }
-    return 1.0 - (b - w_umbra) / max(w_pen - w_umbra, 0.0001);
+    // v0.14.167: la penombra scurisce SEMPRE qualcosa, non sfuma a zero.
+    // Prima `1 - x` arrivava a 0 sul bordo esterno: con un sole grande la
+    // penombra e' larghissima (Beta dietro Alpha: 92.7% del disco in
+    // penombra) e i corpi ci finivano dentro quasi intatti, dando
+    // l'impressione che solo la parte in umbra fosse oscurata.
+    let x = (b - w_umbra) / max(w_pen - w_umbra, 0.0001);
+    return mix(1.0, PENUMBRA_MIN_DARKENING, x);
 }
 // @@SHADOW_V2_END
 

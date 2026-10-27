@@ -830,6 +830,19 @@ mod tests {
             body.contains("fn desmos_round_check"),
             "funzione v2 mancante nel blocco estratto"
         );
+        // Gate di comportamento: la penombra deve scurire SEMPRE qualcosa.
+        // Con la vecchia rampa `1 - x` il bordo esterno tornava a 0 e un corpo
+        // investito dalla penombra larga di un sole grande restava quasi
+        // intatto ("oscurato solo dalla parte in ombra").
+        assert!(
+            body.contains("PENUMBRA_MIN_DARKENING"),
+            "penombra senza soglia minima: il bordo esterno torna a 0 e i corpi \
+             in penombra restano illuminati"
+        );
+        assert!(
+            body.contains("mix(1.0, PENUMBRA_MIN_DARKENING, x)"),
+            "la penombra deve interpolare fra ombra piena e soglia minima"
+        );
         let stub = format!(
             "\
 struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
@@ -1393,6 +1406,15 @@ fn debug_state_snapshot(
             _ => 9,
         })
         .unwrap_or(99);
+    // v0.14.167: quale algoritmo dei coni è ATTIVO nella config della camera.
+    // 1 = v2 (cono analitico umbra+penombra), 0 = v1, 99 = nessuna camera con
+    // FireflyConfig. Primo numero da guardare quando una resa "non cambia":
+    // l'A/B non è persistito, quindi dopo un reload conta il default.
+    let salg = firefly_cfg
+        .iter()
+        .next()
+        .map(|c| c.shadow_algorithm)
+        .unwrap_or(99);
     // Altezza della luce (TopDownY): 0 = luce a terra -> pianeti piatti
     let lh = light_heights.iter().next().map(|h| h.0).unwrap_or(-1.0);
     // v0.14.119: diagnosi "la luce non arriva nella lightmap". `vpush` =
@@ -1412,7 +1434,7 @@ fn debug_state_snapshot(
         bevy_firefly::extract::LIGHT_FALLOFF_MODE.load(ord),
     );
     let json = format!(
-        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0},"vpush":{},"vnoclass":{},"vitems":{},"vgpu":"{}"}},"star":"{}","field_rects":[{}],"bodies":[{}],"sky":{{"stars":{},"sectors":{},"lod":{},"fps":{:.0},"fr":{:.2},"gap":{:.2},"eoff":{},"dtmax":{:.0}}}}}"#,
+        r#"{{"last_system":"{}","frame":{},"tool":"{}","paused":{},"selected":{},"focus":{},"focused_text":"{}","drag_active":{},"drag_engaged":{},"firefly":{{"cam":{},"lights":{},"occluders":{},"sprites":{},"nmaps":{},"nmode":{},"gnmode":{},"exL":{},"exO":{},"skipN":{},"procS":{},"qItems":{},"lh":{:.0},"vpush":{},"vnoclass":{},"vitems":{},"vgpu":"{}","salg":{}}},"star":"{}","field_rects":[{}],"bodies":[{}],"sky":{{"stars":{},"sectors":{},"lod":{},"fps":{:.0},"fr":{:.2},"gap":{:.2},"eoff":{},"dtmax":{:.0}}}}}"#,
         last_system,
         frame,
         tool,
@@ -1439,6 +1461,7 @@ fn debug_state_snapshot(
         vnoclass,
         vitems,
         vgpu,
+        salg,
         star_str,
         rects.join(","),
         parts.join(","),
