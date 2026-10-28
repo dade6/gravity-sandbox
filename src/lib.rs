@@ -859,24 +859,26 @@ mod tests {
         // Oltre l'incrocio il corpo copre solo parte del disco solare: senza
         // il tetto la penombra riparte da 1.0 sull'asse e si allarga come
         // triangolo opposto scuro.
-        // Gate di continuità (v0.14.173): il picco della penombra non deve
-        // avere rami. Il confine `ratio < 1.0` di una `select` è un cerchio di
-        // Apollonio → taglio netto ad arco, visibile sui pianeti e sul velo.
-        // NB: i controlli negativi girano sul CODICE senza commenti, altrimenti
-        // il commento che spiega il fix fa fallire il gate (successo davvero).
+        // Fedeltà al riferimento (v0.14.175): la penombra NON deve avere
+        // fattori di copertura/antumbra — nel calcolatore dipende solo dalla
+        // distanza dall'asse, e un `peak` inventato spegneva i coni dei corpi
+        // piccoli (Rocky). Il controllo gira sul codice senza commenti.
         let code_only = body
             .lines()
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            code_only.contains("let cov = clamp(ratio, 0.0, 1.0);"),
-            "picco della penombra non continuo: reintrodotto un taglio ad arco"
+            code_only.contains("return pow(1.0 - x, PENUMBRA_EXP);"),
+            "penombra: manca il profilo (1-x)^PENUMBRA_EXP"
         );
-        assert!(
-            !code_only.contains("select(1.0, min("),
-            "select sul picco della penombra: il confine ratio=1 e' un arco"
-        );
+        for banned in ["let peak =", "let cov =", "let ratio ="] {
+            assert!(
+                !code_only.contains(banned),
+                "fattore di copertura `{banned}` reintrodotto: non esiste nel \
+                 riferimento e spegne i coni dei corpi piccoli"
+            );
+        }
         assert!(
             !body.contains("PENUMBRA_MIN_DARKENING"),
             "soglia minima reintrodotta: il velo di penombra finirebbe con un \

@@ -87,14 +87,16 @@ const PIDIV2: f32 = 1.57079632679489661923132169163975144;
 // dove il cono si interrompeva, ben visibile sui corpi che lo attraversavano.
 const PENUMBRA_EXP: f32 = 0.25;
 
-// Oltre il punto di incrocio dei bordi dell'umbra (`P_intersect`) il corpo
-// copre solo una PARTE del disco solare, quindi non può esserci ombra piena.
-// Il massimo scurimento lì è `cov²`, con `cov = clamp(ratio, 0, 1)` e
-// `ratio` = (r_body/dist_corpo) / (r_sun/dist_pixel): ratio >= 1 significa
-// disco solare coperto per intero. v0.14.172 usava
-// `select(1.0, min(TETTO, ratio²), ratio < 1.0)`: il confine `ratio = 1` è un
-// CERCHIO DI APOLLONIO attorno al corpo, quindi lo scurimento si interrompeva
-// con un taglio netto AD ARCO. Ora è continuo, senza rami.
+// Oltre il punto di incrocio dei bordi dell'umbra (`P_intersect`) il corpo non
+// copre più l'intero disco solare: è l'antumbra. Il calcolatore di riferimento
+// (Desmos "Shadow System 3.0") lì NON disegna niente di più scuro: il secondo
+// poligono vale solo per `r_sun >= r_body` e si ferma proprio a P_intersect,
+// mentre il cono primario continua sempre uguale fino al limite di render.
+// Quindi qui NON c'è nessun fattore di copertura: il `peak = (r/dist :
+// r_sun/dist)²` della v0.14.170 era arbitrario (non esiste nel riferimento) e
+// spegneva i coni dei corpi piccoli: Rocky r=50 contro un disco solare di 450
+// aveva la penombra quasi invisibile già a ~420 unità.
+// La penombra dipende SOLO dalla distanza dall'asse: nessun valore arbitrario.
 
 fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let light = lights[light_index];
@@ -130,19 +132,13 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     if b >= w_cone {
         return 0.0;              // fuori dal cono
     }
-    // Oltre l'incrocio il corpo copre solo una PARTE del disco solare: il
-    // massimo scurimento non è più 1.0. Rapporto dei raggi angolari
-    // α_corpo/α_sole = (r/q)·(s/r_sun): sotto 1 → antumbra (velo chiaro).
-    // v0.14.173: NIENTE `select` sul confine `ratio < 1.0` — quel confine è un
-    // cerchio di Apollonio attorno al corpo e produceva un taglio netto ad
-    // arco nella penombra. `clamp` + quadrato è continuo ovunque.
-    let dist_pixel = length(q);
-    let q_body = distance(pos, occ.pos);
-    let ratio = r_body * dist_pixel / max(r_sun * q_body, 0.0001);
-    let cov = clamp(ratio, 0.0, 1.0);
-    let peak = cov * cov;
+    // v0.14.175: NESSUN fattore di copertura (antumbra). Il riferimento non
+    // ne ha: come nel calcolatore la penombra dipende solo dalla distanza
+    // dall'asse (`b`), quindi un corpo piccolo (Rocky r=50 vs disco solare
+    // 450) mantiene il cono pieno per tutta la sua lunghezza invece di
+    // spegnersi a ~420 unità.
     let x = (b - w_umbra) / max(w_cone - w_umbra, 0.0001);
-    return peak * pow(1.0 - x, PENUMBRA_EXP);
+    return pow(1.0 - x, PENUMBRA_EXP);
 }
 // @@SHADOW_V2_END
 
