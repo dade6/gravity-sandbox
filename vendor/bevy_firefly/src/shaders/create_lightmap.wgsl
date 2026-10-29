@@ -146,7 +146,27 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let p = config.penumbra_flat;
     let flat_on = step(1e-5, p);
     let shaped = pow(1.0 - x, config.penumbra_exp);
-    return select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
+    var v = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
+    // v0.14.179: bordi MORBIDI. Le due transizioni (umbra->penombra e
+    // penombra->luce) diventano rampe smoothstep larghe `soft` volte
+    // l'emilarghezza del cono. La banda centrale resta piatta.
+    // Se `soft` = 0 (o `w_cone` ~ 0, corpo degenere) tutto degrada ai bordi
+    // netti: nessuna divisione per zero, nessun caso speciale a runtime.
+    let soft_w = max(config.penumbra_soft, 0.0) * w_cone;
+    if soft_w > 0.0001 {
+        // Rampa esterna: da 0 (fuori dal cono) a 1 (dentro), centrata sul
+        // bordo `w_cone`. Moltiplicare per questa rampa porta il valore a 0
+        // ESATTAMENTE sul bordo e lo lascia pieno `soft_w` più dentro.
+        let outer = smoothstep(w_cone + soft_w, w_cone - soft_w, b);
+        v = v * outer;
+        // Rampa interna: ammorbidisce il salto da umbra (1.0) al valore
+        // piatto della penombra, centrata sul bordo dell'umbra.
+        if w_umbra > 0.0 {
+            let inner = smoothstep(w_umbra - soft_w, w_umbra + soft_w, b);
+            v = mix(1.0, v, inner);
+        }
+    }
+    return v;
 }
 // @@SHADOW_V2_END
 

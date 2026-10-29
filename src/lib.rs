@@ -857,6 +857,21 @@ mod tests {
             body.contains("penumbra_flat"),
             "manca la modalità penombra PIATTA (config.penumbra_flat)"
         );
+        // v0.14.179: bordi morbidi. Due rampe smoothstep sui bordi, con la
+        // banda centrale che resta piatta, e degradazione ai bordi netti
+        // quando la morbidezza è 0 (nessuna divisione per zero).
+        assert!(
+            body.contains("let soft_w = max(config.penumbra_soft, 0.0) * w_cone;"),
+            "la morbidezza dei bordi deve scalare con l'emilarghezza del cono"
+        );
+        assert!(
+            body.contains("smoothstep(w_cone + soft_w, w_cone - soft_w, b)"),
+            "manca la rampa softstep sul bordo esterno del cono"
+        );
+        assert!(
+            body.contains("smoothstep(w_umbra - soft_w, w_umbra + soft_w, b)"),
+            "manca la rampa softstep sul bordo dell'umbra"
+        );
         // L'umbra deve esistere solo se ha spessore: senza `w_umbra > 0.0`
         // il ramo scatta anche oltre l'incrocio e lascia una riga piena
         // sull'asse (il "triangolo opposto" dell'antumbra).
@@ -891,7 +906,7 @@ mod tests {
         );
         let stub = format!(
             "\
-struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32 }}
+struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32 }}
 @group(1) @binding(10) var<uniform> config: ConfigStub;
 struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
 struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}

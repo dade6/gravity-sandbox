@@ -168,6 +168,8 @@ fn prepare_config(
 
             penumbra_flat: config.penumbra_flat,
 
+            penumbra_soft: config.penumbra_soft,
+
             z_sorting: match config.z_sorting {
                 false => 0,
                 true => 1,

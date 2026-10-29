@@ -64,6 +64,17 @@ pub struct FireflyConfig {
     /// **Default:** 0.0.
     pub penumbra_flat: f32,
 
+    /// **Morbidezza dei bordi delle ombre** (v2), come frazione
+    /// dell'emilarghezza del cono `w_cone`:
+    /// - `0.0` = bordi netti (comportamento storico);
+    /// - `0.15` = rampa sul ~15% del raggio del cono su entrambi i bordi.
+    ///
+    /// La banda di penombra resta PIATTA al centro: si ammorbidiscono solo la
+    /// transizione umbra→penombra e penombra→luce.
+    /// Regolabile a caldo da Impostazioni → OMBRE.
+    /// **Default:** 0.12.
+    pub penumbra_soft: f32,
+
     /// Algoritmo dei coni d'ombra (A/B live dal pannello Impostazioni).
     ///
     /// `0` = v1, il test poligonale/archi di firefly (soft shadows
@@ -203,6 +214,7 @@ impl Default for FireflyConfig {
             shadow_algorithm: 0,
             penumbra_exp: 1.0,
             penumbra_flat: 0.0,
+            penumbra_soft: 0.12,
             z_sorting: true,
             z_sorting_error_margin: 0.0,
             normal_mode: NormalMode::None,
@@ -225,6 +237,7 @@ pub struct UniformFireflyConfig {
     pub shadow_algorithm: u32,
     pub penumbra_exp: f32,
     pub penumbra_flat: f32,
+    pub penumbra_soft: f32,
     pub z_sorting: u32,
     pub z_sorting_error_margin: f32,
     pub normal_mode: u32,

@@ -79,6 +79,9 @@ struct FireflyConfig {
     // v0.14.178: se > 0 la penombra è PIATTA a questo valore (nessun
     // gradiente dentro la banda); 0 = usa il profilo (1-x)^penumbra_exp
     penumbra_flat: f32,
+    // v0.14.179: ammorbidisce i bordi. Frazione dell'emilarghezza del cono
+    // (w_cone) usata come rampa sui due bordi; 0 = bordi netti come prima
+    penumbra_soft: f32,
     z_sorting: u32,
     z_sorting_error_margin: f32,
     // 0 - none, 1 - simple, 2 - topdown

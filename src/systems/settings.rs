@@ -226,6 +226,7 @@ const TRAJECTORY_FIELDS: &[(&str, &str)] = &[
 const SHADOW_FIELDS: &[(&str, &str)] = &[
     ("set_penumbra_exp", "Penombra exp:"),
     ("set_penumbra_flat", "Penombra flat:"),
+    ("set_penumbra_soft", "Bordi soft:"),
 ];
 
 /// Snapshot delle 4 risorse globali, clonato dalle `Res` (i valori CORRENTI
@@ -257,6 +258,7 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
         // dal vivo. Il default resta il fallback per i test dello snapshot.
         "set_penumbra_exp" => "1.0".to_string(),
         "set_penumbra_flat" => "0.45".to_string(),
+        "set_penumbra_soft" => "0.12".to_string(),
         _ => String::new(),
     }
 }
@@ -469,6 +471,14 @@ fn spawn_settings_dialog(
                         "Penombra flat:",
                         settings_field_value("set_penumbra_flat", &ctx),
                     );
+                    // Morbidezza dei bordi: 0 = netti, 0.12 = rampa sul 12%
+                    // del raggio del cono. Live come gli altri due.
+                    spawn_field_row(
+                        dialog,
+                        "set_penumbra_soft",
+                        "Bordi soft:",
+                        settings_field_value("set_penumbra_soft", &ctx),
+                    );
                     dialog
                         .spawn(Node {
                             flex_direction: FlexDirection::Row,
@@ -613,21 +623,30 @@ fn apply_shadow_algo_live(
     }
     for (prop, editable) in fields.iter() {
         let key = prop.0;
-        if key != "set_penumbra_exp" && key != "set_penumbra_flat" {
+        if key != "set_penumbra_exp" && key != "set_penumbra_flat" && key != "set_penumbra_soft" {
             continue;
         }
         let Ok(v) = editable.value().to_string().trim().parse::<f32>() else {
             continue; // testo incompleto ("0." o vuoto): si aspetta
         };
-        if key == "set_penumbra_exp" {
-            let v = v.clamp(0.05, 8.0);
-            if (algo.penumbra_exp - v).abs() > 1e-6 {
-                algo.penumbra_exp = v;
+        match &*key {
+            "set_penumbra_exp" => {
+                let v = v.clamp(0.05, 8.0);
+                if (algo.penumbra_exp - v).abs() > 1e-6 {
+                    algo.penumbra_exp = v;
+                }
             }
-        } else {
-            let v = v.clamp(0.0, 1.0);
-            if (algo.penumbra_flat - v).abs() > 1e-6 {
-                algo.penumbra_flat = v;
+            "set_penumbra_flat" => {
+                let v = v.clamp(0.0, 1.0);
+                if (algo.penumbra_flat - v).abs() > 1e-6 {
+                    algo.penumbra_flat = v;
+                }
+            }
+            _ => {
+                let v = v.clamp(0.0, 1.0);
+                if (algo.penumbra_soft - v).abs() > 1e-6 {
+                    algo.penumbra_soft = v;
+                }
             }
         }
     }
@@ -651,6 +670,7 @@ fn sync_penumbra_exp_field(
     let focused = input_focus.get();
     let expected_exp = format!("{:.2}", algo.penumbra_exp);
     let expected_flat = format!("{:.2}", algo.penumbra_flat);
+    let expected_soft = format!("{:.2}", algo.penumbra_soft);
     for (entity, prop, mut editable) in fields.iter_mut() {
         if Some(entity) == focused {
             continue;
@@ -658,6 +678,7 @@ fn sync_penumbra_exp_field(
         let expected: &String = match &*prop.0 {
             "set_penumbra_exp" => &expected_exp,
             "set_penumbra_flat" => &expected_flat,
+            "set_penumbra_soft" => &expected_soft,
             _ => continue,
         };
         if editable.value().to_string() != *expected {
@@ -1110,6 +1131,7 @@ pub(crate) fn apply_settings_field(
         // riconoscere la chiave evita che venga trattata come sconosciuta.
         "set_penumbra_exp" => {}
         "set_penumbra_flat" => {}
+        "set_penumbra_soft" => {}
         _ => {}
     }
     false
@@ -1204,7 +1226,10 @@ fn sync_settings_fields_on_resource_change(
         // qui il valore verrebbe preso da `settings_field_value`, che per
         // questa chiave non ha una risorsa dietro e restituirebbe la costante
         // "1.0" -> il campo tornava sempre a 1 (bug su device).
-        if prop.0 == "set_penumbra_exp" || prop.0 == "set_penumbra_flat" {
+        if prop.0 == "set_penumbra_exp"
+            || prop.0 == "set_penumbra_flat"
+            || prop.0 == "set_penumbra_soft"
+        {
             continue;
         }
         // Non sovrascrivere il campo che l'utente sta editando (digitazione
@@ -1554,7 +1579,7 @@ mod tests {
             .chain(SHADOW_FIELDS)
             .map(|(k, _)| *k)
             .collect();
-        assert_eq!(all.len(), 13);
+        assert_eq!(all.len(), 14);
         for key in all {
             let v = settings_field_value(key, &ctx);
             assert!(!v.is_empty(), "campo {key} senza valore");
