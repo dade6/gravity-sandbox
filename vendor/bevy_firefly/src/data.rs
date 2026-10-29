@@ -58,6 +58,12 @@ pub struct FireflyConfig {
     /// **Default:** 1.0.
     pub penumbra_exp: f32,
 
+    /// Scurimento UNIFORME della penombra v2: `0.0` = gradiente secondo
+    /// `penumbra_exp`, `> 0` = blocco piatto a questo valore (0..1).
+    /// Regolabile a caldo da Impostazioni → OMBRE.
+    /// **Default:** 0.0.
+    pub penumbra_flat: f32,
+
     /// Algoritmo dei coni d'ombra (A/B live dal pannello Impostazioni).
     ///
     /// `0` = v1, il test poligonale/archi di firefly (soft shadows
@@ -196,6 +202,7 @@ impl Default for FireflyConfig {
             soft_shadows: true,
             shadow_algorithm: 0,
             penumbra_exp: 1.0,
+            penumbra_flat: 0.0,
             z_sorting: true,
             z_sorting_error_margin: 0.0,
             normal_mode: NormalMode::None,
@@ -217,6 +224,7 @@ pub struct UniformFireflyConfig {
     pub soft_shadows: u32,
     pub shadow_algorithm: u32,
     pub penumbra_exp: f32,
+    pub penumbra_flat: f32,
     pub z_sorting: u32,
     pub z_sorting_error_margin: f32,
     pub normal_mode: u32,

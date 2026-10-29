@@ -139,7 +139,14 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // 450) mantiene il cono pieno per tutta la sua lunghezza invece di
     // spegnersi a ~420 unità.
     let x = (b - w_umbra) / max(w_cone - w_umbra, 0.0001);
-    return pow(1.0 - x, config.penumbra_exp);
+    // v0.14.178: penombra PIATTA (su richiesta). `penumbra_flat` è lo
+    // scurimento uniforme della banda: 0 = gradiente come prima.
+    // `step(1e-5, p)` vale 0 quando p è 0 (nessuna divisione per zero) e 1
+    // quando è attivo -> select sceglie il valore piatto.
+    let p = config.penumbra_flat;
+    let flat_on = step(1e-5, p);
+    let shaped = pow(1.0 - x, config.penumbra_exp);
+    return select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
 }
 // @@SHADOW_V2_END
 

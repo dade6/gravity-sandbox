@@ -189,6 +189,10 @@ pub struct ShadowAlgo {
     /// Vive accanto a `v2` perché entrambi sono manopole della shader dei
     /// coni, regolabili a caldo da Impostazioni → OMBRE.
     pub penumbra_exp: f32,
+    /// Scurimento UNIFORME della penombra (nessun gradiente dentro la banda).
+    /// `0.0` = penombra sfumata secondo `penumbra_exp`; `> 0` = blocco piatto
+    /// a questo valore (0..1). Modificabile a caldo da Impostazioni → OMBRE.
+    pub penumbra_flat: f32,
 }
 
 impl Default for ShadowAlgo {
@@ -200,6 +204,10 @@ impl Default for ShadowAlgo {
         Self {
             v2: true,
             penumbra_exp: 1.0,
+            // v0.14.178: penombra PIATTA di default (richiesta su device).
+            // 0.45 = la banda scurisce meno dell'umbra (che è 1.0 = nera) ma
+            // in modo uniforme, senza gradiente verso il centro.
+            penumbra_flat: 0.45,
         }
     }
 }
@@ -835,6 +843,10 @@ fn apply_shadow_algo(
         if cfg.penumbra_exp != want_exp {
             cfg.penumbra_exp = want_exp;
         }
+        let want_flat = algo.penumbra_flat.clamp(0.0, 1.0);
+        if cfg.penumbra_flat != want_flat {
+            cfg.penumbra_flat = want_flat;
+        }
     }
 }
 
@@ -939,6 +951,7 @@ mod tests {
         app.insert_resource(ShadowAlgo {
             v2: true,
             penumbra_exp: 1.0,
+            penumbra_flat: 0.0,
         })
         .add_systems(Update, apply_shadow_algo);
         // frame 1: nessuna camera con FireflyConfig
@@ -965,6 +978,7 @@ mod tests {
         app.insert_resource(ShadowAlgo {
             v2: false,
             penumbra_exp: 1.0,
+            penumbra_flat: 0.0,
         })
         .add_systems(Update, apply_shadow_algo);
         let cam = app

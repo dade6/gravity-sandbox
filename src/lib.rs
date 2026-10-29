@@ -844,9 +844,18 @@ mod tests {
             "bordo del cono non è la silhouette dal centro del sole: con un \
              sole grande il cono si allarga il doppio del dovuto"
         );
+        let code_only = body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            body.contains("pow(1.0 - x, config.penumbra_exp)"),
+            code_only.contains("pow(1.0 - x, config.penumbra_exp)"),
             "la penombra deve seguire (1-x)^config.penumbra_exp (esponente live)"
+        );
+        assert!(
+            body.contains("penumbra_flat"),
+            "manca la modalità penombra PIATTA (config.penumbra_flat)"
         );
         // L'umbra deve esistere solo se ha spessore: senza `w_umbra > 0.0`
         // il ramo scatta anche oltre l'incrocio e lascia una riga piena
@@ -863,13 +872,8 @@ mod tests {
         // fattori di copertura/antumbra — nel calcolatore dipende solo dalla
         // distanza dall'asse, e un `peak` inventato spegneva i coni dei corpi
         // piccoli (Rocky). Il controllo gira sul codice senza commenti.
-        let code_only = body
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
         assert!(
-            code_only.contains("return pow(1.0 - x, config.penumbra_exp);"),
+            code_only.contains("let shaped = pow(1.0 - x, config.penumbra_exp);"),
             "penombra: il profilo (1-x)^esponente deve leggere l'uniform \
              config.penumbra_exp (regolabile a caldo dal pannello)"
         );
@@ -887,7 +891,7 @@ mod tests {
         );
         let stub = format!(
             "\
-struct ConfigStub {{ penumbra_exp: f32 }}
+struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32 }}
 @group(1) @binding(10) var<uniform> config: ConfigStub;
 struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
 struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}

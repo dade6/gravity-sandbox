@@ -166,6 +166,8 @@ fn prepare_config(
 
             penumbra_exp: config.penumbra_exp,
 
+            penumbra_flat: config.penumbra_flat,
+
             z_sorting: match config.z_sorting {
                 false => 0,
                 true => 1,
