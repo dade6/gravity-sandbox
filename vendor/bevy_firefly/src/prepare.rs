@@ -164,6 +164,8 @@ fn prepare_config(
 
             shadow_algorithm: config.shadow_algorithm,
 
+            penumbra_exp: config.penumbra_exp,
+
             z_sorting: match config.z_sorting {
                 false => 0,
                 true => 1,

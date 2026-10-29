@@ -104,6 +104,7 @@ impl Plugin for SettingsPlugin {
                 apply_settings_on_confirm,
                 update_settings_toggle,
                 update_shadow_algo_toggle,
+                apply_shadow_algo_live,
                 update_shadow_gizmo_toggle,
                 sync_settings_fields_on_resource_change,
                 close_settings_on_delete_dialog,
@@ -217,6 +218,12 @@ const TRAJECTORY_FIELDS: &[(&str, &str)] = &[
     ("set_traj_sample", "Sample Interval:"),
 ];
 
+/// Campi della sezione OMBRE. `set_penumbra_exp` è l'esponente del profilo di
+/// penombra della v2 (1.0 = fisico lineare, `> 1` lascia passare più alone,
+/// `< 1` penombra più scura): si applica LIVE mentre si digita, vedi
+/// `apply_shadow_algo_live`.
+const SHADOW_FIELDS: &[(&str, &str)] = &[("set_penumbra_exp", "Penombra exp:")];
+
 /// Snapshot delle 4 risorse globali, clonato dalle `Res` (i valori CORRENTI
 /// all'apertura del modale — mai default statici).
 pub(crate) struct SettingsSnapshot {
@@ -241,6 +248,10 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
         "set_traj_history" => format!("{}", ctx.trajectory.history_length),
         "set_traj_prediction" => format!("{}", ctx.trajectory.horizon_seconds),
         "set_traj_sample" => format!("{}", ctx.trajectory.sample_interval),
+        // La risorsa ShadowAlgo non è nello snapshot (vive in
+        // firefly_bridge): il valore mostrato lo scrive
+        // `apply_shadow_algo_live` a ogni frame dal vivo.
+        "set_penumbra_exp" => "1.0".to_string(),
         _ => String::new(),
     }
 }
@@ -427,6 +438,17 @@ fn spawn_settings_dialog(
 
                     // === OMBRE: A/B algoritmo coni ===
                     spawn_section_header(dialog, "OMBRE");
+                    // Penombra: esponente del profilo (1.0 = fisico lineare,
+                    // >1 lascia passare più alone, <1 penombra più scura).
+                    // Applicato LIVE mentre si digita: la shader legge
+                    // l'uniform a ogni frame, quindi si vede il cambio senza
+                    // chiudere il pannello.
+                    spawn_field_row(
+                        dialog,
+                        "set_penumbra_exp",
+                        "Penombra exp:",
+                        settings_field_value("set_penumbra_exp", &ctx),
+                    );
                     dialog
                         .spawn(Node {
                             flex_direction: FlexDirection::Row,
@@ -541,6 +563,40 @@ fn shadow_algo_color(v2: bool) -> Color {
         Color::srgba(0.15, 0.35, 0.6, 0.7)
     } else {
         Color::srgba(0.2, 0.2, 0.3, 0.6)
+    }
+}
+
+/// Applica LIVE il campo `set_penumbra_exp` mentre l'utente digita: legge il
+/// testo del campo a ogni frame e scrive `ShadowAlgo.penumbra_exp`. Serve un
+/// sistema dedicato perché `apply_settings_on_confirm` applica solo al cambio
+/// di focus o alla chiusura, e qui l'effetto va visto **mentre** si modifica.
+///
+/// Scrive SOLO quando il valore clampato cambia davvero: niente
+/// `Changed<ShadowAlgo>` a ogni frame (e quindi niente riscrittura inutile
+/// della config della camera).
+///
+/// TRAPPOLA: non scrivere nel campo di testo (qui si scrive solo la risorsa),
+/// altrimenti si combatterebbe con la digitazione e il cursore salterebbe.
+fn apply_shadow_algo_live(
+    dialog: Query<(), With<SettingsDialog>>,
+    fields: Query<(&PropInput, &EditableText)>,
+    mut algo: ResMut<ShadowAlgo>,
+) {
+    crate::mark_system("apply_shadow_algo_live");
+    if dialog.single().is_err() {
+        return;
+    }
+    for (prop, editable) in fields.iter() {
+        if prop.0 != "set_penumbra_exp" {
+            continue;
+        }
+        let Ok(v) = editable.value().to_string().trim().parse::<f32>() else {
+            continue; // testo incompleto ("0." o vuoto): si aspetta
+        };
+        let v = v.clamp(0.05, 8.0);
+        if (algo.penumbra_exp - v).abs() > f32::EPSILON {
+            algo.penumbra_exp = v;
+        }
     }
 }
 
@@ -1383,9 +1439,10 @@ mod tests {
             .chain(AMBIENT_FIELDS)
             .chain(GLOW_FIELDS)
             .chain(TRAJECTORY_FIELDS)
+            .chain(SHADOW_FIELDS)
             .map(|(k, _)| *k)
             .collect();
-        assert_eq!(all.len(), 11);
+        assert_eq!(all.len(), 12);
         for key in all {
             let v = settings_field_value(key, &ctx);
             assert!(!v.is_empty(), "campo {key} senza valore");

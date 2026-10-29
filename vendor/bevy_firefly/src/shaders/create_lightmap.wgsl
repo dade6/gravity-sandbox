@@ -77,11 +77,12 @@ const PIDIV2: f32 = 1.57079632679489661923132169163975144;
 // `shadow_v2_cone_is_valid_wgsl` estrae e valida con naga in isolamento.
 //
 // @@SHADOW_V2_BEGIN
-// Profilo della penombra: scurimento = (1 - x)^PENUMBRA_EXP, con x = 0 sul
-// bordo dell'umbra e x = 1 sul bordo del cono.
+// Profilo della penombra: scurimento = (1 - x)^esponente, con x = 0 sul bordo
+// dell'umbra e x = 1 sul bordo del cono. L'esponente arriva dall'uniform
+// `config.penumbra_exp` (regolabile a caldo da Impostazioni → OMBRE):
 //   1.0  = rampa lineare (fisica)
 //   0.25 = penombra ~2× più scura della rampa lineare nella banda centrale
-//   ->0  = quasi umbra
+//   >1   = l'alone della stella passa di più: penombra più distinguibile
 // Il valore arriva a 0 ESATTAMENTE sul bordo del cono: nessuno scalino. La
 // v0.14.167 usava una soglia minima (0.3) e il velo finiva con un bordo netto
 // dove il cono si interrompeva, ben visibile sui corpi che lo attraversavano.
@@ -138,7 +139,7 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // 450) mantiene il cono pieno per tutta la sua lunghezza invece di
     // spegnersi a ~420 unità.
     let x = (b - w_umbra) / max(w_cone - w_umbra, 0.0001);
-    return pow(1.0 - x, PENUMBRA_EXP);
+    return pow(1.0 - x, config.penumbra_exp);
 }
 // @@SHADOW_V2_END
 

@@ -185,6 +185,10 @@ pub struct FireflyBridgePlugin;
 #[derive(Resource)]
 pub struct ShadowAlgo {
     pub v2: bool,
+    /// Esponente del profilo di penombra (vedi `FireflyConfig::penumbra_exp`).
+    /// Vive accanto a `v2` perché entrambi sono manopole della shader dei
+    /// coni, regolabili a caldo da Impostazioni → OMBRE.
+    pub penumbra_exp: f32,
 }
 
 impl Default for ShadowAlgo {
@@ -193,7 +197,10 @@ impl Default for ShadowAlgo {
     /// pagina riportava silenziosamente alla v1 e si finiva a diagnosticare la
     /// v1 credendo di guardare la v2 (successo alla prima verifica su device).
     fn default() -> Self {
-        Self { v2: true }
+        Self {
+            v2: true,
+            penumbra_exp: 1.0,
+        }
     }
 }
 
@@ -818,9 +825,15 @@ fn apply_shadow_algo(
     // v2 (sintomo: penombra ad archi di cerchio, tipica della v1 di firefly).
     // Costo trascurabile (una camera): si scrive solo al cambio effettivo.
     let want = if algo.v2 { 1 } else { 0 };
+    // v0.14.176: anche l'esponente di penombra arriva qui (clamp difensivo:
+    // la shader usa pow, un valore <= 0 renderebbe il bordo discontinuo).
+    let want_exp = algo.penumbra_exp.clamp(0.05, 8.0);
     for mut cfg in &mut cameras {
         if cfg.shadow_algorithm != want {
             cfg.shadow_algorithm = want;
+        }
+        if cfg.penumbra_exp != want_exp {
+            cfg.penumbra_exp = want_exp;
         }
     }
 }
@@ -923,8 +936,11 @@ mod tests {
     #[test]
     fn shadow_algorithm_reaches_a_camera_created_after_the_first_frame() {
         let mut app = App::new();
-        app.insert_resource(ShadowAlgo { v2: true })
-            .add_systems(Update, apply_shadow_algo);
+        app.insert_resource(ShadowAlgo {
+            v2: true,
+            penumbra_exp: 1.0,
+        })
+        .add_systems(Update, apply_shadow_algo);
         // frame 1: nessuna camera con FireflyConfig
         app.update();
         // frame 2: la camera nasce con la config di default (v1)
@@ -946,8 +962,11 @@ mod tests {
     #[test]
     fn shadow_algorithm_follows_the_toggle_both_ways() {
         let mut app = App::new();
-        app.insert_resource(ShadowAlgo { v2: false })
-            .add_systems(Update, apply_shadow_algo);
+        app.insert_resource(ShadowAlgo {
+            v2: false,
+            penumbra_exp: 1.0,
+        })
+        .add_systems(Update, apply_shadow_algo);
         let cam = app
             .world_mut()
             .spawn((FireflyCamera, FireflyConfig::default()))

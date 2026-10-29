@@ -845,8 +845,8 @@ mod tests {
              sole grande il cono si allarga il doppio del dovuto"
         );
         assert!(
-            body.contains("pow(1.0 - x, PENUMBRA_EXP)"),
-            "la penombra deve seguire la curva (1-x)^PENUMBRA_EXP fino a 0 sul bordo"
+            body.contains("pow(1.0 - x, config.penumbra_exp)"),
+            "la penombra deve seguire (1-x)^config.penumbra_exp (esponente live)"
         );
         // L'umbra deve esistere solo se ha spessore: senza `w_umbra > 0.0`
         // il ramo scatta anche oltre l'incrocio e lascia una riga piena
@@ -869,8 +869,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            code_only.contains("return pow(1.0 - x, PENUMBRA_EXP);"),
-            "penombra: manca il profilo (1-x)^PENUMBRA_EXP"
+            code_only.contains("return pow(1.0 - x, config.penumbra_exp);"),
+            "penombra: il profilo (1-x)^esponente deve leggere l'uniform \
+             config.penumbra_exp (regolabile a caldo dal pannello)"
         );
         for banned in ["let peak =", "let cov =", "let ratio ="] {
             assert!(
@@ -886,6 +887,8 @@ mod tests {
         );
         let stub = format!(
             "\
+struct ConfigStub {{ penumbra_exp: f32 }}
+@group(1) @binding(10) var<uniform> config: ConfigStub;
 struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
 struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}
 @group(1) @binding(1) var<storage> lights: array<PointLightStub>;

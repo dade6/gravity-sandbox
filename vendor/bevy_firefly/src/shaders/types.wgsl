@@ -73,6 +73,9 @@ struct FireflyConfig {
     soft_shadows: u32,
     // v2 (Shadow System 3.0): 0 = cono v1 (firefly), 1 = cono analitico umbra+penombra
     shadow_algorithm: u32,
+    // v0.14.176: esponente del profilo di penombra (1.0 = fisico lineare,
+    // <1 più scura, >1 l'alone passa di più nella penombra)
+    penumbra_exp: f32,
     z_sorting: u32,
     z_sorting_error_margin: f32,
     // 0 - none, 1 - simple, 2 - topdown

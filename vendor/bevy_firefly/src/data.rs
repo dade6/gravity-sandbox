@@ -45,6 +45,19 @@ pub struct FireflyConfig {
     /// **Default:** true.
     pub soft_shadows: bool,
 
+    /// Esponente del profilo di penombra della v2 (solo con
+    /// `shadow_algorithm = 1`): `ombra = (1 - x)^penumbra_exp`, con `x` da 0
+    /// sul bordo dell'umbra a 1 sul bordo del cono.
+    ///
+    /// - `1.0` = rampa lineare, cioè la fisica (100% → 0%);
+    /// - `< 1` = penombra più scura (0.25 era il default fino alla 0.14.175);
+    /// - `> 1` = l'alone della stella passa di più nella penombra, che quindi
+    ///   si distingue meglio dall'umbra sullo sfondo.
+    ///
+    /// Modificabile a caldo da Impostazioni → OMBRE.
+    /// **Default:** 1.0.
+    pub penumbra_exp: f32,
+
     /// Algoritmo dei coni d'ombra (A/B live dal pannello Impostazioni).
     ///
     /// `0` = v1, il test poligonale/archi di firefly (soft shadows
@@ -182,6 +195,7 @@ impl Default for FireflyConfig {
             light_bands: None,
             soft_shadows: true,
             shadow_algorithm: 0,
+            penumbra_exp: 1.0,
             z_sorting: true,
             z_sorting_error_margin: 0.0,
             normal_mode: NormalMode::None,
@@ -202,6 +216,7 @@ pub struct UniformFireflyConfig {
     pub light_bands: f32,
     pub soft_shadows: u32,
     pub shadow_algorithm: u32,
+    pub penumbra_exp: f32,
     pub z_sorting: u32,
     pub z_sorting_error_margin: f32,
     pub normal_mode: u32,
