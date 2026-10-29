@@ -27,9 +27,9 @@ use bevy::ui::widget::TextScroll;
 use crate::components::lighting::{AmbientLight, GlowCurve};
 use crate::components::trajectory::TrajectoryConfig;
 use crate::systems::firefly_bridge::ShadowAlgo;
-use crate::systems::shadow_gizmos::ShadowGizmos;
 use crate::systems::keypad::Keypad;
 use crate::systems::persistence::GravitationalConstant;
+use crate::systems::shadow_gizmos::ShadowGizmos;
 use crate::systems::tools::PendingDelete;
 use crate::systems::ui::PropInput;
 
@@ -307,6 +307,11 @@ fn spawn_settings_dialog(
             overlay
                 .spawn((
                     SettingsBox,
+                    // `Overflow::scroll_y` fa il clip ma NON scorre da sé:
+                    // serve `ScrollPosition`, mossa da
+                    // `starfield_panel::scroll_starfield_panel` (dito +
+                    // rotellina), che gestisce anche questo riquadro.
+                    bevy::ui::ScrollPosition::default(),
                     Node {
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(4.0),
@@ -315,11 +320,13 @@ fn spawn_settings_dialog(
                         border_radius: BorderRadius::px(10.0, 10.0, 10.0, 10.0),
                         // RESPONSIVE: in portrait (iPhone ~390px) 300px fissi
                         // + padding sforano — il box segue lo schermo e si cap
-                        // a 340px su desktop. max_height in %: si adatta alla
-                        // rotazione senza size catturate allo spawn.
+                        // a 340px su desktop. Altezza massima in PERCENTUALE
+                        // (qui funziona: il box è figlio di un overlay a
+                        // schermo intero) e generosa, perché i campi sono 11
+                        // più 4 sezioni: il resto si raggiunge scorrendo.
                         width: Val::Percent(92.0),
                         max_width: Val::Px(340.0),
-                        max_height: Val::Percent(80.0),
+                        max_height: Val::Percent(88.0),
                         overflow: Overflow::scroll_y(),
                         ..default()
                     },
@@ -728,7 +735,10 @@ fn update_shadow_gizmo_toggle(
 }
 
 /// Header di sezione (stile ILLUMINAZIONE PIANETI / ALONE STELLA del panel).
-pub(crate) fn spawn_section_header(dialog: &mut bevy::ecs::hierarchy::ChildSpawnerCommands, title: &str) {
+pub(crate) fn spawn_section_header(
+    dialog: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+    title: &str,
+) {
     dialog.spawn((
         SettingsSection,
         Text::new(title),

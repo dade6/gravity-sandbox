@@ -350,7 +350,7 @@ fn spawn_starfield_dialog(commands: &mut Commands, tuning: &StarfieldTuning) {
                         border_radius: BorderRadius::px(10.0, 10.0, 10.0, 10.0),
                         width: Val::Percent(92.0),
                         max_width: Val::Px(380.0),
-                        max_height: Val::Percent(82.0),
+                        max_height: Val::Percent(88.0),
                         overflow: Overflow::scroll_y(),
                         ..default()
                     },
@@ -707,12 +707,27 @@ pub(crate) fn cursor_position(
     window.physical_cursor_position().map(|p| p - viewport_min)
 }
 
-/// Scroll del pannello: trascinamento col dito/mouse + rotellina.
+/// Riquadro scorrevole dei modali: "Sfondo" e Impostazioni. Ogni box ha il suo
+/// `ScrollPosition`, quindi il sistema li gestisce TUTTI (non `single_mut`) e
+/// ognuno scorre in modo indipendente.
 fn scroll_starfield_panel(
-    mut panels: Query<(&ComputedNode, &UiGlobalTransform, &mut ScrollPosition), With<StarfieldBox>>,
+    mut panels: Query<
+        (&ComputedNode, &UiGlobalTransform, &mut ScrollPosition),
+        Or<(
+            With<StarfieldBox>,
+            With<crate::systems::settings::SettingsBox>,
+        )>,
+    >,
     // I bottoni DENTRO il modale: un tap su X/Ripristina non deve diventare
     // un trascinamento (il resto dei bottoni dell'app ha rect fuori dal box).
-    buttons: Query<(&ComputedNode, &UiGlobalTransform), (With<Interaction>, Without<StarfieldBox>)>,
+    buttons: Query<
+        (&ComputedNode, &UiGlobalTransform),
+        (
+            With<Interaction>,
+            Without<StarfieldBox>,
+            Without<crate::systems::settings::SettingsBox>,
+        ),
+    >,
     mut wheel: MessageReader<MouseWheel>,
     touches: Res<Touches>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -724,55 +739,62 @@ fn scroll_starfield_panel(
     mut last: Local<Option<Vec2>>,
 ) {
     crate::mark_system("scroll_starfield_panel");
-    let Ok((node, gt, mut scroll)) = panels.single_mut() else {
-        *last = None;
-        return;
-    };
-    let inv = node.inverse_scale_factor;
-    let visible = node.size() * inv;
-    let content = node.content_size() * inv;
+    // Il drag è UNO alla volta: il cursore è sopra un solo riquadro, quindi il
+    // `last` condiviso va bene anche con più pannelli.
+    let current = held_position(&windows, &cameras, &touches, &mouse_buttons);
+    let cursor = cursor_position(&windows, &cameras);
+    let mut dragging = false;
 
-    // 1) Dito/mouse: il contenuto segue il trascinamento.
-    match held_position(&windows, &cameras, &touches, &mouse_buttons) {
-        None => *last = None,
-        Some(current) => match *last {
-            None => {
-                if point_in_node(node, gt, current)
-                    && !buttons.iter().any(|(n, g)| point_in_node(n, g, current))
-                {
-                    *last = Some(current);
+    for (node, gt, mut scroll) in panels.iter_mut() {
+        let inv = node.inverse_scale_factor;
+        let visible = node.size() * inv;
+        let content = node.content_size() * inv;
+
+        // 1) Dito/mouse: il contenuto segue il trascinamento.
+        if let Some(current) = current {
+            match *last {
+                None => {
+                    if point_in_node(node, gt, current)
+                        && !buttons.iter().any(|(n, g)| point_in_node(n, g, current))
+                    {
+                        *last = Some(current);
+                        dragging = true;
+                    }
+                }
+                Some(prev) => {
+                    dragging = true;
+                    // Dito che sale → delta positivo → il contenuto sale.
+                    let delta_y = (prev.y - current.y) * inv;
+                    if delta_y.abs() > 0.1 {
+                        scroll.y = clamped_scroll_y(scroll.y, delta_y, visible.y, content.y);
+                    }
                 }
             }
-            Some(prev) => {
-                *last = Some(current);
-                // Dito che sale → delta positivo → il contenuto sale.
-                let delta_y = (prev.y - current.y) * inv;
-                if delta_y.abs() > 0.1 {
-                    scroll.y = clamped_scroll_y(scroll.y, delta_y, visible.y, content.y);
-                }
+        }
+
+        // 2) Rotellina/trackpad (Mac): SOLO se il cursore è sopra il riquadro.
+        //    Lo stesso gesto a due dita è ANCHE lo zoom della scena
+        //    (`zoom_camera` legge la stessa `AccumulatedMouseScroll`): fuori dal
+        //    pannello deve restare alla scena, dentro al pannello deve scorrere i
+        //    parametri e NON zoomare (vedi la guardia in `zoom_camera`).
+        //    I messaggi si consumano SEMPRE, una volta sola fuori dal ciclo:
+        //    senza `read` resterebbero in coda e scatterebbero appena il
+        //    cursore entra nel pannello.
+        let over_box = cursor.map(|p| point_in_node(node, gt, p)).unwrap_or(false);
+        if over_box {
+            for ev in wheel.read() {
+                let step = match ev.unit {
+                    MouseScrollUnit::Line => 24.0,
+                    MouseScrollUnit::Pixel => 1.0,
+                };
+                scroll.y = clamped_scroll_y(scroll.y, -ev.y * step, visible.y, content.y);
             }
-        },
+        }
     }
 
-    // 2) Rotellina/trackpad (Mac): SOLO se il cursore è sopra il riquadro.
-    //    Lo stesso gesto a due dita è ANCHE lo zoom della scena
-    //    (`zoom_camera` legge la stessa `AccumulatedMouseScroll`): fuori dal
-    //    pannello deve restare alla scena, dentro al pannello deve scorrere i
-    //    parametri e NON zoomare (vedi la guardia in `zoom_camera`).
-    //    I messaggi si consumano SEMPRE: senza `read` resterebbero in coda e
-    //    scatterebbero appena il cursore entra nel pannello.
-    let over_box = cursor_position(&windows, &cameras)
-        .map(|p| point_in_node(node, gt, p))
-        .unwrap_or(false);
-    for ev in wheel.read() {
-        if !over_box {
-            continue;
-        }
-        let step = match ev.unit {
-            MouseScrollUnit::Line => 24.0,
-            MouseScrollUnit::Pixel => 1.0,
-        };
-        scroll.y = clamped_scroll_y(scroll.y, -ev.y * step, visible.y, content.y);
+    // Nessun drag attivo (nessun riquadro sotto il dito) → azzera l'ancora.
+    if current.is_none() || !dragging {
+        *last = None;
     }
 }
 
@@ -909,6 +931,101 @@ mod tests {
             scroll_y(&mut away),
             0.0,
             "col cursore fuori dal pannello la rotellina non deve scorrere i parametri"
+        );
+    }
+
+    /// Anche il pannello IMPOSTAZIONI è scorrevole (v0.14.166): il sistema
+    /// gestisce i due riquadri insieme, ognuno col proprio `ScrollPosition`.
+    /// Scorre SOLO quello sotto il cursore, e senza `single_mut` il secondo
+    /// riquadro non resta tagliato fuori.
+    #[test]
+    fn both_modal_boxes_scroll_independently() {
+        use bevy::math::DVec2;
+        use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform};
+
+        fn build(cursor: Vec2) -> App {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .init_resource::<InputFocus>()
+                .init_resource::<Touches>()
+                .init_resource::<ButtonInput<MouseButton>>()
+                .init_resource::<StarfieldTuning>()
+                .add_message::<MouseWheel>()
+                .add_systems(Update, scroll_starfield_panel);
+            let mut window = Window::default();
+            window.set_physical_cursor_position(Some(DVec2::new(cursor.x as f64, cursor.y as f64)));
+            app.world_mut().spawn(window);
+            // Sfondo: centrato in (150,100). Impostazioni: in (150,600).
+            app.world_mut().spawn((
+                StarfieldBox,
+                ComputedNode {
+                    size: Vec2::new(300.0, 200.0),
+                    content_size: Vec2::new(300.0, 1200.0),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(150.0, 100.0),
+                ScrollPosition::default(),
+            ));
+            app.world_mut().spawn((
+                crate::systems::settings::SettingsBox,
+                ComputedNode {
+                    size: Vec2::new(300.0, 200.0),
+                    content_size: Vec2::new(300.0, 900.0),
+                    ..default()
+                },
+                UiGlobalTransform::from_xy(150.0, 600.0),
+                ScrollPosition::default(),
+            ));
+            app
+        }
+
+        fn wheel(app: &mut App) {
+            app.world_mut()
+                .resource_mut::<Messages<MouseWheel>>()
+                .write(MouseWheel {
+                    unit: MouseScrollUnit::Line,
+                    x: 0.0,
+                    y: -3.0,
+                    window: Entity::PLACEHOLDER,
+                    phase: bevy::input::touch::TouchPhase::Moved,
+                });
+        }
+
+        fn y_of<F: bevy::ecs::query::QueryFilter>(app: &mut App) -> f32 {
+            let world = app.world_mut();
+            world
+                .query_filtered::<&ScrollPosition, F>()
+                .single(world)
+                .expect("box")
+                .y
+        }
+
+        // Cursore sulle Impostazioni: scorre SOLO quel riquadro.
+        let mut on_settings = build(Vec2::new(150.0, 600.0));
+        wheel(&mut on_settings);
+        on_settings.update();
+        assert!(
+            y_of::<With<crate::systems::settings::SettingsBox>>(&mut on_settings) > 0.0,
+            "col cursore sulle Impostazioni la rotellina deve scorrere quel riquadro"
+        );
+        assert_eq!(
+            y_of::<With<StarfieldBox>>(&mut on_settings),
+            0.0,
+            "il pannello Sfondo non deve muoversi se il cursore è sulle Impostazioni"
+        );
+
+        // Cursore sullo Sfondo: scorre l'altro, e le Impostazioni restano ferme.
+        let mut on_starfield = build(Vec2::new(150.0, 100.0));
+        wheel(&mut on_starfield);
+        on_starfield.update();
+        assert!(
+            y_of::<With<StarfieldBox>>(&mut on_starfield) > 0.0,
+            "col cursore sullo Sfondo la rotellina deve scorrere quel riquadro"
+        );
+        assert_eq!(
+            y_of::<With<crate::systems::settings::SettingsBox>>(&mut on_starfield),
+            0.0,
+            "le Impostazioni non devono muoversi se il cursore è sullo Sfondo"
         );
     }
 
