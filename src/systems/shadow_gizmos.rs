@@ -158,42 +158,74 @@ fn draw_shadow_cone_borders(
             gizmos.line_2d(cone_end_l, cone_end_r, cone_color());
 
             // --- umbra (nucleo buio) ---
-            // Le rosse seguono il poligono dell'umbra del calcolatore, che NON
-            // parte dalla stella ma da P_intersect:
-            //   o_umbra      = asin((r_sun - r) / d)
-            //   d_umbraTweak = |P - centro| · cos(o_umbra)
-            //   estremo vicino = P - d_umbraTweak·rot(o_umbra)
-            // Quell'estremo sta ESATTAMENTE sulla superficie del pianeta
-            // (verificato: distanza dal centro = r) e a ~r_sun dalla stella.
+            // POLIGONO DELL'UMBRA, trascritto dal calcolatore (pql2tb3dhv):
+            //   P_intersect  = centro di omotetia (dove si chiude l'umbra)
+            //   o_umbra      = asin((r_sun - r_body)/d)
+            //   a_umbra      = atan2(P - centro) + PI      → verso il corpo
+            //   d_umbra      = |P - centro|
+            //   d_umbraTweak = d_umbra·cos(o_umbra)
+            //   vertice(i)   = P + d_umbraTweak·(cos(a_umbra ± o_umbra), sin(...))
+            // Questi sono i DUE vertici vicini: stanno sulla superficie del
+            // corpo E sono tangenti (raggio ⟂ retta). Le due linee dell'umbra
+            // sono semplicemente il segmento che li unisce a P_intersect.
             //
-            // La v0.14.187 usava il punto di tangenza del CORPO (famiglia del
-            // cono, pendenza r/d): sbagliato, le rosse hanno pendenza
-            // (r_sun-r)/d. E una retta uscente dalla STELLA con quella
-            // pendenza non tocca il pianeta (dista 328 da un corpo di 120):
-            // per questo va costruita da P_intersect, non dalla stella.
-            let k = ((r_sun - body.radius) / d).clamp(-1.0, 1.0);
-            let root = (1.0 - k * k).max(0.0).sqrt();
+            // v0.14.188 sbagliava l'ESTREMO LONTANO: lo calcolava con
+            // `cone_half_widths(...)` (ampiezza misurata sull'asse), che non è
+            // il punto d'arrivo della tangente — da qui le rosse storte anche
+            // col vertice iniziale giusto.
             let t_close_raw = umbra_closing_distance(body.radius, r_sun, d);
             let umbra_start_l;
             let umbra_start_r;
+            let umbra_end_l;
+            let umbra_end_r;
+            let t_umbra;
             match t_close_raw {
                 Some(tc) => {
-                    // P_intersect misurato dal centro del corpo.
+                    t_umbra = tc;
+                    // P_intersect in coordinate mondo.
                     let p_inter = center + axis * tc;
-                    let d_umbra = tc.max(0.0);
-                    let d_tweak = d_umbra * root; // cos(o_umbra) = sqrt(1-k²)
-                    // Estremo VICINO del poligono (verso il corpo), ruotato di
-                    // ±o_umbra: è il punto da cui parte la linea dell'umbra.
-                    let back = d_tweak * root; // componente lungo l'asse
-                    let aside = d_tweak * k.abs(); // componente laterale
+                    let o_umbra = ((r_sun - body.radius) / d).clamp(-1.0, 1.0).asin();
+                    // a_umbra punta da P verso il corpo: qui è l'opposto
+                    // dell'asse. I vertici sono ruotati di ±o_umbra.
+                    let cos_o = o_umbra.cos();
+                    let sin_o = o_umbra.sin();
+                    let d_tweak = tc * cos_o;
+                    // Componenti rispetto all'asse: verso il corpo (−axis),
+                    // scostamento laterale (±perp).
+                    let back = d_tweak * cos_o;
+                    let aside = d_tweak * sin_o;
                     umbra_start_l = p_inter - axis * back + perp * aside;
                     umbra_start_r = p_inter - axis * back - perp * aside;
+                    // Le due rette dell'umbra sono i segmenti che UNISCONO
+                    // questi vertici a P_intersect: quella retta è per
+                    // costruzione tangente al corpo (raggio ⟂ retta nel
+                    // vertice) e passa per il punto di chiusura.
+                    // Gli estremi LONTANI proseguono oltre P nella stessa
+                    // direzione, come il poligono del calcolatore che li manda
+                    // a d_RenderEnder: qui fino a GIZMO_CONE_LENGTH.
+                    let dir_l = (p_inter - umbra_start_l).normalize_or_zero();
+                    let dir_r = (p_inter - umbra_start_r).normalize_or_zero();
+                    let reach = (GIZMO_CONE_LENGTH - tc).max(0.0);
+                    (umbra_end_l, umbra_end_r) = if tc < GIZMO_CONE_LENGTH {
+                        (p_inter + dir_l * reach, p_inter + dir_r * reach)
+                    } else {
+                        (umbra_start_l, umbra_start_r)
+                    };
+                    gizmos.line_2d(umbra_start_l, p_inter, umbra_color());
+                    gizmos.line_2d(umbra_start_r, p_inter, umbra_color());
+                    gizmos.line_2d(umbra_end_l, umbra_end_r, umbra_color());
                 }
                 None => {
-                    // Sole più piccolo del corpo: l'umbra diverge e non c'è
-                    // P_intersect. Le linee partono dal bordo del disco.
-                    umbra_start_l = center + perp * body.radius;
-                    umbra_start_r = center - perp * body.radius;
+                    // Sole più piccolo del corpo: l'umbra DIVERGE e non c'è
+                    // P_intersect. Le linee partono dai punti tangenti al corpo
+                    // (pendenza r/d) e divergono verso il fondo.
+                    t_umbra = GIZMO_CONE_LENGTH;
+                    umbra_start_l = tangent_l;
+                    umbra_start_r = tangent_r;
+                    umbra_end_l = tangent_l + dir_l * GIZMO_CONE_LENGTH;
+                    umbra_end_r = tangent_r + dir_r * GIZMO_CONE_LENGTH;
+                    gizmos.line_2d(umbra_start_l, umbra_end_l, umbra_color());
+                    gizmos.line_2d(umbra_start_r, umbra_end_r, umbra_color());
                 }
             }
 
@@ -307,6 +339,49 @@ mod tests {
              dell'equatore ({dist_star_equator:.1}): partire dall'equatore \
              sposta la base del cono di oltre 4 unità (d·(1-cos o))"
         );
+    }
+
+    /// La retta rossa deve essere TANGENTE al pianeta: nel punto di partenza
+    /// il raggio è perpendicolare alla retta, e la retta passa per
+    /// P_intersect. È esattamente la proprietà che l'utente chiede guardando
+    /// lo schermo ("tangente sia alla stella che al pianeta").
+    #[test]
+    fn umbra_line_is_tangent_to_the_body_and_passes_through_p_intersect() {
+        let (r, d, r_sun) = (120.0_f32, 3000.0_f32, 450.0_f32);
+        let center = Vec2::new(d, 0.0);
+        let axis = Vec2::X;
+        let perp = Vec2::Y;
+
+        let tc = r * d / (r_sun - r);
+        let p_inter = center + axis * tc;
+        let o_umbra = ((r_sun - r) / d).asin();
+        let (cos_o, sin_o) = (o_umbra.cos(), o_umbra.sin());
+        let d_tweak = tc * cos_o;
+        let back = d_tweak * cos_o;
+        let aside = d_tweak * sin_o;
+
+        let starts = [
+            p_inter - axis * back + perp * aside,
+            p_inter - axis * back - perp * aside,
+        ];
+
+        for (i, s) in starts.iter().enumerate() {
+            // 1) il vertice sta sul cerchio del corpo
+            let dist = (*s - center).length();
+            assert!(
+                (dist - r).abs() < 0.05,
+                "vertice {i}: distanza dal centro {dist:.3}, deve essere r = {r}"
+            );
+            // 2) la retta vertice->P_intersect è TANGENTE: il raggio nel punto
+            //    è perpendicolare alla direzione della retta
+            let dir = (p_inter - *s).normalize();
+            let radius_dir = (*s - center).normalize();
+            assert!(
+                radius_dir.dot(dir).abs() < 1e-3,
+                "vertice {i}: raggio·direzione = {:.4}, la retta NON è tangente",
+                radius_dir.dot(dir)
+            );
+        }
     }
 
     /// Le RETTE ROSSE dell'umbra: costruite come il poligono del calcolatore,
