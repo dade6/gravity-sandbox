@@ -105,11 +105,12 @@ impl Plugin for SettingsPlugin {
                 update_settings_toggle,
                 update_shadow_algo_toggle,
                 apply_shadow_algo_live,
+                sync_penumbra_exp_field,
                 update_shadow_gizmo_toggle,
                 sync_settings_fields_on_resource_change,
-                close_settings_on_delete_dialog,
             ),
         );
+        app.add_systems(Update, close_settings_on_delete_dialog);
     }
 }
 
@@ -248,9 +249,9 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
         "set_traj_history" => format!("{}", ctx.trajectory.history_length),
         "set_traj_prediction" => format!("{}", ctx.trajectory.horizon_seconds),
         "set_traj_sample" => format!("{}", ctx.trajectory.sample_interval),
-        // La risorsa ShadowAlgo non è nello snapshot (vive in
-        // firefly_bridge): il valore mostrato lo scrive
-        // `apply_shadow_algo_live` a ogni frame dal vivo.
+        // La risorsa ShadowAlgo non è nello snapshot (vive in firefly_bridge):
+        // il valore mostrato lo scrive `apply_shadow_algo_live` a ogni frame
+        // dal vivo. Il default resta il fallback per i test dello snapshot.
         "set_penumbra_exp" => "1.0".to_string(),
         _ => String::new(),
     }
@@ -580,6 +581,11 @@ fn shadow_algo_color(v2: bool) -> Color {
 fn apply_shadow_algo_live(
     dialog: Query<(), With<SettingsDialog>>,
     fields: Query<(&PropInput, &EditableText)>,
+    // NIENTE `Res` + `ResMut` dello stesso tipo nello stesso sistema (B0001):
+    // l'unico accesso è `ResMut`, ma si scrive SOLO quando il valore cambia
+    // davvero. Il campo di testo con focus non viene mai riscritto, quindi la
+    // digitazione non viene combattuta (bug su device v0.14.176: il valore
+    // tornava sempre a 1).
     mut algo: ResMut<ShadowAlgo>,
 ) {
     crate::mark_system("apply_shadow_algo_live");
@@ -594,8 +600,35 @@ fn apply_shadow_algo_live(
             continue; // testo incompleto ("0." o vuoto): si aspetta
         };
         let v = v.clamp(0.05, 8.0);
-        if (algo.penumbra_exp - v).abs() > f32::EPSILON {
+        if (algo.penumbra_exp - v).abs() > 1e-6 {
             algo.penumbra_exp = v;
+        }
+    }
+}
+
+/// Mostra nel campo `set_penumbra_exp` il valore VERO della risorsa (all'apertura
+/// del modale e quando cambia da fuori): `settings_field_value` non può farlo
+/// perché `ShadowAlgo` non è nello snapshot e restituirebbe sempre "1.0".
+/// Salta il campo focussato, come il risync degli altri campi: il testo in
+/// digitazione appartiene all'utente.
+fn sync_penumbra_exp_field(
+    dialog: Query<(), With<SettingsDialog>>,
+    algo: Res<ShadowAlgo>,
+    input_focus: Res<InputFocus>,
+    mut fields: Query<(Entity, &PropInput, &mut EditableText)>,
+) {
+    crate::mark_system("sync_penumbra_exp_field");
+    if dialog.single().is_err() {
+        return;
+    }
+    let focused = input_focus.get();
+    let expected = format!("{:.2}", algo.penumbra_exp);
+    for (entity, prop, mut editable) in fields.iter_mut() {
+        if prop.0 != "set_penumbra_exp" || Some(entity) == focused {
+            continue;
+        }
+        if editable.value().to_string() != expected {
+            editable.editor.set_text(&expected);
         }
     }
 }
@@ -1034,6 +1067,12 @@ pub(crate) fn apply_settings_field(
                 return true;
             }
         }
+        // v0.14.177: l'esponente di penombra NON vive in una delle risorse
+        // passate qui (sta in `ShadowAlgo`, firefly_bridge): lo applica
+        // `apply_shadow_algo_live` mentre si digita e `apply_shadow_algo` lo
+        // scrive nella config della camera. Qui non c'è niente da fare, ma
+        // riconoscere la chiave evita che venga trattata come sconosciuta.
+        "set_penumbra_exp" => {}
         _ => {}
     }
     false
@@ -1123,6 +1162,13 @@ fn sync_settings_fields_on_resource_change(
     for (entity, prop, mut editable) in fields.iter_mut() {
         if !prop.0.starts_with("set_") {
             continue; // campi del property panel: gestiti da update_property_panel
+        }
+        // `set_penumbra_exp` ha il proprio sync (`sync_penumbra_exp_field`):
+        // qui il valore verrebbe preso da `settings_field_value`, che per
+        // questa chiave non ha una risorsa dietro e restituirebbe la costante
+        // "1.0" -> il campo tornava sempre a 1 (bug su device).
+        if prop.0 == "set_penumbra_exp" {
+            continue;
         }
         // Non sovrascrivere il campo che l'utente sta editando (digitazione
         // in corso: pattern update_property_panel).
@@ -1422,6 +1468,35 @@ mod tests {
             &mut t
         ));
         assert_eq!(t.history_length, 120);
+    }
+
+    /// Regressione v0.14.177: `set_penumbra_exp` NON deve essere gestito dal
+    /// sync generico (che per questa chiave leggerebbe la costante "1.0" da
+    /// `settings_field_value` e riporterebbe il campo a 1 a ogni cambiamento
+    /// di una qualsiasi impostazione). Il valore vero lo scrive
+    /// `sync_penumbra_exp_field` dalla risorsa `ShadowAlgo`.
+    #[test]
+    fn penumbra_exp_is_not_owned_by_the_generic_field_sync() {
+        let src = include_str!("settings.rs");
+        let marker = "set_penumbra_exp ha il proprio sync";
+        assert!(
+            src.contains(marker),
+            "il sync generico deve SALTARE set_penumbra_exp"
+        );
+        // E la chiave non deve essere fra quelle del sync generico: la lista
+        // dei campi gestiti da `settings_field_value` resta la fonte dei
+        // valori per tutti gli altri.
+        let ctx = SettingsSnapshot {
+            gravity: GravitationalConstant(5000.0),
+            ambient: AmbientLight::default(),
+            glow: GlowCurve::default(),
+            trajectory: TrajectoryConfig::default(),
+        };
+        assert_eq!(
+            settings_field_value("set_penumbra_exp", &ctx),
+            "1.0",
+            "il fallback statico esiste: è proprio questo il motivo per cui il \n             campo deve stare fuori dal sync generico"
+        );
     }
 
     /// La formattazione dei valori per chiave copre TUTTI i campi numerici
