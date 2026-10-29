@@ -165,6 +165,7 @@ fn handle_settings_button(
     ambient: Res<AmbientLight>,
     glow: Res<GlowCurve>,
     trajectory: Res<TrajectoryConfig>,
+    shadow: Res<ShadowAlgo>,
 ) {
     crate::mark_system("handle_settings_button");
     let mut pressed = false;
@@ -192,7 +193,10 @@ fn handle_settings_button(
     }
     // N.B. niente window_size: il modale è responsive (anchor ai 4 lati),
     // non cattura la size allo spawn.
-    spawn_settings_dialog(&mut commands, (&grav, &ambient, &glow, &trajectory));
+    spawn_settings_dialog(
+        &mut commands,
+        (&grav, &ambient, &glow, &trajectory, &shadow),
+    );
 }
 
 // ============================================================
@@ -236,6 +240,22 @@ pub(crate) struct SettingsSnapshot {
     pub ambient: AmbientLight,
     pub glow: GlowCurve,
     pub trajectory: TrajectoryConfig,
+    /// v0.14.185: i tre parametri delle ombre vivono in `ShadowAlgo`
+    /// (firefly_bridge). Prima NON erano nello snapshot, quindi il modale —
+    /// ricostruito da zero a ogni apertura — li ripescava dalle costanti
+    /// letterali di `settings_field_value` e i valori tornavano ai default
+    /// ogni volta che si chiudeva e riapriva il pannello.
+    pub shadow: ShadowParams,
+}
+
+/// Copia dei parametri ombre per lo snapshot del modale (le stesse manopole
+/// di `ShadowAlgo`, tenute qui perché lo snapshot deve essere costruibile e
+/// testabile senza l'app).
+#[derive(Clone, Copy)]
+pub(crate) struct ShadowParams {
+    pub penumbra_exp: f32,
+    pub penumbra_flat: f32,
+    pub penumbra_soft: f32,
 }
 
 /// Valore corrente della risorsa per una chiave campo `set_` (usato allo
@@ -253,12 +273,11 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
         "set_traj_history" => format!("{}", ctx.trajectory.history_length),
         "set_traj_prediction" => format!("{}", ctx.trajectory.horizon_seconds),
         "set_traj_sample" => format!("{}", ctx.trajectory.sample_interval),
-        // La risorsa ShadowAlgo non è nello snapshot (vive in firefly_bridge):
-        // il valore mostrato lo scrive `apply_shadow_algo_live` a ogni frame
-        // dal vivo. Il default resta il fallback per i test dello snapshot.
-        "set_penumbra_exp" => "1.0".to_string(),
-        "set_penumbra_flat" => "0.45".to_string(),
-        "set_penumbra_soft" => "0.12".to_string(),
+        // v0.14.185: i tre parametri ombre arrivano dallo snapshot come le
+        // altre risorse, così chiudere e riaprire il pannello NON li azzera.
+        "set_penumbra_exp" => format!("{:.2}", ctx.shadow.penumbra_exp),
+        "set_penumbra_flat" => format!("{:.2}", ctx.shadow.penumbra_flat),
+        "set_penumbra_soft" => format!("{:.2}", ctx.shadow.penumbra_soft),
         _ => String::new(),
     }
 }
@@ -270,6 +289,7 @@ fn spawn_settings_dialog(
         &AmbientLight,
         &GlowCurve,
         &TrajectoryConfig,
+        &ShadowAlgo,
     ),
 ) {
     let ctx = SettingsSnapshot {
@@ -277,6 +297,11 @@ fn spawn_settings_dialog(
         ambient: snapshot.1.clone(),
         glow: snapshot.2.clone(),
         trajectory: snapshot.3.clone(),
+        shadow: ShadowParams {
+            penumbra_exp: snapshot.4.penumbra_exp,
+            penumbra_flat: snapshot.4.penumbra_flat,
+            penumbra_soft: snapshot.4.penumbra_soft,
+        },
     };
     commands
         .spawn((
@@ -1202,6 +1227,7 @@ fn sync_settings_fields_on_resource_change(
     ambient: Res<AmbientLight>,
     glow: Res<GlowCurve>,
     trajectory: Res<TrajectoryConfig>,
+    shadow: Res<ShadowAlgo>,
 ) {
     crate::mark_system("sync_settings_fields_on_resource_change");
     if dialog_query.single().is_err() {
@@ -1216,6 +1242,11 @@ fn sync_settings_fields_on_resource_change(
         ambient: ambient.clone(),
         glow: glow.clone(),
         trajectory: trajectory.clone(),
+        shadow: ShadowParams {
+            penumbra_exp: shadow.penumbra_exp,
+            penumbra_flat: shadow.penumbra_flat,
+            penumbra_soft: shadow.penumbra_soft,
+        },
     };
     let focused = input_focus.get();
     for (entity, prop, mut editable) in fields.iter_mut() {
@@ -1548,17 +1579,27 @@ mod tests {
         // E la chiave non deve essere fra quelle del sync generico: la lista
         // dei campi gestiti da `settings_field_value` resta la fonte dei
         // valori per tutti gli altri.
-        let ctx = SettingsSnapshot {
+        // v0.14.185: il test asseriva la COSTANTE "1.0" — cioè fissava per
+        // contratto proprio il bug segnalato (il pannello, ricostruito a ogni
+        // apertura, ripartiva dai default). Ora deve riflettere lo snapshot.
+        let mut ctx = SettingsSnapshot {
             gravity: GravitationalConstant(5000.0),
             ambient: AmbientLight::default(),
             glow: GlowCurve::default(),
             trajectory: TrajectoryConfig::default(),
+            shadow: ShadowParams {
+                penumbra_exp: 2.75,
+                penumbra_flat: 0.33,
+                penumbra_soft: 0.21,
+            },
         };
-        assert_eq!(
-            settings_field_value("set_penumbra_exp", &ctx),
-            "1.0",
-            "il fallback statico esiste: è proprio questo il motivo per cui il \n             campo deve stare fuori dal sync generico"
-        );
+        assert_eq!(settings_field_value("set_penumbra_exp", &ctx), "2.75");
+        assert_eq!(settings_field_value("set_penumbra_flat", &ctx), "0.33");
+        assert_eq!(settings_field_value("set_penumbra_soft", &ctx), "0.21");
+        // Cambiare lo snapshot deve cambiare ciò che il pannello mostra
+        // (è questo che NON succedeva quando il valore era una costante).
+        ctx.shadow.penumbra_flat = 0.9;
+        assert_eq!(settings_field_value("set_penumbra_flat", &ctx), "0.90");
     }
 
     /// La formattazione dei valori per chiave copre TUTTI i campi numerici
@@ -1570,6 +1611,11 @@ mod tests {
             ambient: AmbientLight::default(),
             glow: GlowCurve::default(),
             trajectory: TrajectoryConfig::default(),
+            shadow: ShadowParams {
+                penumbra_exp: 1.0,
+                penumbra_flat: 0.45,
+                penumbra_soft: 0.12,
+            },
         };
         let all: Vec<&str> = GRAVITY_FIELDS
             .iter()
@@ -1586,6 +1632,33 @@ mod tests {
         }
         assert_eq!(settings_field_value("set_gravity", &ctx), "5000");
         assert_eq!(settings_field_value("set_ambient_intensity", &ctx), "0.120");
+
+        // REGRESSIONE v0.14.185: con valori UGUALI ai default il test sopra non
+        // distingue "legge lo snapshot" da "legge costanti hardcoded" (era il
+        // bug: chiudi e riapri il pannello -> i tre parametri ombre tornavano
+        // ai default). Qui lo snapshot ha valori DIVERSI dai default: se
+        // qualcuno rimette le costanti, questo assert fallisce.
+        let ctx2 = SettingsSnapshot {
+            gravity: GravitationalConstant(1234.0),
+            ambient: AmbientLight::default(),
+            glow: GlowCurve::default(),
+            trajectory: TrajectoryConfig::default(),
+            shadow: ShadowParams {
+                penumbra_exp: 2.75,
+                penumbra_flat: 0.80,
+                penumbra_soft: 0.44,
+            },
+        };
+        assert_eq!(settings_field_value("set_penumbra_exp", &ctx2), "2.75");
+        assert_eq!(settings_field_value("set_penumbra_flat", &ctx2), "0.80");
+        assert_eq!(settings_field_value("set_penumbra_soft", &ctx2), "0.44");
+        // e NON devono essere i default
+        assert_ne!(
+            settings_field_value("set_penumbra_flat", &ctx2),
+            "0.45",
+            "il campo mostra il default invece del valore corrente: chiudere e \
+             riaprire il pannello azzererebbe i parametri ombre"
+        );
         assert_eq!(settings_field_value("set_traj_history", &ctx), "500");
     }
 }
