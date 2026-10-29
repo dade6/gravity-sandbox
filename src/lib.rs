@@ -857,20 +857,29 @@ mod tests {
             body.contains("penumbra_flat"),
             "manca la modalità penombra PIATTA (config.penumbra_flat)"
         );
-        // v0.14.179: bordi morbidi. Due rampe smoothstep sui bordi, con la
-        // banda centrale che resta piatta, e degradazione ai bordi netti
-        // quando la morbidezza è 0 (nessuna divisione per zero).
+        // v0.14.186: la sfumatura DEVE stare dentro il cono e agire prima dei
+        // `return` secchi: nella 0.179 la rampa interna era annullata dal
+        // `return 1.0` dell'umbra e `soft` non cambiava niente a schermo.
         assert!(
-            body.contains("let soft_w = max(config.penumbra_soft, 0.0) * w_cone;"),
-            "la morbidezza dei bordi deve scalare con l'emilarghezza del cono"
+            body.contains("let wipe = min(soft_w, band * 0.5);"),
+            "rampa clampata alla banda: senza, a soft alto allarga il cono"
         );
         assert!(
-            body.contains("smoothstep(w_cone + soft_w, w_cone - soft_w, b)"),
-            "manca la rampa softstep sul bordo esterno del cono"
+            body.contains("1.0 - smoothstep(w_cone - wipe, w_cone, b)"),
+            "rampa esterna: deve partire dentro il cono e finire sul bordo"
         );
         assert!(
-            body.contains("smoothstep(w_umbra - soft_w, w_umbra + soft_w, b)"),
-            "manca la rampa softstep sul bordo dell'umbra"
+            body.contains("smoothstep(w_umbra, w_umbra + wipe, b)"),
+            "rampa interna: deve partire dal bordo dell'umbra, non prima"
+        );
+        // L'umbra esce con `return 1.0`: la sua guardia deve stare DOPO il
+        // calcolo delle rampe, altrimenti le azzera.
+        let pos_umbra_return = code_only.find("if w_umbra > 0.0 && b <= w_umbra {").unwrap_or(0);
+        let pos_rampa = code_only.find("let wipe = min(soft_w").unwrap_or(usize::MAX);
+        assert!(
+            pos_rampa < pos_umbra_return,
+            "le rampe devono essere calcolate PRIMA del return dell'umbra, \
+             altrimenti non hanno effetto (bug v0.14.179)"
         );
         // L'umbra deve esistere solo se ha spessore: senza `w_umbra > 0.0`
         // il ramo scatta anche oltre l'incrocio e lascia una riga piena

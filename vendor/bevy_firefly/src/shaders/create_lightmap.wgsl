@@ -124,47 +124,52 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let w_umbra = max(r_body - t * (r_sun - r_body) / d, 0.0);
     // Bordo del cono = silhouette del corpo vista dal centro del sole.
     let w_cone = r_body + t * r_body / d;
-    // L'umbra ESISTE solo se ha spessore: quando si è chiusa (w_umbra = 0,
-    // cioè oltre `P_intersect`) il ramo sotto non deve scattare, altrimenti
-    // resterebbe una riga piena di ombra esattamente sull'asse.
-    if w_umbra > 0.0 && b <= w_umbra {
-        return 1.0;              // umbra piena
-    }
-    if b >= w_cone {
-        return 0.0;              // fuori dal cono
-    }
-    // v0.14.175: NESSUN fattore di copertura (antumbra). Il riferimento non
-    // ne ha: come nel calcolatore la penombra dipende solo dalla distanza
-    // dall'asse (`b`), quindi un corpo piccolo (Rocky r=50 vs disco solare
-    // 450) mantiene il cono pieno per tutta la sua lunghezza invece di
-    // spegnersi a ~420 unità.
-    let x = (b - w_umbra) / max(w_cone - w_umbra, 0.0001);
-    // v0.14.178: penombra PIATTA (su richiesta). `penumbra_flat` è lo
-    // scurimento uniforme della banda: 0 = gradiente come prima.
-    // `step(1e-5, p)` vale 0 quando p è 0 (nessuna divisione per zero) e 1
-    // quando è attivo -> select sceglie il valore piatto.
+    // v0.14.186: bordi morbidi calcolati PRIMA dei rami secchi, altrimenti
+    // l'umbra uscirebbe con `return 1.0` e la rampa interna non avrebbe mai
+    // effetto (bug v0.14.179: `soft` non cambiava NIENTE a schermo).
+    //
+    // Geometria della sfumatura, in unità mondo:
+    //   soft_w = penumbra_soft * w_cone   -> semi-larghezza della rampa
+    // Il profilo della penombra e' `p` (piatto) o `(1-x)^exp`, ma comunque
+    // VIENE MOLTIPLICATO per due rampe che lo portano a 0 sul bordo esterno
+    // e lo lasciano pieno nel tratto centrale:
+    //   outer: 1 dentro, 0 fuori, rampa centrata su w_cone
+    //   inner: 0 dentro l'umbra, 1 fuori, rampa centrata su w_umbra
+    // Con soft = 0 le rampe degenerano in scalini (bordi netti, come prima).
+    let soft_w = max(config.penumbra_soft, 0.0) * w_cone;
+    let band = max(w_cone - w_umbra, 0.0001);
+    let x = clamp((b - w_umbra) / band, 0.0, 1.0);
     let p = config.penumbra_flat;
     let flat_on = step(1e-5, p);
     let shaped = pow(1.0 - x, config.penumbra_exp);
     var v = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
-    // v0.14.179: bordi MORBIDI. Le due transizioni (umbra->penombra e
-    // penombra->luce) diventano rampe smoothstep larghe `soft` volte
-    // l'emilarghezza del cono. La banda centrale resta piatta.
-    // Se `soft` = 0 (o `w_cone` ~ 0, corpo degenere) tutto degrada ai bordi
-    // netti: nessuna divisione per zero, nessun caso speciale a runtime.
-    let soft_w = max(config.penumbra_soft, 0.0) * w_cone;
+
     if soft_w > 0.0001 {
-        // Rampa esterna: da 0 (fuori dal cono) a 1 (dentro), centrata sul
-        // bordo `w_cone`. Moltiplicare per questa rampa porta il valore a 0
-        // ESATTAMENTE sul bordo e lo lascia pieno `soft_w` più dentro.
-        let outer = smoothstep(w_cone + soft_w, w_cone - soft_w, b);
+        // Bordo esterno: da `v` a 0 in `soft_w` unità, centrato su w_cone.
+        // La rampa sta DENTRO il cono: inizia a `wipe` unità dal bordo e
+        // finisce esattamente su w_cone (oltre, valore 0). Se la rampa
+        // partisse FUORI dal cono (soft_w > wipe) allargherebbe il cono:
+        // osservato a soft=1 il velo arrivava a b=250 con w_cone=240.
+        // Il clamp finale a `band*0.5` impedisce che le due rampe si
+        // sovrappongano oltre metà banda anche a soft=1.
+        let wipe = min(soft_w, band * 0.5);
+        let outer = 1.0 - smoothstep(w_cone - wipe, w_cone, b);
         v = v * outer;
-        // Rampa interna: ammorbidisce il salto da umbra (1.0) al valore
-        // piatto della penombra, centrata sul bordo dell'umbra.
+        // Bordo interno: dall'umbra (1.0) a `v` in `wipe` unità, dentro la
+        // banda. Se l'umbra si è chiusa (w_umbra = 0) questo bordo non esiste.
         if w_umbra > 0.0 {
-            let inner = smoothstep(w_umbra - soft_w, w_umbra + soft_w, b);
+            let inner = smoothstep(w_umbra, w_umbra + wipe, b);
             v = mix(1.0, v, inner);
         }
+    }
+
+    // L'umbra ha priorità (è la zona nera) e il cono finisce esattamente su
+    // `w_cone`: nessuna coda oltre il bordo.
+    if w_umbra > 0.0 && b <= w_umbra {
+        return 1.0;
+    }
+    if b >= w_cone {
+        return 0.0;
     }
     return v;
 }
