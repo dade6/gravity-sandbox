@@ -158,16 +158,53 @@ fn draw_shadow_cone_borders(
             gizmos.line_2d(cone_end_l, cone_end_r, cone_color());
 
             // --- umbra (nucleo buio) ---
-            // L'umbra è delimitata dalle tangenti AL DISCO SOLARE, non al
-            // corpo: dal punto di tangenza sul corpo verso P_intersect.
+            // Le rosse seguono il poligono dell'umbra del calcolatore, che NON
+            // parte dalla stella ma da P_intersect:
+            //   o_umbra      = asin((r_sun - r) / d)
+            //   d_umbraTweak = |P - centro| · cos(o_umbra)
+            //   estremo vicino = P - d_umbraTweak·rot(o_umbra)
+            // Quell'estremo sta ESATTAMENTE sulla superficie del pianeta
+            // (verificato: distanza dal centro = r) e a ~r_sun dalla stella.
+            //
+            // La v0.14.187 usava il punto di tangenza del CORPO (famiglia del
+            // cono, pendenza r/d): sbagliato, le rosse hanno pendenza
+            // (r_sun-r)/d. E una retta uscente dalla STELLA con quella
+            // pendenza non tocca il pianeta (dista 328 da un corpo di 120):
+            // per questo va costruita da P_intersect, non dalla stella.
+            let k = ((r_sun - body.radius) / d).clamp(-1.0, 1.0);
+            let root = (1.0 - k * k).max(0.0).sqrt();
+            let t_close_raw = umbra_closing_distance(body.radius, r_sun, d);
+            let umbra_start_l;
+            let umbra_start_r;
+            match t_close_raw {
+                Some(tc) => {
+                    // P_intersect misurato dal centro del corpo.
+                    let p_inter = center + axis * tc;
+                    let d_umbra = tc.max(0.0);
+                    let d_tweak = d_umbra * root; // cos(o_umbra) = sqrt(1-k²)
+                    // Estremo VICINO del poligono (verso il corpo), ruotato di
+                    // ±o_umbra: è il punto da cui parte la linea dell'umbra.
+                    let back = d_tweak * root; // componente lungo l'asse
+                    let aside = d_tweak * k.abs(); // componente laterale
+                    umbra_start_l = p_inter - axis * back + perp * aside;
+                    umbra_start_r = p_inter - axis * back - perp * aside;
+                }
+                None => {
+                    // Sole più piccolo del corpo: l'umbra diverge e non c'è
+                    // P_intersect. Le linee partono dal bordo del disco.
+                    umbra_start_l = center + perp * body.radius;
+                    umbra_start_r = center - perp * body.radius;
+                }
+            }
+
             let t_umbra = umbra_closing_distance(body.radius, r_sun, d)
                 .filter(|c| *c < GIZMO_CONE_LENGTH)
                 .unwrap_or(GIZMO_CONE_LENGTH);
             let (w_umbra_end, _) = cone_half_widths(body.radius, r_sun, d, t_umbra);
             let umbra_end_l = center + axis * t_umbra + perp * w_umbra_end;
             let umbra_end_r = center + axis * t_umbra - perp * w_umbra_end;
-            gizmos.line_2d(tangent_l, umbra_end_l, umbra_color());
-            gizmos.line_2d(tangent_r, umbra_end_r, umbra_color());
+            gizmos.line_2d(umbra_start_l, umbra_end_l, umbra_color());
+            gizmos.line_2d(umbra_start_r, umbra_end_r, umbra_color());
             gizmos.line_2d(umbra_end_l, umbra_end_r, umbra_color());
 
             // Croce sul punto di chiusura: lì il nucleo buio finisce.
@@ -270,6 +307,54 @@ mod tests {
              dell'equatore ({dist_star_equator:.1}): partire dall'equatore \
              sposta la base del cono di oltre 4 unità (d·(1-cos o))"
         );
+    }
+
+    /// Le RETTE ROSSE dell'umbra: costruite come il poligono del calcolatore,
+    /// a partire da P_intersect. L'estremo vicino deve stare ESATTAMENTE sulla
+    /// superficie del pianeta (distanza dal centro = r): è ciò che vede
+    /// l'utente ("tangenti anche al pianeta").
+    /// Bug v0.14.187: partivano dal piede della tangente del CORPO, famiglia
+    /// con pendenza r/d, e le rosse finivano staccate dal disco.
+    #[test]
+    fn umbra_lines_start_on_the_planet_surface() {
+        let (r, d, r_sun) = (120.0_f32, 3000.0_f32, 450.0_f32);
+        let star = Vec2::ZERO;
+        let center = Vec2::new(d, 0.0);
+        let axis = (center - star).normalize();
+        let perp = Vec2::new(-axis.y, axis.x);
+
+        let k = ((r_sun - r) / d).clamp(-1.0, 1.0);
+        let root = (1.0 - k * k).max(0.0).sqrt();
+        let tc = r * d / (r_sun - r); // P_intersect dal centro del corpo
+        let p_inter = center + axis * tc;
+        let d_tweak = tc * root;
+        let back = d_tweak * root;
+        let aside = d_tweak * k.abs();
+        let s_l = p_inter - axis * back + perp * aside;
+        let s_r = p_inter - axis * back - perp * aside;
+
+        for (name, p) in [("sinistra", s_l), ("destra", s_r)] {
+            // 1) il punto di partenza sta SULLA SUPERFICIE del pianeta
+            let dist_center = (p - center).length();
+            assert!(
+                (dist_center - r).abs() < 0.5,
+                "{name}: la linea rossa parte a {dist_center:.1} dal centro, \
+                 deve partire sulla superficie (r = {r})"
+            );
+            // 2) la linea non deve attraversare il disco: il punto più vicino
+            //    della retta al centro è il punto di partenza stesso (o più
+            //    lontano), quindi distanza minima >= r - tolleranza.
+            let dir = (p_inter - p).normalize();
+            let to_center = center - p;
+            let along = to_center.dot(dir).max(0.0);
+            let closest = p + dir * along;
+            let min_dist = (closest - center).length();
+            assert!(
+                min_dist > r - 1.0,
+                "{name}: la linea rossa entra nel disco (distanza minima \
+                 {min_dist:.1} < r = {r})"
+            );
+        }
     }
 
     /// L'umbra si chiude esattamente dove la formula del calcolatore mette
