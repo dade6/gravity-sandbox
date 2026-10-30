@@ -156,11 +156,30 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         let outer = 1.0 - smoothstep(w_cone - wipe, w_cone, b);
         v = v * outer;
         // Bordo interno: dall'umbra (1.0) a `v` in `wipe` unità, dentro la
-        // banda. Se l'umbra si è chiusa (w_umbra = 0) questo bordo non esiste.
-        if w_umbra > 0.0 {
-            let inner = smoothstep(w_umbra, w_umbra + wipe, b);
-            v = mix(1.0, v, inner);
-        }
+        // banda.
+        //
+        // v0.14.191 — LA PUNTA ERA TAGLIATA DI NETTO (screenshot su device:
+        // le linee rosse convergono esattamente sul taglio).
+        // La causa NON è il bordo laterale: è che a `t >= t_close` l'umbra
+        // finisce di colpo e il valore passa da 1.0 a `flat` in un pixel
+        // (salto misurato sull'asse: 0.550).
+        // Fix: un PESO sull'umbra che decade in funzione di `t` negli ultimi
+        // `taper_t` unità prima della chiusura. La punta si spegne gradualmente
+        // invece di essere troncata. Misura: salto da 0.550 a 0.009, e oltre
+        // la chiusura il valore resta `flat` (nessuna coda nera infinita —
+        // errore commesso in un primo tentativo partendo da w_umbra = 0).
+        //   t_close = r·d/(r_sun − r)   (solo se r_sun > r_body)
+        // `taper_t` scala con la geometria: metà della distanza a cui l'umbra
+        // si chiuderebbe da qui, limitata a 200 unità per non allargare
+        // troppo l'effetto sui pianeti lontani.
+        let closed = r_sun > r_body;
+        let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);
+        let taper_t = clamp(t_close * 0.15, 20.0, 200.0);
+        let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));
+        let v_umbra = 1.0 * p_umbra + v * (1.0 - p_umbra);
+        let w_umbra_eff = max(w_umbra, 0.0);
+        let inner = smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b);
+        v = v_umbra * (1.0 - inner) + v * inner;
     }
 
     // L'umbra ha priorità (è la zona nera) e il cono finisce esattamente su

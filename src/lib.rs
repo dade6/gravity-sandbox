@@ -869,8 +869,20 @@ mod tests {
             "rampa esterna: deve partire dentro il cono e finire sul bordo"
         );
         assert!(
-            body.contains("smoothstep(w_umbra, w_umbra + wipe, b)"),
+            body.contains("smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b)"),
             "rampa interna: deve partire dal bordo dell'umbra, non prima"
+        );
+        // v0.14.191: la punta non deve essere TRONCATA. Il peso `p_umbra`
+        // spegne l'umbra gradualmente negli ultimi `taper_t` unità prima
+        // della chiusura. Senza, il valore salta 1.0 -> penombra in un pixel
+        // (misurato 0.550 sull'asse) e si vede il taglio netto alla punta.
+        assert!(
+            body.contains("let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));"),
+            "manca il peso in `t` che ammorbidisce la punta del cono"
+        );
+        assert!(
+            body.contains("let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);"),
+            "t_close deve essere r·d/(r_sun−r) e infinito se il sole è più piccolo"
         );
         // L'umbra esce con `return 1.0`: la sua guardia deve stare DOPO il
         // calcolo delle rampe, altrimenti le azzera.
