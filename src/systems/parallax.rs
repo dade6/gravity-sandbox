@@ -1792,10 +1792,62 @@ mod tests {
         // The sentinel threshold must use standard WGSL (`select`), never an
         // if-expression: WGSL has no if-expression and naga tolerance is not
         // something to bet the planet lighting on.
+        //
+        // v0.14.190: la soglia ha ora TRE casi annidati (starfield, corpi,
+        // resto) per far entrare nello stencil il bordo antialiasato dei
+        // pianeti. Il contratto resta: si usa `select`, mai un if-expression.
         assert!(
-            src.contains("select(1.0, 0.004, is_starfield)"),
-            "the starfield stencil threshold must use WGSL `select`"
+            src.contains("let stencil_min_alpha = select("),
+            "the stencil threshold must use WGSL `select`"
         );
+        assert!(
+            src.contains("is_starfield"),
+            "the stencil threshold must still distinguish the starfield"
+        );
+        assert!(
+            src.contains("is_body"),
+            "the stencil threshold must distinguish bodies (border antialias): \
+             senza, il bordo del pianeta resta fuori dallo stencil e l'ombra \
+             non lo copre (bordino chiaro)"
+        );
+    }
+
+    /// v0.14.190: la shader sprite vendored deve COMPILARE. `cargo check` non
+    /// valida il WGSL: una shader rotta = schermo nero a runtime e nessun
+    /// errore di compilazione. Il blocco stencil è quello che tocchiamo, quindi
+    /// lo si estrae e lo si passa a naga in isolamento (la shader intera
+    /// importa moduli Bevy non disponibili qui).
+    #[test]
+    fn sprite_shader_stencil_block_is_valid_wgsl() {
+        let src = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/sprite.wgsl")
+            .expect("vendored sprite shader must be present");
+        let start = src
+            .find("let is_starfield = in.height < 0.0;")
+            .expect("stencil block must start with the starfield sentinel");
+        let end = src[start..]
+            .find("if writes_stencil {")
+            .map(|i| start + i)
+            .expect("stencil block must end before the write");
+        let body = &src[start..end];
+        let stub = format!(
+            "\
+struct Frag {{ height: f32, y: f32, z: f32, uv: vec2f }}
+@group(0) @binding(0) var sprite_texture: texture_2d<f32>;
+@group(0) @binding(1) var sprite_sampler: sampler;
+fn test(in: Frag, color: vec4f) -> f32 {{
+{body}
+    return select(0.0, 1.0, writes_stencil);
+}}
+"
+        );
+        let module = naga::front::wgsl::parse_str(&stub)
+            .unwrap_or_else(|e| panic!("WGSL PARSE FAILED (sprite stencil): {e}"));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("WGSL VALIDATION FAILED (sprite stencil): {e:#?}"));
     }
 
     #[test]

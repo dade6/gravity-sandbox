@@ -86,8 +86,21 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     // NB: `select(f, t, cond)` e' WGSL standard — un if-EXPRESSION non
     // esiste in WGSL e non va dato per scontato che naga lo accetti.
     // Questa condizione tocca SOLO lo stencil (le ombre): mai la normal map.
+    // v0.14.190 — IL BORDINO CHIARO SUL BORDO DEL PIANETA.
+    // La texture del disco ha alpha di copertura antialiasato sull'ultimo
+    // texel (`generate_disc_texture`), quindi sul bordo del pianeta `color.a`
+    // è fra 0 e 1. Con la soglia storica `alpha >= 1.0` quei texel NON
+    // scrivevano stencil: la shader delle ombre li vedeva come "spazio vuoto"
+    // e non li scuriva, lasciando una linguetta chiara lungo la circonferenza
+    // (segnalata su device).
+    // La sentinella `height` distingue già i casi: starfield -999, CORPI 0,
+    // stella 1000. Per i corpi (height == 0) basta un alpha minimo, così il
+    // bordo antialiasato entra nello stencil e riceve l'ombra.
+    // NOTA: questa condizione tocca SOLO lo stencil, mai il ramo della normal
+    // map (che resta `color.a >= 1.0`, vedi pitfall 0y).
     let is_starfield = in.height < 0.0;
-    let stencil_min_alpha = select(1.0, 0.004, is_starfield);
+    let is_body = in.height == 0.0;
+    let stencil_min_alpha = select(select(1.0, 0.004, is_starfield), 0.004, is_body);
     let writes_stencil = color.a >= stencil_min_alpha;
 
     if writes_stencil {
