@@ -149,11 +149,16 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // secco e buttava via questo peso: la parte nera restava netta fino alla
     // punta (croce rossa) mentre la sfocatura si fermava prima.
     //   t_close  = r·d/(r_sun − r)  (infinito se il sole è più piccolo)
-    //   taper_t  = 15% di t_close, fra 20 e 200 unità
+    //   taper_t  = quanto dura la sfumatura finale, MISURATA SULLA LUNGHEZZA
+    //              VISIBILE DEL CONO (v0.14.193): 15% era troppo poco (su Alpha
+    //              si spegneva in 164 unità contro un cono lungo migliaia),
+    //              quindi ora è il 35% di t_close, con un minimo di 80 e un
+    //              tetto di 900 unità. Così la coda resta visibile in
+    //              proporzione a quanto cono si vede davvero.
     //   p_umbra  = 1 lontano dalla chiusura → 0 sulla punta
     let closed = r_sun > r_body;
     let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);
-    let taper_t = clamp(t_close * 0.15, 20.0, 200.0);
+    let taper_t = clamp(t_close * 0.35, 80.0, 900.0);
     let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));
     let v_pen = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
     // Valore dell'umbra: nero pieno lontano, penombra sulla punta.
