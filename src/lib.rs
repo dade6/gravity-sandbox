@@ -880,6 +880,17 @@ mod tests {
             body.contains("let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));"),
             "manca il peso in `t` che ammorbidisce la punta del cono"
         );
+        // v0.14.192: il ramo dell'umbra NON deve più uscire con `return 1.0`
+        // secco quando la sfumatura è attiva: buttava via `v_umbra` e la parte
+        // nera arrivava netta fino alla punta.
+        assert!(
+            body.contains("return v_umbra;"),
+            "l'umbra deve restituire il valore PESATO: `return 1.0` annulla la sfumatura"
+        );
+        assert!(
+            body.contains("let v_umbra = 1.0 * p_umbra + v_pen * (1.0 - p_umbra);"),
+            "v_umbra deve mescolare nero pieno e penombra in base al peso"
+        );
         assert!(
             body.contains("let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);"),
             "t_close deve essere r·d/(r_sun−r) e infinito se il sole è più piccolo"
