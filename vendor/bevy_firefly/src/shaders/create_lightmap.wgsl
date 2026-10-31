@@ -120,7 +120,16 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         return 0.0;              // davanti al corpo: illuminato
     }
     let b = abs(dot(q, perp));   // distanza dall'asse del cono
-    let r_sun = max(light.core_radius, 0.0);
+    // v0.14.195: raggio del disco solare usato dalle OMBRE. Se
+    // `shadow_sun_radius > 0` è un valore dedicato (manopola "Shadow Sun"
+    // del pannello Luce), altrimenti resta il core della luce come prima.
+    // Serve perché `core_radius` è anche il raggio del NUCLEO LUMINOSO:
+    // abbassarlo per allungare l'umbra cambierebbe l'aspetto della stella.
+    let r_sun = select(
+        max(light.core_radius, 0.0),
+        max(light.shadow_sun.x, 0.0),
+        light.shadow_sun.x > 0.0,
+    );
     let w_umbra = max(r_body - t * (r_sun - r_body) / d, 0.0);
     // Bordo del cono = silhouette del corpo vista dal centro del sole.
     let w_cone = r_body + t * r_body / d;
@@ -144,25 +153,22 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let shaped = pow(1.0 - x, config.penumbra_exp);
     var v = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
 
-    // v0.14.192: PESO DELLA PUNTA, calcolato UNA volta e usato sia nel ramo
-    // laterale sia nel ramo dell'umbra. Prima l'umbra usciva con `return 1.0`
-    // secco e buttava via questo peso: la parte nera restava netta fino alla
-    // punta (croce rossa) mentre la sfocatura si fermava prima.
-    //   t_close  = r·d/(r_sun − r)  (infinito se il sole è più piccolo)
-    //   taper_t  = quanto dura la sfumatura finale, MISURATA SULLA LUNGHEZZA
-    //              VISIBILE DEL CONO (v0.14.193): 15% era troppo poco (su Alpha
-    //              si spegneva in 164 unità contro un cono lungo migliaia),
-    //              quindi ora è il 35% di t_close, con un minimo di 80 e un
-    //              tetto di 900 unità. Così la coda resta visibile in
-    //              proporzione a quanto cono si vede davvero.
-    //   p_umbra  = 1 lontano dalla chiusura → 0 sulla punta
+    // v0.14.195 — NERO PIENO FINO ALLA PUNTA, SFUMATURA SOLO DOPO.
+    // Prima (0.192-0.194) il peso `p_umbra` faceva schiarire l'umbra GIÀ PRIMA
+    // di `t_close`: a t=1000 il valore era 0.53 e a t=1050 0.47, quindi il
+    // nero finiva molto prima della punta. Per questo il parametro "Coda cono"
+    // sembrava inerte: agiva su un valore già chiaro.
+    // Ora:
+    //   - fino a `t_close` (la punta, dove le linee rosse si incontrano) il
+    //     valore resta 1.0 = nero pieno;
+    //   - oltre `t_close` la penombra si dissolve in `penumbra_tail` unità,
+    //     così la punta non ha un bordo netto.
+    // `t_close = r·d/(r_sun − r)` (infinito se il sole è più piccolo del corpo).
     let closed = r_sun > r_body;
     let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);
-    let taper_t = clamp(t_close * 0.35, 80.0, 900.0);
-    let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));
     let v_pen = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
-    // Valore dell'umbra: nero pieno lontano, penombra sulla punta.
-    let v_umbra = 1.0 * p_umbra + v_pen * (1.0 - p_umbra);
+    // Umbria: nero pieno, senza alcun peso in t.
+    let v_umbra = 1.0;
 
     if soft_w > 0.0001 {
         // v0.14.194 — CODA OLTRE LA PUNTA. Oltre `t_close` l'umbra è 0 per
@@ -172,9 +178,12 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         // Non cambia la fisica (t_close resta dove è): cambia solo per quanto
         // il cono continua a LEGGERSI dopo la punta.
         if config.penumbra_tail > 0.0001 && t > t_close {
+            // q va da 0 (sulla punta) a 1 (fine coda)
             let q = clamp((t - t_close) / config.penumbra_tail, 0.0, 1.0);
-            // dissolvenza smoothstep: pieno sulla punta, zero a fine coda
-            v = v * (1.0 - smoothstep(0.0, 1.0, q));
+            // v0.14.195: sulla punta il valore deve valere `v_pen` (penombra
+            // piena, 0.45) e scendere a 0 a fine coda. Prima moltiplicava `v`
+            // che era già chiaro, quindi non cambiava la lunghezza percepita.
+            v = v_pen * (1.0 - smoothstep(0.0, 1.0, q));
         }
         // Bordo esterno: da `v` a 0 in `soft_w` unità, centrato su w_cone.
         // La rampa sta DENTRO il cono: inizia a `wipe` unità dal bordo e
@@ -205,10 +214,8 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // quando ci si avvicina a `t_close`) e il rientro laterale `inner`.
     // Fuori dalla zona umbra resta il valore `v` della penombra.
     if w_umbra > 0.0 && b <= w_umbra {
-        if soft_w > 0.0001 {
-            return v_umbra;
-        }
-        return 1.0;
+        // v0.14.195: nero pieno fino alla punta, senza peso in `t`.
+        return v_umbra;
     }
     if b >= w_cone {
         return 0.0;

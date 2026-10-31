@@ -872,13 +872,23 @@ mod tests {
             body.contains("smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b)"),
             "rampa interna: deve partire dal bordo dell'umbra, non prima"
         );
-        // v0.14.191: la punta non deve essere TRONCATA. Il peso `p_umbra`
-        // spegne l'umbra gradualmente negli ultimi `taper_t` unità prima
-        // della chiusura. Senza, il valore salta 1.0 -> penombra in un pixel
-        // (misurato 0.550 sull'asse) e si vede il taglio netto alla punta.
+        // v0.14.195: il NERO deve restare pieno fino alla punta e la
+        // sfumatura avviene SOLO dopo (`penumbra_tail`). Il vecchio peso
+        // `p_umbra` schiariva l'umbra già prima di t_close (a t=1000 il
+        // valore era 0.53), e per questo "Coda cono" sembrava inerte.
         assert!(
-            body.contains("let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));"),
-            "manca il peso in `t` che ammorbidisce la punta del cono"
+            !body.contains("let p_umbra = smoothstep"),
+            "il peso in t prima della punta NON deve esistere: il nero deve \
+             restare pieno fino a t_close"
+        );
+        assert!(
+            body.contains("let v_umbra = 1.0;"),
+            "l'umbra deve valere 1.0 pieno (nero) fino alla punta"
+        );
+        assert!(
+            body.contains("v = v_pen * (1.0 - smoothstep(0.0, 1.0, q));"),
+            "la coda deve dissolvere la penombra PIENA oltre la punta, non un \
+             valore già schiarito"
         );
         // v0.14.194: coda oltre la punta. Oltre `t_close` l'umbra è 0 e senza
         // coda la penombra resta costante: il cono sembra finire sulla punta.
@@ -894,11 +904,12 @@ mod tests {
         // nera arrivava netta fino alla punta.
         assert!(
             body.contains("return v_umbra;"),
-            "l'umbra deve restituire il valore PESATO: `return 1.0` annulla la sfumatura"
+            "l'umbra deve restituire `v_umbra` dalla guardia di priorità"
         );
         assert!(
-            body.contains("let v_umbra = 1.0 * p_umbra + v_pen * (1.0 - p_umbra);"),
-            "v_umbra deve mescolare nero pieno e penombra in base al peso"
+            body.contains("light.shadow_sun.x > 0.0"),
+            "manca il raggio-ombra separato (Shadow Sun): senza, allungare \
+             l'umbra richiederebbe di cambiare il nucleo luminoso della stella"
         );
         assert!(
             body.contains("let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);"),
@@ -949,7 +960,7 @@ mod tests {
             "\
 struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32, penumbra_tail: f32 }}
 @group(1) @binding(10) var<uniform> config: ConfigStub;
-struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
+struct PointLightStub {{ pos: vec2f, core_radius: f32, shadow_sun: vec4f }}
 struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}
 @group(1) @binding(1) var<storage> lights: array<PointLightStub>;
 @group(1) @binding(2) var<storage> light_index: u32;

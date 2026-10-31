@@ -190,6 +190,7 @@ fn prepare_lights(
             z: light.z,
             core_radius: light.core.radius,
             core_boost: light.core.boost,
+            shadow_sun: Vec4::new(light.core.shadow_sun_radius, 0.0, 0.0, 0.0),
             core_falloff: match light.core.falloff {
                 Falloff::InverseSquare { .. } => 0,
                 Falloff::Linear { .. } => 1,

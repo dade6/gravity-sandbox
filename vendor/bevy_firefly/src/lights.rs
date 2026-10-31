@@ -221,6 +221,12 @@ pub struct LightCore {
     ///
     /// **Default:** 5.0.
     pub radius: f32,
+    /// v0.14.195: raggio del disco solare usato SOLO dal calcolo delle ombre
+    /// (v2). `0.0` = usa `radius`. Permette di allungare l'umbra
+    /// (`t_close = r·d/(r_sun − r)`) senza toccare il nucleo luminoso.
+    ///
+    /// **Default:** 0.0.
+    pub shadow_sun_radius: f32,
     /// A boost to the core's intensity.
     ///
     /// If set to 0, the core will have a constant intensity equal to that of the light.
@@ -239,6 +245,7 @@ impl Default for LightCore {
     fn default() -> Self {
         LightCore {
             radius: 5.0,
+            shadow_sun_radius: 0.0,
             boost: 0.0,
             falloff: Falloff::InverseSquare { intensity: 0.0 },
         }
@@ -248,6 +255,7 @@ impl Default for LightCore {
 impl LightCore {
     pub const NONE: Self = LightCore {
         radius: 0.0,
+        shadow_sun_radius: 0.0,
         boost: 0.0,
         falloff: Falloff::None,
     };
@@ -255,6 +263,7 @@ impl LightCore {
     pub fn from_radius_boost(radius: f32, boost: f32) -> LightCore {
         LightCore {
             radius,
+            shadow_sun_radius: 0.0,
             boost,
             falloff: Falloff::InverseSquare { intensity: 0.0 },
         }
@@ -262,6 +271,7 @@ impl LightCore {
     pub fn from_radius(radius: f32) -> LightCore {
         LightCore {
             radius,
+            shadow_sun_radius: 0.0,
             boost: 5.0,
             falloff: Falloff::InverseSquare { intensity: 0.0 },
         }
@@ -331,6 +341,10 @@ pub struct UniformPointLight {
 
     pub z: f32,
     pub height: f32,
+    /// v0.14.195: `.x` = raggio del disco solare per le ombre (0 = usa
+    /// core_radius). `Vec4` per riempire esattamente i 16 byte: un singolo f32
+    /// lascerebbe padding implicito e `NoUninit` rifiuterebbe la struct.
+    pub shadow_sun: Vec4,
 }
 
 /// Render World component that contains the buffer a [`PointLight2d`] writes to each frame.   

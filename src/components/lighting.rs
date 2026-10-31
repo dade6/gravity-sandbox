@@ -110,6 +110,13 @@ pub struct StarLightSettings {
     pub fade_width: f32,
     /// Core radius as a factor of the star's body radius (historic 1.5×).
     pub core_radius_factor: f32,
+    /// v0.14.195: raggio del disco solare usato SOLO dalle ombre, come
+    /// fattore del raggio della stella. Disaccoppiato da
+    /// `core_radius_factor` perché quest'ultimo è anche il raggio del NUCLEO
+    /// LUMINOSO della stella: abbassarlo per allungare l'umbra cambierebbe
+    /// l'aspetto della stella. Più piccolo = umbra più lunga
+    /// (`t_close = r·d/(r_sun − r)`). 0 = usa `core_radius_factor`.
+    pub shadow_sun_factor: f32,
     /// Brightness boost of the light core. (historic 3.0)
     pub core_boost: f32,
 }
@@ -122,6 +129,7 @@ impl Default for StarLightSettings {
             falloff: LightFalloff::None,
             fade_width: 500.0,
             core_radius_factor: 1.5,
+            shadow_sun_factor: 0.0,
             core_boost: 3.0,
         }
     }
@@ -312,6 +320,7 @@ mod tests {
             falloff: LightFalloff::Linear,
             fade_width: 0.0,
             core_radius_factor: 2.0,
+            shadow_sun_factor: 0.0,
             core_boost: 1.5,
         };
         let json = serde_json::to_string(&s).unwrap();

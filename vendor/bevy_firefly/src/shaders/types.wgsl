@@ -34,6 +34,11 @@ struct PointLight {
 
     z: f32,
     height: f32,
+    // v0.14.195: raggio del disco solare usato SOLO dalle ombre, in `.x` di un
+    // `vec4` (0 = usa core_radius). VEC4 per riempire esattamente i 16 byte:
+    // un singolo `f32` lascerebbe 12 byte di padding implicito e `NoUninit`
+    // rifiuta il tipo (la struct passerebbe da 80 a 84 byte).
+    shadow_sun: vec4<f32>,
     
 }
 

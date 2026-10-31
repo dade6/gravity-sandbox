@@ -893,6 +893,13 @@ fn apply_star_light_settings(
             light.falloff = s.falloff.into_firefly();
             light.fade_width = s.fade_width;
             light.core.radius = body.radius * s.core_radius_factor;
+            // v0.14.195: raggio del disco solare per le OMBRE. `0` = usa il
+            // raggio del nucleo. Più piccolo = umbra più lunga.
+            light.core.shadow_sun_radius = if s.shadow_sun_factor > 0.0 {
+                body.radius * s.shadow_sun_factor
+            } else {
+                0.0
+            };
             light.core.boost = s.core_boost;
         }
     }
