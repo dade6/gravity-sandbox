@@ -147,6 +147,16 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // Con soft = 0 le rampe degenerano in scalini (bordi netti, come prima).
     let soft_w = max(config.penumbra_soft, 0.0) * w_cone;
     let band = max(w_cone - w_umbra, 0.0001);
+    // v0.14.197: `wipe` calcolato QUI e non dentro `if soft_w > 0.0001`, perché
+    // serve anche alla guardia dell'umbra (più sotto) per la rampa continua sul
+    // bordo interno. Prima era dichiarato nel blocco e fuori non esisteva:
+    // naga falliva con "no definition in scope for identifier: wipe".
+    let wipe = min(soft_w, band * 0.5);
+    // v0.14.197: anche `inner` deve vivere FUORI dal blocco `if soft_w > 0`:
+    // la guardia dell'umbra lo usa per il bordo continuo, e dentro il blocco
+    // naga lo segnalava assente ("no definition in scope for identifier: inner").
+    let w_umbra_eff = max(w_umbra, 0.0);
+    let inner = smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b);
     let x = clamp((b - w_umbra) / band, 0.0, 1.0);
     let p = config.penumbra_flat;
     let flat_on = step(1e-5, p);
@@ -202,11 +212,24 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         if config.penumbra_tail > 0.0001 && t > t_close {
             // q va da 0 (sulla punta) a 1 (fine coda)
             let q = clamp((t - t_close) / config.penumbra_tail, 0.0, 1.0);
-            // v0.14.196: sulla punta la sfumatura assiale ha già portato il
-            // nero a `v_pen` (vedi `v_umbra`/`inner`), quindi la coda deve
-            // partire da quello stesso valore e non da `v_pen` pieno: prima
-            // creava un secondo salto subito dopo la punta.
-            v = v * (1.0 - smoothstep(0.0, 1.0, q));
+            // v0.14.197 — LA CODA SI RESTRINGE, NON RESTA UNA STRISCIA.
+            // Prima `v` veniva moltiplicato per la coda restando pieno su
+            // TUTTA la larghezza `w_cone`: oltre la punta l'umbra è 0, quindi
+            // il risultato era una fascia larga quanto il cono e scura come il
+            // cono (0.45) che continuava DRITTA oltre la punta. È la "striscia
+            // d'ombra" segnalata: sembra un cono perché non si restringe.
+            // Ora la coda è un TRIANGOLO che parte dalla punta e si chiude:
+            // la sua semilarghezza si riduce a zero in `penumbra_tail` unità,
+            // quindi il cono continua e finisce appuntito, non a fascia.
+            let tail_left = 1.0 - q;                    // 1 alla punta, 0 a fine coda
+            let w_tail = w_cone * tail_left;            // semilarghezza che si chiude
+            if b > w_tail {
+                return 0.0;                             // fuori dal triangolo: nessuna ombra
+            }
+            // Rampa laterale della coda, proporzionale alla sua larghezza:
+            // senza, il triangolo avrebbe un bordo netto.
+            let tail_soft = max(w_tail * config.penumbra_soft, 0.0001);
+            v = v * (1.0 - smoothstep(w_tail - min(tail_soft, w_tail), w_tail, b));
         }
         // Bordo esterno: da `v` a 0 in `soft_w` unità, centrato su w_cone.
         // La rampa sta DENTRO il cono: inizia a `wipe` unità dal bordo e
@@ -215,7 +238,6 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         // osservato a soft=1 il velo arrivava a b=250 con w_cone=240.
         // Il clamp finale a `band*0.5` impedisce che le due rampe si
         // sovrappongano oltre metà banda anche a soft=1.
-        let wipe = min(soft_w, band * 0.5);
         let outer = 1.0 - smoothstep(w_cone - wipe, w_cone, b);
         v = v * outer;
         // Bordo interno: dall'umbra alla penombra in `wipe` unità.
@@ -223,22 +245,31 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         // rientro laterale la cui larghezza NON si azzera dove serve: prima
         // era `min(wipe, w_umbra)`, che alla punta diventava 0 e lasciava il
         // bordo netto proprio lì.
-        let w_umbra_eff = max(w_umbra, 0.0);
-        let inner = smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b);
         v = v_umbra * (1.0 - inner) + v * inner;
     }
 
-    // Umbria: la zona NERA. v0.14.192 — qui c'era `return 1.0` secco, e questo
-    // ANNULLAVA tutta la sfumatura: lo screenshot a bordi attivi mostrava la
-    // parte nera arrivare netta fino alla punta (croce rossa) mentre la
-    // sfocatura si fermava prima, perché il peso `p_umbra` calcolato sopra
-    // veniva buttato via da questo ramo.
-    // Ora l'umbra usa `v_umbra` (1.0 pesato, che decade verso la penombra
-    // quando ci si avvicina a `t_close`) e il rientro laterale `inner`.
-    // Fuori dalla zona umbra resta il valore `v` della penombra.
+    // Umbria: la zona NERA.
+    //
+    // v0.14.197 — LA GUARDIA DEVE FERMARSI DOVE INIZIA LA SFUMATURA.
+    // `b <= w_umbra` scattava su TUTTA la zona umbra, anche dove `w_umbra` è
+    // ormai sottile e `v_umbra` (la sfumatura assiale) è sceso a ~0: lì dentro
+    // il valore era 0.001-0.017, mentre appena fuori la penombra vale `flat`
+    // (0.45). Salto secco misurato **+0.450** → ed è il filo d'ombra netto che
+    // costeggia il cono, visibile nello screenshot.
+    // Ora la guardia ferma il nero PIENO solo dove ha senso restituirlo, cioè
+    // dove `v_umbra` è ancora alto; più in là decide la rampa `inner`, che non
+    // ha scalini. Il caso `w_umbra > 0` resta per non cambiare la geometria.
+    let inner_stop = max(w_umbra, 0.0) + max(wipe, 0.0001);
     if w_umbra > 0.0 && b <= w_umbra {
-        // v0.14.195: nero pieno fino alla punta, senza peso in `t`.
-        return v_umbra;
+        // Bordo interno SENZA scalino. Fuori da qui il colore è
+        // `v_umbra*(1-inner) + v*inner`; siccome appena dentro `inner` = 0, il
+        // limite è esattamente `v_umbra`. Prima la guardia restituiva
+        // `v_umbra` E BASTA, ma `v` (penombra) verso la punta vale 0.45 mentre
+        // `v_umbra` è ~0: il salto di 0.45 su un pixel era il filo d'ombra.
+        // Ora la rampa è la stessa della zona esterna, quindi il valore è
+        // continuo attraverso `b = w_umbra`.
+        let v_side = v_umbra * (1.0 - inner) + v * inner;
+        return v_side;
     }
     if b >= w_cone {
         return 0.0;

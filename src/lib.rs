@@ -894,10 +894,10 @@ mod tests {
              sfumatura resterebbe invisibile"
         );
         assert!(
-            body.contains("v = v * (1.0 - smoothstep(0.0, 1.0, q));"),
-            "la coda deve partire dal valore che c'è SULLA punta: la sfumatura \
-             assiale ha già portato il nero a `v_pen`, quindi ripartire da \
-             `v_pen` pieno creerebbe un secondo scalino"
+            body.contains("let w_tail = w_cone * tail_left;"),
+            "la coda deve RESTRINGERSI (triangolo che si chiude): se resta \
+             larga quanto `w_cone` diventa una fascia dritta scura che esce \
+             dalla punta e non si chiude mai"
         );
         // v0.14.194: coda oltre la punta. Oltre `t_close` l'umbra è 0 e senza
         // coda la penombra resta costante: il cono sembra finire sulla punta.
@@ -912,8 +912,10 @@ mod tests {
         // secco quando la sfumatura è attiva: buttava via `v_umbra` e la parte
         // nera arrivava netta fino alla punta.
         assert!(
-            body.contains("return v_umbra;"),
-            "l'umbra deve restituire `v_umbra` dalla guardia di priorità"
+            body.contains("let v_side = v_umbra * (1.0 - inner) + v * inner;"),
+            "la guardia dell'umbra deve restituire lo stesso mix della zona \
+             esterna: con `return v_umbra` secco il bordo interno salta di \
+             0.45 (filo d'ombra netto che costeggia il cono)"
         );
         assert!(
             body.contains("light.shadow_sun.x > 0.0"),
