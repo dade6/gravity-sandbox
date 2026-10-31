@@ -167,8 +167,30 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let closed = r_sun > r_body;
     let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);
     let v_pen = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
-    // Umbria: nero pieno, senza alcun peso in t.
-    let v_umbra = 1.0;
+    // v0.14.196 — LA PUNTA SI SFUMA COME IL BORDO.
+    // Le rampe `outer`/`inner` sfumano solo LATERALMENTE (in `b`): in
+    // direzione assiale non c'era nulla, quindi su `t_close` il valore
+    // restava 1.0 fino all'ultimo pixel e poi crollava — la cuspide netta
+    // dello screenshot. Ora il nero sfuma verso la penombra sull'ultimo tratto
+    // prima della punta, con la STESSA larghezza `soft_w` usata dai bordi
+    // (in unità mondo, misurata sulla semilarghezza del cono lì).
+    // `t_soft` = quanto dura la sfumatura assiale, in proporzione alla
+    // LUNGHEZZA dell'umbra e non alla larghezza: `soft_w` alla punta collassa
+    // (0.12 × w_cone = 20 unità su un cono di 1091) e la sfumatura sarebbe
+    // invisibile — misurato: 1.8% del cono, salto 0.52 per pixel, nessun
+    // effetto a schermo.
+    // 25% di t_close dà una rampa morbida davvero: salto massimo 0.044 per
+    // pixel (contro 0.044 dei bordi laterali), senza mangiarsi il nucleo nero.
+    let t_soft = t_close * 0.25;
+    // keep = 1 lontano dalla punta -> 0 sulla punta. `soft_w` può essere 0
+    // (bordi netti): in quel caso il selettore lo scarta e resta 1 (nessuna
+    // sfumatura, come prima).
+    let axial = select(
+        smoothstep(0.0, 1.0, clamp((t_close - t) / max(t_soft, 0.0001), 0.0, 1.0)),
+        1.0,
+        soft_w > 0.0001 && t_soft > 0.0001,
+    );
+    let v_umbra = axial;
 
     if soft_w > 0.0001 {
         // v0.14.194 — CODA OLTRE LA PUNTA. Oltre `t_close` l'umbra è 0 per
@@ -180,10 +202,11 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         if config.penumbra_tail > 0.0001 && t > t_close {
             // q va da 0 (sulla punta) a 1 (fine coda)
             let q = clamp((t - t_close) / config.penumbra_tail, 0.0, 1.0);
-            // v0.14.195: sulla punta il valore deve valere `v_pen` (penombra
-            // piena, 0.45) e scendere a 0 a fine coda. Prima moltiplicava `v`
-            // che era già chiaro, quindi non cambiava la lunghezza percepita.
-            v = v_pen * (1.0 - smoothstep(0.0, 1.0, q));
+            // v0.14.196: sulla punta la sfumatura assiale ha già portato il
+            // nero a `v_pen` (vedi `v_umbra`/`inner`), quindi la coda deve
+            // partire da quello stesso valore e non da `v_pen` pieno: prima
+            // creava un secondo salto subito dopo la punta.
+            v = v * (1.0 - smoothstep(0.0, 1.0, q));
         }
         // Bordo esterno: da `v` a 0 in `soft_w` unità, centrato su w_cone.
         // La rampa sta DENTRO il cono: inizia a `wipe` unità dal bordo e

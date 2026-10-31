@@ -882,13 +882,22 @@ mod tests {
              restare pieno fino a t_close"
         );
         assert!(
-            body.contains("let v_umbra = 1.0;"),
-            "l'umbra deve valere 1.0 pieno (nero) fino alla punta"
+            body.contains("let v_umbra = axial;"),
+            "l'umbra deve sfumare in direzione ASSIALE verso la punta: senza, \
+             la cuspide resta un taglio netto (le rampe laterali agiscono solo \
+             in `b` e non toccano la punta)"
         );
         assert!(
-            body.contains("v = v_pen * (1.0 - smoothstep(0.0, 1.0, q));"),
-            "la coda deve dissolvere la penombra PIENA oltre la punta, non un \
-             valore già schiarito"
+            body.contains("let t_soft = t_close * 0.25;"),
+            "la rampa della punta deve essere proporzionale alla LUNGHEZZA \
+             dell'umbra: `soft_w` alla punta collassa (20 unita' su 1091) e la \
+             sfumatura resterebbe invisibile"
+        );
+        assert!(
+            body.contains("v = v * (1.0 - smoothstep(0.0, 1.0, q));"),
+            "la coda deve partire dal valore che c'è SULLA punta: la sfumatura \
+             assiale ha già portato il nero a `v_pen`, quindi ripartire da \
+             `v_pen` pieno creerebbe un secondo scalino"
         );
         // v0.14.194: coda oltre la punta. Oltre `t_close` l'umbra è 0 e senza
         // coda la penombra resta costante: il cono sembra finire sulla punta.
