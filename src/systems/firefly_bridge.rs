@@ -197,9 +197,10 @@ pub struct ShadowAlgo {
     /// cono (`0.0` = bordi netti). Ammorbidisce solo le due transizioni: la
     /// banda di penombra resta piatta.
     pub penumbra_soft: f32,
-    /// Coda del cono oltre la punta dell'umbra, in unità mondo (`0` = off).
-    /// Il velo di penombra si dissolve su questa distanza dopo `t_close`.
-    pub penumbra_tail: f32,
+    /// `d_RenderEnder` (v0.14.200): raggio massimo, in unità mondo, entro cui
+    /// il cono d'ombra viene disegnato, misurato dal centro del sole. È il
+    /// limite del calcolatore di riferimento. `0` = nessun limite.
+    pub render_end: f32,
 }
 
 impl Default for ShadowAlgo {
@@ -215,10 +216,13 @@ impl Default for ShadowAlgo {
             // 0.45 = la banda scurisce meno dell'umbra (che è 1.0 = nera) ma
             // in modo uniforme, senza gradiente verso il centro.
             penumbra_flat: 0.45,
-            // v0.194: coda accesa di default: il cono continua a leggersi
-            // oltre la punta dell'umbra invece di fermarsi di colpo.
             penumbra_soft: 0.12,
-            penumbra_tail: 1500.0,
+            // v0.14.200: il cono si ferma a 12000 unità dal sole. Prima non
+            // aveva limite e la penombra si propagava all'infinito: la
+            // "striscia d'ombra" che usciva dalla punta. Il valore è molto più
+            // grande del preset (Beta chiude a 7200) così i coni interi
+            // restano visibili, ma oltre quella distanza non c'è più ombra.
+            render_end: 12000.0,
         }
     }
 }
@@ -862,9 +866,9 @@ fn apply_shadow_algo(
         if cfg.penumbra_soft != want_soft {
             cfg.penumbra_soft = want_soft;
         }
-        let want_tail = algo.penumbra_tail.clamp(0.0, 20000.0);
-        if cfg.penumbra_tail != want_tail {
-            cfg.penumbra_tail = want_tail;
+        let want_tail = algo.render_end.clamp(0.0, 200000.0);
+        if cfg.render_end != want_tail {
+            cfg.render_end = want_tail;
         }
     }
 }
@@ -979,7 +983,7 @@ mod tests {
             penumbra_exp: 1.0,
             penumbra_flat: 0.0,
             penumbra_soft: 0.12,
-            penumbra_tail: 0.0,
+            render_end: 0.0,
         })
         .add_systems(Update, apply_shadow_algo);
         // frame 1: nessuna camera con FireflyConfig
@@ -1008,7 +1012,7 @@ mod tests {
             penumbra_exp: 1.0,
             penumbra_flat: 0.0,
             penumbra_soft: 0.12,
-            penumbra_tail: 0.0,
+            render_end: 0.0,
         })
         .add_systems(Update, apply_shadow_algo);
         let cam = app

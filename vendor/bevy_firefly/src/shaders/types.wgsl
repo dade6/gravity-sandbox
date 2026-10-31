@@ -87,11 +87,14 @@ struct FireflyConfig {
     // v0.14.179: ammorbidisce i bordi. Frazione dell'emilarghezza del cono
     // (w_cone) usata come rampa sui due bordi; 0 = bordi netti come prima
     penumbra_soft: f32,
-    // v0.14.198: campo mantenuto SOLO per non spostare gli offset degli altri
-    // uniform (`z_sorting`, `z_sorting_error_margin`, ...): la coda oltre la
-    // punta è stata rimossa perché disegnava ombra dove non c'è. Il valore non
-    // è più letto da nessuna shader.
-    penumbra_tail: f32,
+    // v0.14.200: `render_end` — raggio massimo (unità mondo) entro cui il cono
+    // d'ombra viene disegnato. RIUSA lo slot di `penumbra_tail` (stessa posizione
+    // e stesso tipo `f32`): rinominarlo avrebbe spostato gli offset di
+    // `z_sorting` & co. e rotto l'uniform (trappola NoUninit gia' incontrata).
+    // È il `d_RenderEnder` del calcolatore di riferimento (default 400): senza
+    // questo limite la penombra si propaga all'infinito lungo l'asse e diventa
+    // la "striscia d'ombra" che esce dalla punta del cono.
+    render_end: f32,
     z_sorting: u32,
     z_sorting_error_margin: f32,
     // 0 - none, 1 - simple, 2 - topdown

@@ -968,7 +968,7 @@ mod tests {
         );
         let stub = format!(
             "\
-struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32, penumbra_tail: f32 }}
+struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32, render_end: f32 }}
 @group(1) @binding(10) var<uniform> config: ConfigStub;
 struct PointLightStub {{ pos: vec2f, core_radius: f32, shadow_sun: vec4f }}
 struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}

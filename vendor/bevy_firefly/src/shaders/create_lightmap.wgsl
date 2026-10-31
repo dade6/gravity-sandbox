@@ -138,6 +138,23 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let w_umbra = max(r_body - t * (r_sun - r_body) / d, 0.0);
     // Bordo del cono = silhouette del corpo vista dal centro del sole.
     let w_cone = r_body + t * r_body / d;
+    // v0.14.200 — IL CONO SI FERMA A `d_RenderEnder` DAL SOLE.
+    // Il calcolatore di riferimento (Desmos "Shadow System 3.0") limita
+    // esplicitamente il disegno con `(x-x_sun)² + (y-y_sun)² <= d_RenderEnder²`
+    // (default 400). Qui quel limite NON c'era: oltre `t_close` la penombra
+    // restava fissa a `flat` (0.450) e `w_cone` continuava a crescere con la
+    // distanza, quindi la fascia si propagava ALL'INFINITO lungo l'asse.
+    // È la "striscia d'ombra" segnalata: sottile e lunga, ancorata al pianeta,
+    // che esce dalla punta e attraversa la scena. Non è un artefatto grafico,
+    // è geometria senza limite.
+    // Ora il cono si spegne in `tail_fade` unità prima del bordo di render,
+    // come fa il riferimento: nessuna ombra oltre quel raggio.
+    let dist_from_sun = length(q);
+    let render_end = max(config.render_end, 1.0);
+    let tail_fade = clamp((render_end - dist_from_sun) / max(render_end * 0.15, 1.0), 0.0, 1.0);
+    if dist_from_sun > render_end {
+        return 0.0;
+    }
     // v0.14.186: bordi morbidi calcolati PRIMA dei rami secchi, altrimenti
     // l'umbra uscirebbe con `return 1.0` e la rampa interna non avrebbe mai
     // effetto (bug v0.14.179: `soft` non cambiava NIENTE a schermo).
@@ -243,22 +260,41 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // Ora la guardia ferma il nero PIENO solo dove ha senso restituirlo, cioè
     // dove `v_umbra` è ancora alto; più in là decide la rampa `inner`, che non
     // ha scalini. Il caso `w_umbra > 0` resta per non cambiare la geometria.
+    // v0.14.200 — OL TRE LA PUNTA NON C'È PIÙ NIENTE.
+    // Con `w_umbra = 0` (oltre `t_close`) la guardia qui sotto non scatta e
+    // `inner = smoothstep(0, wipe, 0) = 0` SULL'ASSE, mentre a `b > 0` vale 1 ed
+    // espone `v_pen` (0.450). Misurato a distanza 6000 (punto di chiusura 4091):
+    //   b=0 -> 0.000   b=50..150 -> 0.450   b=239 -> 0.002
+    // Cioè un BUCO sull'asse con penombra ai due lati: due strisce parallele
+    // sottili che sembrano fare parte dell'ombra e la seguono. Era la "striscia"
+    // che usciva dalla punta. Oltre la chiusura dell'umbra il cono non esiste.
+    // v0.14.200 — LA PENOMBRA SEGUE L'UMBRA FINO ALLA PUNTA.
+    // Il difetto di fondo: dentro `b <= w_umbra` il valore è `v_umbra` (che
+    // verso la punta scende a 0), ma FUORI è `v` = penombra PIENA (0.450) a
+    // qualunque distanza. Quando `w_umbra` si assottiglia, il centro si spegne
+    // e i due lati restano accesi: misurato a distanza 4050 (punto di chiusura
+    // 4091) b=0 -> 0.061 ma b=80 -> 0.450. È una fascia CAVA, cioè due strisce
+    // parallele nette che sembrano parte dell'ombra e la seguono.
+    // Ora la penombra si spegne insieme all'umbra: il fattore `v_umbra` pesa
+    // tutte le zone, così il cono finisce appuntito invece di aprirsi a forcella.
+    // Prima che l'umbra inizi a chiudersi `v_umbra` = 1 e nulla cambia.
+    if w_umbra <= 0.0 && t > t_close {
+        return 0.0;
+    }
     let inner_stop = max(w_umbra, 0.0) + max(wipe, 0.0001);
     if w_umbra > 0.0 && b <= w_umbra {
-        // Bordo interno SENZA scalino. Fuori da qui il colore è
-        // `v_umbra*(1-inner) + v*inner`; siccome appena dentro `inner` = 0, il
-        // limite è esattamente `v_umbra`. Prima la guardia restituiva
-        // `v_umbra` E BASTA, ma `v` (penombra) verso la punta vale 0.45 mentre
-        // `v_umbra` è ~0: il salto di 0.45 su un pixel era il filo d'ombra.
-        // Ora la rampa è la stessa della zona esterna, quindi il valore è
-        // continuo attraverso `b = w_umbra`.
+        // Bordo interno SENZA scalino: stesso mix della zona esterna, così il
+        // valore è continuo attraverso `b = w_umbra`.
         let v_side = v_umbra * (1.0 - inner) + v * inner;
-        return v_side;
+        return v_side * tail_fade;
     }
     if b >= w_cone {
         return 0.0;
     }
-    return v;
+    // La penombra oltre l'umbra vale `v`, ma pesata da `v_umbra`: si spegne
+    // insieme al cono. `v_umbra` = 1 finché c'è nero, quindi il aspetto
+    // normale del cono è invariato.
+    return v * v_umbra * tail_fade;
 }
 // @@SHADOW_V2_END
 

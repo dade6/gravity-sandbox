@@ -256,7 +256,7 @@ pub(crate) struct ShadowParams {
     pub penumbra_exp: f32,
     pub penumbra_flat: f32,
     pub penumbra_soft: f32,
-    pub penumbra_tail: f32,
+    pub render_end: f32,
 }
 
 /// Valore corrente della risorsa per una chiave campo `set_` (usato allo
@@ -279,7 +279,6 @@ pub(crate) fn settings_field_value(key: &str, ctx: &SettingsSnapshot) -> String 
         "set_penumbra_exp" => format!("{:.2}", ctx.shadow.penumbra_exp),
         "set_penumbra_flat" => format!("{:.2}", ctx.shadow.penumbra_flat),
         "set_penumbra_soft" => format!("{:.2}", ctx.shadow.penumbra_soft),
-        "set_penumbra_tail" => format!("{:.0}", ctx.shadow.penumbra_tail),
         _ => String::new(),
     }
 }
@@ -303,7 +302,7 @@ fn spawn_settings_dialog(
             penumbra_exp: snapshot.4.penumbra_exp,
             penumbra_flat: snapshot.4.penumbra_flat,
             penumbra_soft: snapshot.4.penumbra_soft,
-            penumbra_tail: snapshot.4.penumbra_tail,
+            render_end: snapshot.4.render_end,
         },
     };
     commands
@@ -654,7 +653,6 @@ fn apply_shadow_algo_live(
         if key != "set_penumbra_exp"
             && key != "set_penumbra_flat"
             && key != "set_penumbra_soft"
-            && key != "set_penumbra_tail"
         {
             continue;
         }
@@ -681,10 +679,11 @@ fn apply_shadow_algo_live(
                 }
             }
             _ => {
-                // set_penumbra_tail: unità mondo, 0 = nessuna coda
-                let v = v.clamp(0.0, 20000.0);
-                if (algo.penumbra_tail - v).abs() > 1e-3 {
-                    algo.penumbra_tail = v;
+                // v0.14.200: `render_end` (ex coda cono). Nessun campo nel
+                // pannello: il valore si regola solo dal preset.
+                let v = v.clamp(0.0, 200000.0);
+                if (algo.render_end - v).abs() > 1e-3 {
+                    algo.render_end = v;
                 }
             }
         }
@@ -710,7 +709,6 @@ fn sync_penumbra_exp_field(
     let expected_exp = format!("{:.2}", algo.penumbra_exp);
     let expected_flat = format!("{:.2}", algo.penumbra_flat);
     let expected_soft = format!("{:.2}", algo.penumbra_soft);
-    let expected_tail = format!("{:.0}", algo.penumbra_tail);
     for (entity, prop, mut editable) in fields.iter_mut() {
         if Some(entity) == focused {
             continue;
@@ -719,7 +717,6 @@ fn sync_penumbra_exp_field(
             "set_penumbra_exp" => &expected_exp,
             "set_penumbra_flat" => &expected_flat,
             "set_penumbra_soft" => &expected_soft,
-            "set_penumbra_tail" => &expected_tail,
             _ => continue,
         };
         if editable.value().to_string() != *expected {
@@ -1173,7 +1170,6 @@ pub(crate) fn apply_settings_field(
         "set_penumbra_exp" => {}
         "set_penumbra_flat" => {}
         "set_penumbra_soft" => {}
-        "set_penumbra_tail" => {}
         _ => {}
     }
     false
@@ -1263,7 +1259,7 @@ fn sync_settings_fields_on_resource_change(
             penumbra_exp: shadow.penumbra_exp,
             penumbra_flat: shadow.penumbra_flat,
             penumbra_soft: shadow.penumbra_soft,
-            penumbra_tail: shadow.penumbra_tail,
+            render_end: shadow.render_end,
         },
     };
     let focused = input_focus.get();
@@ -1278,7 +1274,6 @@ fn sync_settings_fields_on_resource_change(
         if prop.0 == "set_penumbra_exp"
             || prop.0 == "set_penumbra_flat"
             || prop.0 == "set_penumbra_soft"
-            || prop.0 == "set_penumbra_tail"
         {
             continue;
         }
@@ -1610,7 +1605,7 @@ mod tests {
                 penumbra_exp: 2.75,
                 penumbra_flat: 0.33,
                 penumbra_soft: 0.21,
-                penumbra_tail: 1500.0,
+                render_end: 12000.0,
             },
         };
         assert_eq!(settings_field_value("set_penumbra_exp", &ctx), "2.75");
@@ -1635,7 +1630,7 @@ mod tests {
                 penumbra_exp: 1.0,
                 penumbra_flat: 0.45,
                 penumbra_soft: 0.12,
-                penumbra_tail: 1500.0,
+                render_end: 12000.0,
             },
         };
         let all: Vec<&str> = GRAVITY_FIELDS
@@ -1668,7 +1663,7 @@ mod tests {
                 penumbra_exp: 2.75,
                 penumbra_flat: 0.80,
                 penumbra_soft: 0.44,
-                penumbra_tail: 1500.0,
+                render_end: 12000.0,
             },
         };
         assert_eq!(settings_field_value("set_penumbra_exp", &ctx2), "2.75");

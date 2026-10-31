@@ -75,17 +75,17 @@ pub struct FireflyConfig {
     /// **Default:** 0.12.
     pub penumbra_soft: f32,
 
-    /// **Coda del cono** (v2): distanza in unità mondo, DOPO il punto in cui
-    /// l'umbra si chiude (`t_close = r·d/(r_sun − r)`), su cui la penombra si
-    /// dissolve fino a sparire. Serve perché oltre `t_close` l'umbra vale 0 e
-    /// senza coda la penombra resta costante: il cono sembra finire di colpo
-    /// sulla punta. Con la coda continua a leggersi e poi svanisce.
+    /// **`d_RenderEnder`** (v2, v0.14.200): raggio massimo, in unità mondo,
+    /// entro cui il cono d'ombra viene disegnato. Corrisponde al
+    /// `d_RenderEnder` del calcolatore di riferimento (default 400).
     ///
-    /// - `0.0` = nessuna coda (comportamento storico);
-    /// - `1500` = il velo si dissolve in 1500 unità oltre la punta.
+    /// Senza questo limite la penombra si propaga ALL'INFINITO lungo l'asse:
+    /// oltre `t_close` il valore resta fisso a `penumbra_flat` mentre `w_cone`
+    /// continua a crescere, producendo una striscia lunga e sottile ancorata
+    /// al pianeta (era il difetto segnalato).
     ///
-    /// **Default:** 0.0.
-    pub penumbra_tail: f32,
+    /// **Default:** 0.0 (nessun limite, comportamento storico).
+    pub render_end: f32,
 
     /// Algoritmo dei coni d'ombra (A/B live dal pannello Impostazioni).
     ///
@@ -227,7 +227,7 @@ impl Default for FireflyConfig {
             penumbra_exp: 1.0,
             penumbra_flat: 0.0,
             penumbra_soft: 0.12,
-            penumbra_tail: 0.0,
+            render_end: 0.0,
             z_sorting: true,
             z_sorting_error_margin: 0.0,
             normal_mode: NormalMode::None,
@@ -251,7 +251,7 @@ pub struct UniformFireflyConfig {
     pub penumbra_exp: f32,
     pub penumbra_flat: f32,
     pub penumbra_soft: f32,
-    pub penumbra_tail: f32,
+    pub render_end: f32,
     pub z_sorting: u32,
     pub z_sorting_error_margin: f32,
     pub normal_mode: u32,
