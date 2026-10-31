@@ -116,6 +116,11 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let perp = vec2f(-axis.y, axis.x);
     let q = pos - light.pos;
     let t = dot(q, axis) - d;    // distanza oltre il centro del corpo
+    // v0.14.199: `near_fade` era un tentativo contro la striscia, basato
+    // sull'ipotesi che il salto venisse da `t < 0`. Misurato: il salto di 1.000
+    // è a x=3000, y=±120, cioè sul CONTORNO del disco del corpo (b = r), dove
+    // esso è già gestito dallo sprite e dallo stencil. `t < 0` secco resta
+    // corretto: davanti al corpo non c'è ombra, e il cono nasce sul terminatore.
     if t < 0.0 {
         return 0.0;              // davanti al corpo: illuminato
     }
@@ -407,6 +412,14 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
         var prev_index = 0u; 
         var accumulated_occlusion = 0.0;
+        // v0.14.199: occlusione MASSIMA fra i coni circolari che coprono questo
+        // pixel, e il colore/opacità del cono che l'ha prodotta. Prima ogni
+        // occluder moltiplicava il fondo per (1 - opacity): due coni sovrapposti
+        // davano (1-a)*(1-b), e con a=0.45 (penombra Alpha) e b=1.00 (umbra
+        // Beta) il risultato era 0.00 — la striscia nera netta.
+        var occ_max = 0.0;
+        var occ_color = vec3f(0.0);
+        var occ_opacity = 0.0;
 
         // if left >= right {
         //     return vec4<f32>(1.0, 0.0, 0.0, 1.0);
@@ -449,7 +462,25 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
 
                 if result > 0.0 {
-                    shadow = shadow_blend(shadow, round_occluders[occluder_index].color.rgb, round_occluders[occluder_index].opacity * result);
+                    // v0.14.199 — LE OMBRE NON SI MOLTIPLICANO PIÙ ALL'INFINITO.
+                    // `shadow_blend` moltiplica il fondo per (1 - opacity) a ogni
+                    // occluder: con due coni sovrapposti il fattore diventa
+                    // (1-a)*(1-b). Sul preset reale Alpha e Beta hanno lo STESSO
+                    // asse (entrambi a 0° dal sole), quindi si sovrappongono su
+                    // una banda lunga e sottile: lì la penombra di Alpha (0.45)
+                    // incontra l'umbra piena di Beta (1.00) → 0.55*0.00 = 0.00,
+                    // cioè nero assoluto. Misurato sullo screenshot: la striscia
+                    // ha valore 1-7 su un fondo di 113-140. È la "striscia nera"
+                    // che corre oltre la punta del cono.
+                    // Ora l'occlusione è il MASSIMO fra i coni che coprono il
+                    // pixel: vince l'ombra più densa, e una penombra debole non
+                    // viene cancellata dal nero di un altro corpo. L'opacità del
+                    // colore si applica dopo, una volta sola.
+                    if result > occ_max {
+                        occ_max = result;
+                        occ_color = round_occluders[occluder_index].color.rgb;
+                        occ_opacity = round_occluders[occluder_index].opacity;
+                    }
                 }            
             }
             // poly occluder
@@ -487,6 +518,14 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             
         if prev_index != 0u && accumulated_occlusion > 0.0 {
             shadow = shadow_blend(shadow, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
+        }
+        // v0.14.199: le ombre dei CERCHI si applicano una volta sola, con
+        // l'occlusione massima fra i coni che coprono il pixel (vedi il
+        // commento dentro il loop). Prima ogni cono moltiplicava il fondo,
+        // quindi due coni sovrapposti producevano nero assoluto dove
+        // geometricamente c'è solo penombra: la striscia nera netta.
+        if occ_max > 0.0 {
+            shadow = shadow_blend(shadow, occ_color, occ_opacity * occ_max);
         }
 
         // v0.14.134 (supersede v0.14.132): le ombre dei pianeti oscurano
