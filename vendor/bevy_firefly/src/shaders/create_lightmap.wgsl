@@ -171,8 +171,8 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // Ora:
     //   - fino a `t_close` (la punta, dove le linee rosse si incontrano) il
     //     valore resta 1.0 = nero pieno;
-    //   - oltre `t_close` la penombra si dissolve in `penumbra_tail` unità,
-    //     così la punta non ha un bordo netto.
+    //   - oltre `t_close` non c'è più nessuna ombra: la "coda" che prolungava
+    //     la punta è risolta solo dalla sfumatura assiale (v.14.198).
     // `t_close = r·d/(r_sun − r)` (infinito se il sole è più piccolo del corpo).
     let closed = r_sun > r_body;
     let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);
