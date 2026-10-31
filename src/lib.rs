@@ -880,7 +880,16 @@ mod tests {
             body.contains("let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));"),
             "manca il peso in `t` che ammorbidisce la punta del cono"
         );
-        // v0.14.192: il ramo dell'umbra NON deve più uscire con `return 1.0`
+        // v0.14.194: coda oltre la punta. Oltre `t_close` l'umbra è 0 e senza
+        // coda la penombra resta costante: il cono sembra finire sulla punta.
+        assert!(
+            body.contains("if config.penumbra_tail > 0.0001 && t > t_close {"),
+            "manca la coda del cono oltre la punta (config.penumbra_tail)"
+        );
+        assert!(
+            body.contains("let q = clamp((t - t_close) / config.penumbra_tail, 0.0, 1.0);"),
+            "la coda deve dissolversi in base alla distanza oltre t_close"
+        );
         // secco quando la sfumatura è attiva: buttava via `v_umbra` e la parte
         // nera arrivava netta fino alla punta.
         assert!(
@@ -938,7 +947,7 @@ mod tests {
         );
         let stub = format!(
             "\
-struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32 }}
+struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32, penumbra_tail: f32 }}
 @group(1) @binding(10) var<uniform> config: ConfigStub;
 struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
 struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}

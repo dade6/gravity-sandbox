@@ -75,6 +75,18 @@ pub struct FireflyConfig {
     /// **Default:** 0.12.
     pub penumbra_soft: f32,
 
+    /// **Coda del cono** (v2): distanza in unità mondo, DOPO il punto in cui
+    /// l'umbra si chiude (`t_close = r·d/(r_sun − r)`), su cui la penombra si
+    /// dissolve fino a sparire. Serve perché oltre `t_close` l'umbra vale 0 e
+    /// senza coda la penombra resta costante: il cono sembra finire di colpo
+    /// sulla punta. Con la coda continua a leggersi e poi svanisce.
+    ///
+    /// - `0.0` = nessuna coda (comportamento storico);
+    /// - `1500` = il velo si dissolve in 1500 unità oltre la punta.
+    ///
+    /// **Default:** 0.0.
+    pub penumbra_tail: f32,
+
     /// Algoritmo dei coni d'ombra (A/B live dal pannello Impostazioni).
     ///
     /// `0` = v1, il test poligonale/archi di firefly (soft shadows
@@ -215,6 +227,7 @@ impl Default for FireflyConfig {
             penumbra_exp: 1.0,
             penumbra_flat: 0.0,
             penumbra_soft: 0.12,
+            penumbra_tail: 0.0,
             z_sorting: true,
             z_sorting_error_margin: 0.0,
             normal_mode: NormalMode::None,
@@ -238,6 +251,7 @@ pub struct UniformFireflyConfig {
     pub penumbra_exp: f32,
     pub penumbra_flat: f32,
     pub penumbra_soft: f32,
+    pub penumbra_tail: f32,
     pub z_sorting: u32,
     pub z_sorting_error_margin: f32,
     pub normal_mode: u32,

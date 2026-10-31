@@ -197,6 +197,9 @@ pub struct ShadowAlgo {
     /// cono (`0.0` = bordi netti). Ammorbidisce solo le due transizioni: la
     /// banda di penombra resta piatta.
     pub penumbra_soft: f32,
+    /// Coda del cono oltre la punta dell'umbra, in unità mondo (`0` = off).
+    /// Il velo di penombra si dissolve su questa distanza dopo `t_close`.
+    pub penumbra_tail: f32,
 }
 
 impl Default for ShadowAlgo {
@@ -212,7 +215,10 @@ impl Default for ShadowAlgo {
             // 0.45 = la banda scurisce meno dell'umbra (che è 1.0 = nera) ma
             // in modo uniforme, senza gradiente verso il centro.
             penumbra_flat: 0.45,
+            // v0.194: coda accesa di default: il cono continua a leggersi
+            // oltre la punta dell'umbra invece di fermarsi di colpo.
             penumbra_soft: 0.12,
+            penumbra_tail: 1500.0,
         }
     }
 }
@@ -856,6 +862,10 @@ fn apply_shadow_algo(
         if cfg.penumbra_soft != want_soft {
             cfg.penumbra_soft = want_soft;
         }
+        let want_tail = algo.penumbra_tail.clamp(0.0, 20000.0);
+        if cfg.penumbra_tail != want_tail {
+            cfg.penumbra_tail = want_tail;
+        }
     }
 }
 
@@ -962,6 +972,7 @@ mod tests {
             penumbra_exp: 1.0,
             penumbra_flat: 0.0,
             penumbra_soft: 0.12,
+            penumbra_tail: 0.0,
         })
         .add_systems(Update, apply_shadow_algo);
         // frame 1: nessuna camera con FireflyConfig
@@ -990,6 +1001,7 @@ mod tests {
             penumbra_exp: 1.0,
             penumbra_flat: 0.0,
             penumbra_soft: 0.12,
+            penumbra_tail: 0.0,
         })
         .add_systems(Update, apply_shadow_algo);
         let cam = app

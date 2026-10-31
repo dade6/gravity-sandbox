@@ -165,6 +165,17 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let v_umbra = 1.0 * p_umbra + v_pen * (1.0 - p_umbra);
 
     if soft_w > 0.0001 {
+        // v0.14.194 — CODA OLTRE LA PUNTA. Oltre `t_close` l'umbra è 0 per
+        // geometria: senza coda la penombra resta costante a `flat` e il cono
+        // sembra finire di colpo sulla punta (segnalato: "il cono è più corto").
+        // Con `penumbra_tail > 0` il velo si dissolve su quella distanza.
+        // Non cambia la fisica (t_close resta dove è): cambia solo per quanto
+        // il cono continua a LEGGERSI dopo la punta.
+        if config.penumbra_tail > 0.0001 && t > t_close {
+            let q = clamp((t - t_close) / config.penumbra_tail, 0.0, 1.0);
+            // dissolvenza smoothstep: pieno sulla punta, zero a fine coda
+            v = v * (1.0 - smoothstep(0.0, 1.0, q));
+        }
         // Bordo esterno: da `v` a 0 in `soft_w` unità, centrato su w_cone.
         // La rampa sta DENTRO il cono: inizia a `wipe` unità dal bordo e
         // finisce esattamente su w_cone (oltre, valore 0). Se la rampa
