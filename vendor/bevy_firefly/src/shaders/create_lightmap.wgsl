@@ -203,34 +203,13 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let v_umbra = axial;
 
     if soft_w > 0.0001 {
-        // v0.14.194 — CODA OLTRE LA PUNTA. Oltre `t_close` l'umbra è 0 per
-        // geometria: senza coda la penombra resta costante a `flat` e il cono
-        // sembra finire di colpo sulla punta (segnalato: "il cono è più corto").
-        // Con `penumbra_tail > 0` il velo si dissolve su quella distanza.
-        // Non cambia la fisica (t_close resta dove è): cambia solo per quanto
-        // il cono continua a LEGGERSI dopo la punta.
-        if config.penumbra_tail > 0.0001 && t > t_close {
-            // q va da 0 (sulla punta) a 1 (fine coda)
-            let q = clamp((t - t_close) / config.penumbra_tail, 0.0, 1.0);
-            // v0.14.197 — LA CODA SI RESTRINGE, NON RESTA UNA STRISCIA.
-            // Prima `v` veniva moltiplicato per la coda restando pieno su
-            // TUTTA la larghezza `w_cone`: oltre la punta l'umbra è 0, quindi
-            // il risultato era una fascia larga quanto il cono e scura come il
-            // cono (0.45) che continuava DRITTA oltre la punta. È la "striscia
-            // d'ombra" segnalata: sembra un cono perché non si restringe.
-            // Ora la coda è un TRIANGOLO che parte dalla punta e si chiude:
-            // la sua semilarghezza si riduce a zero in `penumbra_tail` unità,
-            // quindi il cono continua e finisce appuntito, non a fascia.
-            let tail_left = 1.0 - q;                    // 1 alla punta, 0 a fine coda
-            let w_tail = w_cone * tail_left;            // semilarghezza che si chiude
-            if b > w_tail {
-                return 0.0;                             // fuori dal triangolo: nessuna ombra
-            }
-            // Rampa laterale della coda, proporzionale alla sua larghezza:
-            // senza, il triangolo avrebbe un bordo netto.
-            let tail_soft = max(w_tail * config.penumbra_soft, 0.0001);
-            v = v * (1.0 - smoothstep(w_tail - min(tail_soft, w_tail), w_tail, b));
-        }
+        // v0.14.198 — CODA RIMOSSA. Era stata aggiunta nella 0.194 per far
+        // "continuare" il cono oltre la punta, ma disegnava ombra dove la
+        // geometria dice che non ce n'è: oltre `t_close` l'umbra è 0, e quella
+        // fascia scura usciva dritta dalla punta. Con Beta dietro Alpha si
+        // sommava anche al cono di Beta → la striscia netta nello screenshot.
+        // La punta ora è risolta dalla sola sfumatura assiale (`axial`), che
+        // non inventa ombra oltre il punto di chiusura.
         // Bordo esterno: da `v` a 0 in `soft_w` unità, centrato su w_cone.
         // La rampa sta DENTRO il cono: inizia a `wipe` unità dal bordo e
         // finisce esattamente su w_cone (oltre, valore 0). Se la rampa

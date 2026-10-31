@@ -894,20 +894,19 @@ mod tests {
              sfumatura resterebbe invisibile"
         );
         assert!(
-            body.contains("let w_tail = w_cone * tail_left;"),
-            "la coda deve RESTRINGERSI (triangolo che si chiude): se resta \
-             larga quanto `w_cone` diventa una fascia dritta scura che esce \
-             dalla punta e non si chiude mai"
+            body.contains("let v_umbra = axial;"),
+            "la punta deve sfumare per via ASSIALE"
         );
-        // v0.14.194: coda oltre la punta. Oltre `t_close` l'umbra è 0 e senza
-        // coda la penombra resta costante: il cono sembra finire sulla punta.
+        // v0.14.198: la coda oltre la punta è stata RIMOSSA. Disegnava ombra
+        // dove la geometria dice che non ce n'è (oltre `t_close` l'umbra è 0) e
+        // con un secondo corpo dietro il primo si sommava al suo cono, creando
+        // la striscia netta che usciva dalla punta. La punta è risolta dalla
+        // sola sfumatura assiale.
         assert!(
-            body.contains("if config.penumbra_tail > 0.0001 && t > t_close {"),
-            "manca la coda del cono oltre la punta (config.penumbra_tail)"
-        );
-        assert!(
-            body.contains("let q = clamp((t - t_close) / config.penumbra_tail, 0.0, 1.0);"),
-            "la coda deve dissolversi in base alla distanza oltre t_close"
+            !body.contains("config.penumbra_tail"),
+            "la coda oltre la punta NON deve esistere nella shader: inventa \
+             ombra oltre il punto di chiusura geometrico e si somma ai coni \
+             degli altri corpi"
         );
         // secco quando la sfumatura è attiva: buttava via `v_umbra` e la parte
         // nera arrivava netta fino alla punta.

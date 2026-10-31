@@ -231,7 +231,6 @@ const SHADOW_FIELDS: &[(&str, &str)] = &[
     ("set_penumbra_exp", "Penombra exp:"),
     ("set_penumbra_flat", "Penombra flat:"),
     ("set_penumbra_soft", "Bordi soft:"),
-    ("set_penumbra_tail", "Coda cono:"),
 ];
 
 /// Snapshot delle 4 risorse globali, clonato dalle `Res` (i valori CORRENTI
@@ -507,14 +506,6 @@ fn spawn_settings_dialog(
                         "set_penumbra_soft",
                         "Bordi soft:",
                         settings_field_value("set_penumbra_soft", &ctx),
-                    );
-                    // Coda del cono oltre la punta (v0.194): 0 = off, valori in
-                    // unità mondo. Live come gli altri parametri delle ombre.
-                    spawn_field_row(
-                        dialog,
-                        "set_penumbra_tail",
-                        "Coda cono:",
-                        settings_field_value("set_penumbra_tail", &ctx),
                     );
                     dialog
                         .spawn(Node {
@@ -1655,7 +1646,7 @@ mod tests {
             .chain(SHADOW_FIELDS)
             .map(|(k, _)| *k)
             .collect();
-        assert_eq!(all.len(), 15);
+        assert_eq!(all.len(), 14);
         for key in all {
             let v = settings_field_value(key, &ctx);
             assert!(!v.is_empty(), "campo {key} senza valore");
