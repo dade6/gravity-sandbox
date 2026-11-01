@@ -860,11 +860,8 @@ mod tests {
         // v0.14.186: la sfumatura DEVE stare dentro il cono e agire prima dei
         // `return` secchi: nella 0.179 la rampa interna era annullata dal
         // `return 1.0` dell'umbra e `soft` non cambiava niente a schermo.
-        // v0.14.201: la rampa si misura su `w_cone` con tetto `band`, non
-        // `band*0.5`: vicino al pianeta la banda è sottile e la rampa
-        // collassava, creando un bordo netto sul lato dell'umbra.
         assert!(
-            body.contains("let wipe = min(soft_w, band);"),
+            body.contains("let wipe = min(soft_w, band * 0.5);"),
             "rampa clampata alla banda: senza, a soft alto allarga il cono"
         );
         assert!(
@@ -872,50 +869,27 @@ mod tests {
             "rampa esterna: deve partire dentro il cono e finire sul bordo"
         );
         assert!(
-            body.contains("smoothstep(w_umbra_eff, w_umbra_eff + max(inner_w, 0.0001), b)"),
+            body.contains("smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b)"),
             "rampa interna: deve partire dal bordo dell'umbra, non prima"
         );
-        // v0.14.201: il peso `p_umbra` è tornato, ma con la finestra SPOSTATA
-        // oltre `t_close`: si chiude DOPO la croce rossa, non prima. Prima
-        // (0.195-0.198) il peso agiva prima della punta e spegneva il nero
-        // anzitempo; nella 192 si fermava a t_close lasciando la fascia scura
-        // oltre l'incrocio. Ora: pieno fino a `t_close - taper_t`, zero a
-        // `t_close + taper_t`.
+        // v0.14.191: la punta non deve essere TRONCATA. Il peso `p_umbra`
+        // spegne l'umbra gradualmente negli ultimi `taper_t` unità prima
+        // della chiusura. Senza, il valore salta 1.0 -> penombra in un pixel
+        // (misurato 0.550 sull'asse) e si vede il taglio netto alla punta.
         assert!(
-            body.contains("let p_umbra = smoothstep(0.0, 1.0, clamp((t_close + taper_t - t)"),
-            "il peso della punta deve chiudere DOPO t_close (t_close + taper_t)"
+            body.contains("let p_umbra = smoothstep(0.0, 1.0, clamp((t_close - t) / taper_t, 0.0, 1.0));"),
+            "manca il peso in `t` che ammorbidisce la punta del cono"
         );
-        assert!(
-            body.contains("let v_umbra = 1.0 * p_umbra;"),
-            "l'umbra deve spegnersi del tutto con la punta: il vecchio mix con \
-             `v_pen` lasciava 0.450 fisso oltre la croce rossa"
-        );
-        assert!(
-            body.contains("let v_umbra = 1.0 * p_umbra;"),
-            "la punta deve sfumare con il peso p_umbra"
-        );
-        // v0.14.198: la coda oltre la punta è stata RIMOSSA. Disegnava ombra
-        // dove la geometria dice che non ce n'è (oltre `t_close` l'umbra è 0) e
-        // con un secondo corpo dietro il primo si sommava al suo cono, creando
-        // la striscia netta che usciva dalla punta. La punta è risolta dalla
-        // sola sfumatura assiale.
-        assert!(
-            !body.contains("config.penumbra_tail"),
-            "la coda oltre la punta NON deve esistere nella shader: inventa \
-             ombra oltre il punto di chiusura geometrico e si somma ai coni \
-             degli altri corpi"
-        );
+        // v0.14.192: il ramo dell'umbra NON deve più uscire con `return 1.0`
         // secco quando la sfumatura è attiva: buttava via `v_umbra` e la parte
         // nera arrivava netta fino alla punta.
         assert!(
-            body.contains("return v_umbra * (1.0 - inner) + v_pen_section * inner;"),
-            "la guardia dell'umbra deve restituire lo stesso mix della zona \
-             esterna: con un `return` secco il bordo interno salta di 0.45"
+            body.contains("return v_umbra;"),
+            "l'umbra deve restituire il valore PESATO: `return 1.0` annulla la sfumatura"
         );
         assert!(
-            body.contains("light.shadow_sun.x > 0.0"),
-            "manca il raggio-ombra separato (Shadow Sun): senza, allungare \
-             l'umbra richiederebbe di cambiare il nucleo luminoso della stella"
+            body.contains("let v_umbra = 1.0 * p_umbra + v_pen * (1.0 - p_umbra);"),
+            "v_umbra deve mescolare nero pieno e penombra in base al peso"
         );
         assert!(
             body.contains("let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);"),
@@ -964,9 +938,9 @@ mod tests {
         );
         let stub = format!(
             "\
-struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32, render_end: f32 }}
+struct ConfigStub {{ penumbra_exp: f32, penumbra_flat: f32, penumbra_soft: f32 }}
 @group(1) @binding(10) var<uniform> config: ConfigStub;
-struct PointLightStub {{ pos: vec2f, core_radius: f32, shadow_sun: vec4f }}
+struct PointLightStub {{ pos: vec2f, core_radius: f32 }}
 struct RoundOccluderStub {{ pos: vec2f, radius: f32, half_width: f32, half_height: f32 }}
 @group(1) @binding(1) var<storage> lights: array<PointLightStub>;
 @group(1) @binding(2) var<storage> light_index: u32;
