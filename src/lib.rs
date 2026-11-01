@@ -860,8 +860,11 @@ mod tests {
         // v0.14.186: la sfumatura DEVE stare dentro il cono e agire prima dei
         // `return` secchi: nella 0.179 la rampa interna era annullata dal
         // `return 1.0` dell'umbra e `soft` non cambiava niente a schermo.
+        // v0.14.201: la rampa si misura su `w_cone` con tetto `band`, non
+        // `band*0.5`: vicino al pianeta la banda è sottile e la rampa
+        // collassava, creando un bordo netto sul lato dell'umbra.
         assert!(
-            body.contains("let wipe = min(soft_w, band * 0.5);"),
+            body.contains("let wipe = min(soft_w, band);"),
             "rampa clampata alla banda: senza, a soft alto allarga il cono"
         );
         assert!(
@@ -869,33 +872,27 @@ mod tests {
             "rampa esterna: deve partire dentro il cono e finire sul bordo"
         );
         assert!(
-            body.contains("smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b)"),
+            body.contains("smoothstep(w_umbra_eff, w_umbra_eff + max(inner_w, 0.0001), b)"),
             "rampa interna: deve partire dal bordo dell'umbra, non prima"
         );
-        // v0.14.195: il NERO deve restare pieno fino alla punta e la
-        // sfumatura avviene SOLO dopo (`penumbra_tail`). Il vecchio peso
-        // `p_umbra` schiariva l'umbra già prima di t_close (a t=1000 il
-        // valore era 0.53), e per questo "Coda cono" sembrava inerte.
+        // v0.14.201: il peso `p_umbra` è tornato, ma con la finestra SPOSTATA
+        // oltre `t_close`: si chiude DOPO la croce rossa, non prima. Prima
+        // (0.195-0.198) il peso agiva prima della punta e spegneva il nero
+        // anzitempo; nella 192 si fermava a t_close lasciando la fascia scura
+        // oltre l'incrocio. Ora: pieno fino a `t_close - taper_t`, zero a
+        // `t_close + taper_t`.
         assert!(
-            !body.contains("let p_umbra = smoothstep"),
-            "il peso in t prima della punta NON deve esistere: il nero deve \
-             restare pieno fino a t_close"
+            body.contains("let p_umbra = smoothstep(0.0, 1.0, clamp((t_close + taper_t - t)"),
+            "il peso della punta deve chiudere DOPO t_close (t_close + taper_t)"
         );
         assert!(
-            body.contains("let v_umbra = axial;"),
-            "l'umbra deve sfumare in direzione ASSIALE verso la punta: senza, \
-             la cuspide resta un taglio netto (le rampe laterali agiscono solo \
-             in `b` e non toccano la punta)"
+            body.contains("let v_umbra = 1.0 * p_umbra;"),
+            "l'umbra deve spegnersi del tutto con la punta: il vecchio mix con \
+             `v_pen` lasciava 0.450 fisso oltre la croce rossa"
         );
         assert!(
-            body.contains("let t_soft = t_close * 0.25;"),
-            "la rampa della punta deve essere proporzionale alla LUNGHEZZA \
-             dell'umbra: `soft_w` alla punta collassa (20 unita' su 1091) e la \
-             sfumatura resterebbe invisibile"
-        );
-        assert!(
-            body.contains("let v_umbra = axial;"),
-            "la punta deve sfumare per via ASSIALE"
+            body.contains("let v_umbra = 1.0 * p_umbra;"),
+            "la punta deve sfumare con il peso p_umbra"
         );
         // v0.14.198: la coda oltre la punta è stata RIMOSSA. Disegnava ombra
         // dove la geometria dice che non ce n'è (oltre `t_close` l'umbra è 0) e
@@ -911,10 +908,9 @@ mod tests {
         // secco quando la sfumatura è attiva: buttava via `v_umbra` e la parte
         // nera arrivava netta fino alla punta.
         assert!(
-            body.contains("let v_side = v_umbra * (1.0 - inner) + v * inner;"),
+            body.contains("return v_umbra * (1.0 - inner) + v_pen_section * inner;"),
             "la guardia dell'umbra deve restituire lo stesso mix della zona \
-             esterna: con `return v_umbra` secco il bordo interno salta di \
-             0.45 (filo d'ombra netto che costeggia il cono)"
+             esterna: con un `return` secco il bordo interno salta di 0.45"
         );
         assert!(
             body.contains("light.shadow_sun.x > 0.0"),

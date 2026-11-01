@@ -116,20 +116,10 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let perp = vec2f(-axis.y, axis.x);
     let q = pos - light.pos;
     let t = dot(q, axis) - d;    // distanza oltre il centro del corpo
-    // v0.14.199: `near_fade` era un tentativo contro la striscia, basato
-    // sull'ipotesi che il salto venisse da `t < 0`. Misurato: il salto di 1.000
-    // è a x=3000, y=±120, cioè sul CONTORNO del disco del corpo (b = r), dove
-    // esso è già gestito dallo sprite e dallo stencil. `t < 0` secco resta
-    // corretto: davanti al corpo non c'è ombra, e il cono nasce sul terminatore.
     if t < 0.0 {
         return 0.0;              // davanti al corpo: illuminato
     }
     let b = abs(dot(q, perp));   // distanza dall'asse del cono
-    // v0.14.195: raggio del disco solare usato dalle OMBRE. Se
-    // `shadow_sun_radius > 0` è un valore dedicato (manopola "Shadow Sun"
-    // del pannello Luce), altrimenti resta il core della luce come prima.
-    // Serve perché `core_radius` è anche il raggio del NUCLEO LUMINOSO:
-    // abbassarlo per allungare l'umbra cambierebbe l'aspetto della stella.
     let r_sun = select(
         max(light.core_radius, 0.0),
         max(light.shadow_sun.x, 0.0),
@@ -138,23 +128,6 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     let w_umbra = max(r_body - t * (r_sun - r_body) / d, 0.0);
     // Bordo del cono = silhouette del corpo vista dal centro del sole.
     let w_cone = r_body + t * r_body / d;
-    // v0.14.200 — IL CONO SI FERMA A `d_RenderEnder` DAL SOLE.
-    // Il calcolatore di riferimento (Desmos "Shadow System 3.0") limita
-    // esplicitamente il disegno con `(x-x_sun)² + (y-y_sun)² <= d_RenderEnder²`
-    // (default 400). Qui quel limite NON c'era: oltre `t_close` la penombra
-    // restava fissa a `flat` (0.450) e `w_cone` continuava a crescere con la
-    // distanza, quindi la fascia si propagava ALL'INFINITO lungo l'asse.
-    // È la "striscia d'ombra" segnalata: sottile e lunga, ancorata al pianeta,
-    // che esce dalla punta e attraversa la scena. Non è un artefatto grafico,
-    // è geometria senza limite.
-    // Ora il cono si spegne in `tail_fade` unità prima del bordo di render,
-    // come fa il riferimento: nessuna ombra oltre quel raggio.
-    let dist_from_sun = length(q);
-    let render_end = max(config.render_end, 1.0);
-    let tail_fade = clamp((render_end - dist_from_sun) / max(render_end * 0.15, 1.0), 0.0, 1.0);
-    if dist_from_sun > render_end {
-        return 0.0;
-    }
     // v0.14.186: bordi morbidi calcolati PRIMA dei rami secchi, altrimenti
     // l'umbra uscirebbe con `return 1.0` e la rampa interna non avrebbe mai
     // effetto (bug v0.14.179: `soft` non cambiava NIENTE a schermo).
@@ -169,69 +142,48 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
     // Con soft = 0 le rampe degenerano in scalini (bordi netti, come prima).
     let soft_w = max(config.penumbra_soft, 0.0) * w_cone;
     let band = max(w_cone - w_umbra, 0.0001);
-    // v0.14.197: `wipe` calcolato QUI e non dentro `if soft_w > 0.0001`, perché
-    // serve anche alla guardia dell'umbra (più sotto) per la rampa continua sul
-    // bordo interno. Prima era dichiarato nel blocco e fuori non esisteva:
-    // naga falliva con "no definition in scope for identifier: wipe".
-    let wipe = min(soft_w, band * 0.5);
-    // v0.14.197: anche `inner` deve vivere FUORI dal blocco `if soft_w > 0`:
-    // la guardia dell'umbra lo usa per il bordo continuo, e dentro il blocco
-    // naga lo segnalava assente ("no definition in scope for identifier: inner").
+    // v0.14.201: queste servono anche FUORI dal blocco `if soft_w > 0` (la
+    // guardia dell'umbra le usa per il raccordo continuo), quindi stanno qui.
+    let wipe = min(soft_w, band);
     let w_umbra_eff = max(w_umbra, 0.0);
-    let inner = smoothstep(w_umbra_eff, w_umbra_eff + max(wipe, 0.0001), b);
+    let inner_w = max(wipe, band * 0.5);
+    let inner = smoothstep(w_umbra_eff, w_umbra_eff + max(inner_w, 0.0001), b);
     let x = clamp((b - w_umbra) / band, 0.0, 1.0);
     let p = config.penumbra_flat;
     let flat_on = step(1e-5, p);
     let shaped = pow(1.0 - x, config.penumbra_exp);
     var v = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
 
-    // v0.14.195 — NERO PIENO FINO ALLA PUNTA, SFUMATURA SOLO DOPO.
-    // Prima (0.192-0.194) il peso `p_umbra` faceva schiarire l'umbra GIÀ PRIMA
-    // di `t_close`: a t=1000 il valore era 0.53 e a t=1050 0.47, quindi il
-    // nero finiva molto prima della punta. Per questo il parametro "Coda cono"
-    // sembrava inerte: agiva su un valore già chiaro.
-    // Ora:
-    //   - fino a `t_close` (la punta, dove le linee rosse si incontrano) il
-    //     valore resta 1.0 = nero pieno;
-    //   - oltre `t_close` non c'è più nessuna ombra: la "coda" che prolungava
-    //     la punta è risolta solo dalla sfumatura assiale (v.14.198).
-    // `t_close = r·d/(r_sun − r)` (infinito se il sole è più piccolo del corpo).
+    // v0.14.192: PESO DELLA PUNTA, calcolato UNA volta e usato sia nel ramo
+    // laterale sia nel ramo dell'umbra. Prima l'umbra usciva con `return 1.0`
+    // secco e buttava via questo peso: la parte nera restava netta fino alla
+    // punta (croce rossa) mentre la sfocatura si fermava prima.
+    //   t_close  = r·d/(r_sun − r)  (infinito se il sole è più piccolo)
+    //   taper_t  = 15% di t_close, fra 20 e 200 unità
+    //   p_umbra  = 1 lontano dalla chiusura → 0 sulla punta
     let closed = r_sun > r_body;
     let t_close = select(1.0e9, r_body * d / max(r_sun - r_body, 0.0001), closed);
+    // v0.14.201 — LA PUNTA SI SPEGNE OLTRE LA CROCE, NON SI FERMA LÌ.
+    // Nella 192 `p_umbra` arrivava a 0 esattamente su `t_close` (l'incrocio
+    // delle linee rosse) e il valore si FERMAVA a `v_pen` (0.450) per sempre:
+    // misurato, sull'asse resta 0.450 a distanza 4200, 5000, e oltre. È la
+    // fascia scura rettangolare che si vede oltre la croce rossa nello
+    // screenshot, con un taglio netto proprio all'incrocio.
+    // Ora il peso continua DOPO `t_close` e porta il cono a 0 in `taper_t`
+    // unità: la punta si chiude sfumando invece di essere troncata.
+    //   t <= t_close - taper_t : p_umbra = 1   (nero/penombra pieni)
+    //   t = t_close            : p_umbra ≈ 1   (il cono è pieno alla croce)
+    //   t = t_close + taper_t  : p_umbra = 0   (sparito)
+    let taper_t = clamp(t_close * 0.15, 20.0, 200.0);
+    let p_umbra = smoothstep(0.0, 1.0, clamp((t_close + taper_t - t) / (taper_t * 2.0), 0.0, 1.0));
     let v_pen = select(shaped, clamp(p, 0.0, 1.0), flat_on > 0.5);
-    // v0.14.196 — LA PUNTA SI SFUMA COME IL BORDO.
-    // Le rampe `outer`/`inner` sfumano solo LATERALMENTE (in `b`): in
-    // direzione assiale non c'era nulla, quindi su `t_close` il valore
-    // restava 1.0 fino all'ultimo pixel e poi crollava — la cuspide netta
-    // dello screenshot. Ora il nero sfuma verso la penombra sull'ultimo tratto
-    // prima della punta, con la STESSA larghezza `soft_w` usata dai bordi
-    // (in unità mondo, misurata sulla semilarghezza del cono lì).
-    // `t_soft` = quanto dura la sfumatura assiale, in proporzione alla
-    // LUNGHEZZA dell'umbra e non alla larghezza: `soft_w` alla punta collassa
-    // (0.12 × w_cone = 20 unità su un cono di 1091) e la sfumatura sarebbe
-    // invisibile — misurato: 1.8% del cono, salto 0.52 per pixel, nessun
-    // effetto a schermo.
-    // 25% di t_close dà una rampa morbida davvero: salto massimo 0.044 per
-    // pixel (contro 0.044 dei bordi laterali), senza mangiarsi il nucleo nero.
-    let t_soft = t_close * 0.25;
-    // keep = 1 lontano dalla punta -> 0 sulla punta. `soft_w` può essere 0
-    // (bordi netti): in quel caso il selettore lo scarta e resta 1 (nessuna
-    // sfumatura, come prima).
-    let axial = select(
-        smoothstep(0.0, 1.0, clamp((t_close - t) / max(t_soft, 0.0001), 0.0, 1.0)),
-        1.0,
-        soft_w > 0.0001 && t_soft > 0.0001,
-    );
-    let v_umbra = axial;
+    // Valore dell'umbra: nero pieno lontano, poi si spegne a 0 con la punta.
+    // v0.14.201: il mix col nero (1.0) deve andare a ZERO insieme a p_umbra,
+    // altrimenti oltre la punta resta `v_pen` fisso (0.450) e il cono non
+    // finisce mai: era la fascia scura oltre la croce rossa.
+    let v_umbra = 1.0 * p_umbra;
 
     if soft_w > 0.0001 {
-        // v0.14.198 — CODA RIMOSSA. Era stata aggiunta nella 0.194 per far
-        // "continuare" il cono oltre la punta, ma disegnava ombra dove la
-        // geometria dice che non ce n'è: oltre `t_close` l'umbra è 0, e quella
-        // fascia scura usciva dritta dalla punta. Con Beta dietro Alpha si
-        // sommava anche al cono di Beta → la striscia netta nello screenshot.
-        // La punta ora è risolta dalla sola sfumatura assiale (`axial`), che
-        // non inventa ombra oltre il punto di chiusura.
         // Bordo esterno: da `v` a 0 in `soft_w` unità, centrato su w_cone.
         // La rampa sta DENTRO il cono: inizia a `wipe` unità dal bordo e
         // finisce esattamente su w_cone (oltre, valore 0). Se la rampa
@@ -239,62 +191,65 @@ fn desmos_round_check(pos: vec2f, index: u32) -> f32 {
         // osservato a soft=1 il velo arrivava a b=250 con w_cone=240.
         // Il clamp finale a `band*0.5` impedisce che le due rampe si
         // sovrappongano oltre metà banda anche a soft=1.
+        // v0.14.201: la rampa si misura su `w_cone`, non su `band`.
+        // Con `min(soft_w, band*0.5)` vicino al pianeta `band` e' piccola (15
+        // unita' a dist=3100) e `wipe` scendeva a 7.5: su un cono largo 248
+        // era un taglio netto (salto laterale misurato 0.466 sul bordo esterno).
+        // `soft_w` = penumbra_soft * w_cone ed e' gia' la dimensione giusta.
+        // Il tetto `band * 0.5` resta solo per non far sovrapporre le due rampe
+        // quando la penombra e' piu' stretta della rampa stessa.
         let outer = 1.0 - smoothstep(w_cone - wipe, w_cone, b);
         v = v * outer;
+        // v0.14.201: la penombra si spegne con la punta come il nero. Senza
+        // questo, oltre la punta restava `v` = 0.450 fisso e il cono non
+        // finiva mai (la fascia rettangolare oltre la croce rossa).
+        v = v * p_umbra;
         // Bordo interno: dall'umbra alla penombra in `wipe` unità.
         // Usa `v_umbra` (1.0 già pesato dalla distanza alla punta) e un
         // rientro laterale la cui larghezza NON si azzera dove serve: prima
         // era `min(wipe, w_umbra)`, che alla punta diventava 0 e lasciava il
         // bordo netto proprio lì.
+        // v0.14.201: la rampa interna (nero -> penombra) deve essere larga
+        // abbastanza da non sembrare un taglio. Con `wipe` = 16.8 unita' su un
+        // cono largo 280 il valore crollava da 1.000 a 0.450 in 30 unita':
+        // misurato salto 0.51 su 5 unita'. Qui la rampa prende almeno meta'
+        // della banda di penombra, che e' la distanza fisica fra il bordo
+        // dell'umbra e quello del cono.
         v = v_umbra * (1.0 - inner) + v * inner;
     }
 
+    // v0.14.201 — PESO DELLA PUNTA SU TUTTA LA SEZIONE.
+    // `v_umbra` pesa solo la zona interna: fuori da `soft_w > 0` la penombra
+    // resterebbe a 0.450 per sempre, e nello screenshot si vedeva come una
+    // fascia scura rettangolare oltre la croce rossa (misurato: 0.450 a
+    // distanza 5000, qualunque b).
+    // Qui il peso `p_umbra` viene applicato all'INTERA sezione, sia dentro sia
+    // fuori l'umbra, così il cono si chiude in modo uniforme e appuntito.
+    // È continuo in t (smoothstep): nessun salto, nessun taglio.
+
     // Umbria: la zona NERA.
-    //
-    // v0.14.197 — LA GUARDIA DEVE FERMARSI DOVE INIZIA LA SFUMATURA.
-    // `b <= w_umbra` scattava su TUTTA la zona umbra, anche dove `w_umbra` è
-    // ormai sottile e `v_umbra` (la sfumatura assiale) è sceso a ~0: lì dentro
-    // il valore era 0.001-0.017, mentre appena fuori la penombra vale `flat`
-    // (0.45). Salto secco misurato **+0.450** → ed è il filo d'ombra netto che
-    // costeggia il cono, visibile nello screenshot.
-    // Ora la guardia ferma il nero PIENO solo dove ha senso restituirlo, cioè
-    // dove `v_umbra` è ancora alto; più in là decide la rampa `inner`, che non
-    // ha scalini. Il caso `w_umbra > 0` resta per non cambiare la geometria.
-    // v0.14.200 — OL TRE LA PUNTA NON C'È PIÙ NIENTE.
-    // Con `w_umbra = 0` (oltre `t_close`) la guardia qui sotto non scatta e
-    // `inner = smoothstep(0, wipe, 0) = 0` SULL'ASSE, mentre a `b > 0` vale 1 ed
-    // espone `v_pen` (0.450). Misurato a distanza 6000 (punto di chiusura 4091):
-    //   b=0 -> 0.000   b=50..150 -> 0.450   b=239 -> 0.002
-    // Cioè un BUCO sull'asse con penombra ai due lati: due strisce parallele
-    // sottili che sembrano fare parte dell'ombra e la seguono. Era la "striscia"
-    // che usciva dalla punta. Oltre la chiusura dell'umbra il cono non esiste.
-    // v0.14.200 — LA PENOMBRA SEGUE L'UMBRA FINO ALLA PUNTA.
-    // Il difetto di fondo: dentro `b <= w_umbra` il valore è `v_umbra` (che
-    // verso la punta scende a 0), ma FUORI è `v` = penombra PIENA (0.450) a
-    // qualunque distanza. Quando `w_umbra` si assottiglia, il centro si spegne
-    // e i due lati restano accesi: misurato a distanza 4050 (punto di chiusura
-    // 4091) b=0 -> 0.061 ma b=80 -> 0.450. È una fascia CAVA, cioè due strisce
-    // parallele nette che sembrano parte dell'ombra e la seguono.
-    // Ora la penombra si spegne insieme all'umbra: il fattore `v_umbra` pesa
-    // tutte le zone, così il cono finisce appuntito invece di aprirsi a forcella.
-    // Prima che l'umbra inizi a chiudersi `v_umbra` = 1 e nulla cambia.
-    if w_umbra <= 0.0 && t > t_close {
-        return 0.0;
-    }
-    let inner_stop = max(w_umbra, 0.0) + max(wipe, 0.0001);
-    if w_umbra > 0.0 && b <= w_umbra {
-        // Bordo interno SENZA scalino: stesso mix della zona esterna, così il
-        // valore è continuo attraverso `b = w_umbra`.
-        let v_side = v_umbra * (1.0 - inner) + v * inner;
-        return v_side * tail_fade;
-    }
+    // v0.14.201 — NIENTE RAMI SEPARATI. Ogni ramo con una formula diversa crea
+    // un bordo netto esattamente dove si passa da uno all'altro: dentro l'umbra
+    // `v_umbra` (0.985), fuori `v*p` (0.437) — salto 0.547 misurato a b=w_umbra.
+    // Ora l'espressione è UNA SOLA per tutta la sezione:
+    //   `v_umbra` (nero pesato dalla punta) dentro l'umbra,
+    //   `v * p_umbra` (penombra pesata dalla punta) fuori,
+    // raccordate dalla rampa laterale `inner`. Continua per costruzione.
     if b >= w_cone {
         return 0.0;
     }
-    // La penombra oltre l'umbra vale `v`, ma pesata da `v_umbra`: si spegne
-    // insieme al cono. `v_umbra` = 1 finché c'è nero, quindi il aspetto
-    // normale del cono è invariato.
-    return v * v_umbra * tail_fade;
+    let v_pen_section = v * p_umbra;
+    if w_umbra > 0.0 && b <= w_umbra {
+        // rampa dolce verso la penombra anche qui: `inner` è 0 sull'asse e
+        // sale a 1 sul bordo interno, quindi il mix è continuo.
+        return v_umbra * (1.0 - inner) + v_pen_section * inner;
+    }
+    // fuori dall'umbra: STESSO mix del ramo interno. Con `return v_pen_section`
+    // secco, a `b = w_umbra` il valore saltava da `v_umbra` (0.985) a
+    // `v_pen_section` (0.437): salto 0.547, un bordo netto sul lato dell'umbra.
+    // `inner` vale 0 esattamente su `b = w_umbra` e sale a 1 verso l'esterno,
+    // quindi il mix raccorda le due zone senza scalini.
+    return v_umbra * (1.0 - inner) + v_pen_section * inner;
 }
 // @@SHADOW_V2_END
 
@@ -448,14 +403,6 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
         var prev_index = 0u; 
         var accumulated_occlusion = 0.0;
-        // v0.14.199: occlusione MASSIMA fra i coni circolari che coprono questo
-        // pixel, e il colore/opacità del cono che l'ha prodotta. Prima ogni
-        // occluder moltiplicava il fondo per (1 - opacity): due coni sovrapposti
-        // davano (1-a)*(1-b), e con a=0.45 (penombra Alpha) e b=1.00 (umbra
-        // Beta) il risultato era 0.00 — la striscia nera netta.
-        var occ_max = 0.0;
-        var occ_color = vec3f(0.0);
-        var occ_opacity = 0.0;
 
         // if left >= right {
         //     return vec4<f32>(1.0, 0.0, 0.0, 1.0);
@@ -498,25 +445,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
 
                 if result > 0.0 {
-                    // v0.14.199 — LE OMBRE NON SI MOLTIPLICANO PIÙ ALL'INFINITO.
-                    // `shadow_blend` moltiplica il fondo per (1 - opacity) a ogni
-                    // occluder: con due coni sovrapposti il fattore diventa
-                    // (1-a)*(1-b). Sul preset reale Alpha e Beta hanno lo STESSO
-                    // asse (entrambi a 0° dal sole), quindi si sovrappongono su
-                    // una banda lunga e sottile: lì la penombra di Alpha (0.45)
-                    // incontra l'umbra piena di Beta (1.00) → 0.55*0.00 = 0.00,
-                    // cioè nero assoluto. Misurato sullo screenshot: la striscia
-                    // ha valore 1-7 su un fondo di 113-140. È la "striscia nera"
-                    // che corre oltre la punta del cono.
-                    // Ora l'occlusione è il MASSIMO fra i coni che coprono il
-                    // pixel: vince l'ombra più densa, e una penombra debole non
-                    // viene cancellata dal nero di un altro corpo. L'opacità del
-                    // colore si applica dopo, una volta sola.
-                    if result > occ_max {
-                        occ_max = result;
-                        occ_color = round_occluders[occluder_index].color.rgb;
-                        occ_opacity = round_occluders[occluder_index].opacity;
-                    }
+                    shadow = shadow_blend(shadow, round_occluders[occluder_index].color.rgb, round_occluders[occluder_index].opacity * result);
                 }            
             }
             // poly occluder
@@ -554,14 +483,6 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             
         if prev_index != 0u && accumulated_occlusion > 0.0 {
             shadow = shadow_blend(shadow, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
-        }
-        // v0.14.199: le ombre dei CERCHI si applicano una volta sola, con
-        // l'occlusione massima fra i coni che coprono il pixel (vedi il
-        // commento dentro il loop). Prima ogni cono moltiplicava il fondo,
-        // quindi due coni sovrapposti producevano nero assoluto dove
-        // geometricamente c'è solo penombra: la striscia nera netta.
-        if occ_max > 0.0 {
-            shadow = shadow_blend(shadow, occ_color, occ_opacity * occ_max);
         }
 
         // v0.14.134 (supersede v0.14.132): le ombre dei pianeti oscurano
