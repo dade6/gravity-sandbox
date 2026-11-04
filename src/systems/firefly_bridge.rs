@@ -304,6 +304,7 @@ impl Plugin for FireflyBridgePlugin {
                     spawn_planet_occluders,
                     sync_occluders,
                     sync_body_sprite_sizes,
+                    apply_disc_sectors,
                     sync_colliders,
                     apply_star_light_settings,
                     apply_star_glow_settings,
@@ -706,6 +707,49 @@ fn occluder_radius(body_radius: f32) -> f32 {
     // 1.5 texel + 1% del raggio: copre il bordo antialias su ogni bucket
     // senza allargare l'ombra in modo percepibile (su r=200 sono ~3 unità).
     body_radius + texel_world * 1.5 + body_radius * 0.01
+}
+
+/// v0.14.205 — SOSTITUISCE LA TEXTURE DI OGNI CORPO QUANDO CAMBIA IL TOGGLE.
+///
+/// `sync_body_sprite_sizes` filtra su `Changed<CelestialBody>`: quando cambia
+/// solo la risorsa `DiagnosticSectors` NESSUN corpo è cambiato, quindi nessun
+/// corpo entrava nel sistema e il `|| cache.spicchi_mode() != spicchi` dentro
+/// il loop non veniva mai valutato. Sintomo: "nessun pianeta è cambiato quando
+/// ho attivato l'opzione" (v0.14.204).
+///
+/// Qui il gate è la RISORSA, non il corpo: un sistema separato, con `Local` per
+/// non rifare lavoro ogni frame, che rigenera la cache e riscrive l'immagine
+/// della sprite su tutti i corpi di ogni dimensione in uso.
+fn apply_disc_sectors(
+    mut cache: ResMut<BodyTextureCache>,
+    mut images: ResMut<Assets<Image>>,
+    diag: Option<Res<DiagnosticSectors>>,
+    mut last: Local<Option<bool>>,
+    bodies: Query<(Entity, &CelestialBody, &BodyTextureSize), With<FireflySpriteAttached>>,
+    mut sprites: Query<(
+        &mut Sprite,
+        Has<FireflyGlowInner>,
+        Has<FireflyGlowOuter>,
+    )>,
+) {
+    let spicchi = diag.map(|d| d.0).unwrap_or(false);
+    // Al primo frame `last` è `None`: si allinea alla cache (già costruita con
+    // quella modalità da `convert_bodies_to_sprites`) senza rigenerare nulla.
+    if last.is_none() {
+        *last = Some(cache.spicchi_mode());
+    }
+    if *last == Some(spicchi) {
+        return;
+    }
+    *last = Some(spicchi);
+    for (entity, _body, size) in bodies.iter() {
+        let set = cache.get_or_build_with(size.0, &mut images, spicchi);
+        if let Ok((mut sprite, is_inner, is_outer)) = sprites.get_mut(entity) {
+            if !is_inner && !is_outer {
+                sprite.image = set.disc.clone();
+            }
+        }
+    }
 }
 
 /// La sprite del corpo deve seguire il raggio, come già fa `sync_occluders`
@@ -1849,6 +1893,94 @@ mod tests {
             "l'alone inner deve seguire il raggio (2*r*inner_scale)"
         );
         println!("OK radius -> sprite/alone/texture seguono il raggio");
+    }
+
+    /// v0.14.205 — il toggle deve raggiungere la sprite SENZA che il corpo
+    /// cambi.
+    ///
+    /// Il bug della v0.14.204: `sync_body_sprite_sizes` filtra su
+    /// `Changed<CelestialBody>`, quindi cambiando solo la risorsa nessun corpo
+    /// entrava nel sistema e il `|| cache.spicchi_mode() != spicchi` non veniva
+    /// mai valutato. Sintomo riportato: "nessun pianeta è cambiato quando ho
+    /// attivato l'opzione".
+    ///
+    /// Questo test parte da una sprite già convertita e NON tocca il corpo:
+    /// solo `DiagnosticSectors`, come fa il bottone.
+    #[test]
+    fn disc_sectors_toggle_reaches_sprite_without_touching_body() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<Image>();
+        app.init_resource::<BodyTextureCache>();
+        app.init_resource::<DiagnosticSectors>();
+        app.add_systems(Update, apply_disc_sectors);
+
+        let planet = app
+            .world_mut()
+            .spawn((
+                CelestialBody {
+                    radius: 20.0,
+                    ..Default::default()
+                },
+                Sprite::default(),
+                FireflySpriteAttached,
+                BodyTextureSize(texture_size_for_radius(20.0)),
+            ))
+            .id();
+
+        // Frame 1: nessuna modalità impostata -> il sistema si allinea e basta.
+        // La texture iniziale la mette `convert_bodies_to_sprites`: qui la
+        // creiamo a mano, altrimenti "prima" sarebbe l'handle di DEFAULT e il
+        // confronto non direbbe niente.
+        let tex = texture_size_for_radius(20.0);
+        let mut disc_iniziale: Option<Handle<Image>> = None;
+        {
+            let world = app.world_mut();
+            let mut cache = world.remove_resource::<BodyTextureCache>().unwrap();
+            let set = {
+                let mut assets = world.resource_mut::<Assets<Image>>();
+                cache.get_or_build_with(tex, &mut assets, false)
+            };
+            disc_iniziale = Some(set.disc.clone());
+            world.insert_resource(cache);
+            world.get_mut::<Sprite>(planet).unwrap().image = disc_iniziale.clone().unwrap();
+        }
+        app.update();
+        let prima = app.world().get::<Sprite>(planet).unwrap().image.clone();
+
+        // Il bottone: cambia SOLO la risorsa.
+        app.world_mut().resource_mut::<DiagnosticSectors>().0 = true;
+        app.update();
+
+        let dopo = app.world().get::<Sprite>(planet).unwrap().image.clone();
+        assert_ne!(
+            prima, dopo,
+            "attivando il toggle la sprite deve ricevere la texture a spicchi \
+             (la risorsa è cambiata, il corpo NO)"
+        );
+        assert!(
+            app.world().resource::<BodyTextureCache>().spicchi_mode(),
+            "la cache deve essere passata in modalità spicchi"
+        );
+
+        // E tornando OFF deve tornare al disco monocolore. NON si confronta
+        // l'handle (la cache si svuota e rigenera: handle nuovo, stesso
+        // contenuto), si confronta il PIXEL: nessuno spicchio rosso.
+        app.world_mut().resource_mut::<DiagnosticSectors>().0 = false;
+        app.update();
+        let ritorno = app.world().get::<Sprite>(planet).unwrap().image.clone();
+        let world = app.world();
+        let img = world.resource::<Assets<Image>>().get(&ritorno).unwrap();
+        let px = img.data.as_ref().expect("pixel");
+        let rossi = px
+            .chunks_exact(4)
+            .filter(|p| p[3] > 0 && p[1] < 60 && p[2] < 60)
+            .count();
+        assert_eq!(
+            rossi, 0,
+            "disattivando il toggle si deve tornare al disco monocolore \
+             (trovati {rossi} texel rossi)"
+        );
     }
 
     /// Forma REALE di un pianeta: nessun child e nessun `StarGlow`. La query
