@@ -1848,6 +1848,37 @@ mod tests {
         );
     }
 
+    /// v0.14.203: la normal map deve coprire OGNI texel che il disco disegna.
+    ///
+    /// Se un texel ha alpha del disco > 0 ma normal map alpha 0, la shader lo
+    /// tratta come "senza superficie" e gli SALTA l'ombra: sul bordo del
+    /// pianeta resta un filo illuminato (l'anello chiaro segnalato). Prima
+    /// erano 152 texel su 12644 a size=128.
+    #[test]
+    fn normal_map_covers_every_disc_texel() {
+        let size = 128usize;
+        let disc = crate::rendering::textures::generate_disc_texture(size);
+        let d = disc.data.as_ref().expect("disco").clone();
+        let n = crate::rendering::textures::generate_sphere_normal_map(size);
+        let a_disc = |x: usize, y: usize| d[(y * size + x) * 4 + 3];
+        let a_norm = |x: usize, y: usize| n[(y * size + x) * 4 + 3];
+        let mut scoperti = 0;
+        let mut primo = None;
+        for y in 0..size {
+            for x in 0..size {
+                if a_disc(x, y) > 0 && a_norm(x, y) == 0 {
+                    scoperti += 1;
+                    primo.get_or_insert((x, y, a_disc(x, y)));
+                }
+            }
+        }
+        assert_eq!(
+            scoperti, 0,
+            "texel con disco visibile ma SENZA normale (salterebbero l'ombra, \
+             lasciando un filo illuminato sul bordo): {scoperti}, primo {primo:?}"
+        );
+    }
+
     /// Il disco ha un bordo antialiasato (almeno un texel di transizione).
     #[test]
     fn disc_texture_edge_is_antialiased() {

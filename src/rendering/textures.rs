@@ -205,15 +205,33 @@ pub(crate) fn generate_sphere_normal_map(size: usize) -> Vec<u8> {
             // basse, dopo il flip lo schermo mostra ny=+1 in ALTO -> il lato
             // verso la stella (in alto) si illumina, ombra in basso.
             let dy = (y as f32 - center) / radius;
-            let r2 = dx * dx + dy * dy;
             let i = (y * size + x) * 4;
-            if r2 > 1.0 {
-                // Fuori dalla sfera: nessuna normale (nero, alpha 0)
+            // v0.14.203 — LA NORMAL MAP DEVE COPIRE TUTTO IL DISCO.
+            // Prima `r2 > 1.0` (test binario sulla sfera) lasciava fuori i
+            // texel di bordo che il DISCO invece disegna: il disco usa
+            // `coverage = radius + 0.5 - dist`, quindi copre anche l'ultimo
+            // texel con alpha parziale. Misurato a size=128: 152 texel hanno
+            // disco > 0 ma nessuna normale (coverage 0.045-0.456).
+            // Nella shader un pixel senza superficie (normal.b == 0) salta
+            // l'ombra e resta illuminato: quei 152 texel formavano l'anello
+            // chiaro visibile sul bordo del pianeta.
+            // Ora la normal map si estende fin dove arriva il disco.
+            // ATTENZIONE: `dx` e `dy` sono GIÀ divisi per `radius`, quindi per
+            // allargare il disco fino a `radius + 0.5` si scala per il RAPPORTO
+            // dei raggi, non si divide per `rr²` (che non è normalizzato: dava
+            // r2 = 0.000124 e rendeva opaco tutto il buffer).
+            let r2_disco = {
+                let scala = radius / (radius + 0.5);
+                (dx * dx + dy * dy) * scala * scala
+            };
+            if r2_disco > 1.0 {
+                // Fuori dal disco: nessuna normale (nero, alpha 0)
                 pixels[i + 3] = 0;
                 continue;
             }
-            let z = (1.0 - r2).sqrt();
-            let len = (dx * dx + dy * dy + z * z).sqrt();
+            let r2c = r2_disco.min(1.0);
+            let z = (1.0 - r2c).max(0.0).sqrt();
+            let len = (dx * dx + dy * dy + z * z).max(0.0001).sqrt();
             let (nx, ny, nz) = (dx / len, dy / len, z / len);
             pixels[i] = ((nx * 0.5 + 0.5) * 255.0) as u8;
             pixels[i + 1] = ((ny * 0.5 + 0.5) * 255.0) as u8;
