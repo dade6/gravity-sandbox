@@ -26,7 +26,7 @@ use bevy::ui::widget::TextScroll;
 
 use crate::components::lighting::{AmbientLight, GlowCurve};
 use crate::components::trajectory::TrajectoryConfig;
-use crate::systems::firefly_bridge::ShadowAlgo;
+use crate::systems::firefly_bridge::{DiagnosticSectors, ShadowAlgo};
 use crate::systems::keypad::Keypad;
 use crate::systems::persistence::GravitationalConstant;
 use crate::systems::shadow_gizmos::ShadowGizmos;
@@ -74,6 +74,10 @@ pub struct ShadowAlgoBtn;
 #[derive(Component)]
 pub struct ShadowGizmoBtn;
 
+/// Bottone toggle della TEXTURE A SPICCHI (diagnostica albedo/luce sul bordo).
+#[derive(Component)]
+pub struct DiscSectorsBtn;
+
 /// Header di sezione del modale (stile ILLUMINAZIONE PIANETI / ALONE STELLA).
 #[derive(Component)]
 pub struct SettingsSection;
@@ -107,6 +111,7 @@ impl Plugin for SettingsPlugin {
                 apply_shadow_algo_live,
                 sync_penumbra_exp_field,
                 update_shadow_gizmo_toggle,
+                update_disc_sectors_toggle,
                 sync_settings_fields_on_resource_change,
             ),
         );
@@ -586,6 +591,54 @@ fn spawn_settings_dialog(
                                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
                             ));
                         });
+
+                    // === DIAGNOSI: texture a spicchi ===
+                    spawn_section_header(dialog, "DIAGNOSI BORDO");
+                    dialog
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(4.0),
+                            width: Val::Percent(100.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Text::new("Disco 16 spicchi:"),
+                                TextFont {
+                                    font: FontSource::default(),
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(TEXT_COLOR),
+                            ));
+                            row.spawn((
+                                Button,
+                                DiscSectorsBtn,
+                                Node {
+                                    margin: UiRect::left(Val::Px(8.0)),
+                                    padding: UiRect::axes(Val::Px(14.0), Val::Px(4.0)),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
+                                    border: UiRect::all(Val::Px(1.0)),
+                                    border_radius: BorderRadius::px(6.0, 6.0, 6.0, 6.0),
+                                    ..default()
+                                },
+                                // Stato vero scritto da `update_disc_sectors_toggle`
+                                // al primo frame dopo l'apertura del modale.
+                                BackgroundColor(toggle_color(false)),
+                                BorderColor::all(BORDER_COLOR),
+                            ))
+                            .with_child((
+                                Text::new(toggle_label(false)),
+                                TextFont {
+                                    font: FontSource::default(),
+                                    font_size: FontSize::Px(11.0),
+                                    ..default()
+                                },
+                                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
+                            ));
+                        });
                 });
         });
 }
@@ -758,6 +811,40 @@ fn update_shadow_algo_toggle(
     }
     for mut bg in bgs.iter_mut() {
         bg.0 = shadow_algo_color(algo.v2);
+    }
+}
+
+/// Click sul toggle del disco a spicchi: inverte `DiagnosticSectors`. Il cambio
+/// invalida `BodyTextureCache` e `sync_body_sprite_sizes` rimette la nuova
+/// texture su ogni corpo al frame dopo (nessun reload).
+fn update_disc_sectors_toggle(
+    toggle: Query<(&Interaction, &Children), With<DiscSectorsBtn>>,
+    mut texts: Query<&mut Text>,
+    mut bgs: Query<&mut BackgroundColor, With<DiscSectorsBtn>>,
+    mut diag: ResMut<DiagnosticSectors>,
+) {
+    crate::mark_system("update_disc_sectors_toggle");
+    let mut pressed = false;
+    for (interaction, _) in toggle.iter() {
+        if *interaction == Interaction::Pressed {
+            pressed = true;
+        }
+    }
+    if pressed {
+        diag.0 = !diag.0;
+    }
+    let label = toggle_label(diag.0);
+    for (_, children) in toggle.iter() {
+        for child in children.iter() {
+            if let Ok(mut text) = texts.get_mut(child) {
+                if text.0 != label {
+                    text.0 = label.to_string();
+                }
+            }
+        }
+    }
+    for mut bg in bgs.iter_mut() {
+        bg.0 = toggle_color(diag.0);
     }
 }
 

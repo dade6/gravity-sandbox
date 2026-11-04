@@ -26,7 +26,8 @@ use crate::components::lighting::{
     AmbientLight, GlowCurve, LightFalloff, StarGlow, StarLightSettings,
 };
 use crate::rendering::textures::{
-    build_image, generate_disc_texture, generate_radial_glow_texture, generate_sphere_normal_map,
+    build_image, generate_disc_texture, generate_disc_texture_with,
+    generate_radial_glow_texture, generate_sphere_normal_map,
 };
 
 /// Configurazione luce: disco circolare della dimensione della stella.
@@ -121,18 +122,63 @@ pub struct BodyTextureSet {
 /// i corpi: a raggi grandi la silhouette andava a scalini e la normal map a
 /// bande (il difetto si vede cambiando la scala del preset, ma anche solo
 /// alzando il raggio dal pannello).
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct BodyTextureCache {
     sets: HashMap<usize, BodyTextureSet>,
+    /// Diagnosi del bordo: `true` = dischi a 16 spicchi bianco/rosso
+    /// (vedi `DiagnosticSectors`). Cambiarlo invalida la cache.
+    spicchi: bool,
 }
 
+impl Default for BodyTextureCache {
+    fn default() -> Self {
+        Self {
+            sets: HashMap::new(),
+            spicchi: false,
+        }
+    }
+}
+
+/// Toggle di DIAGNOSI dal pannello Impostazioni: sostituisce il disco
+/// monocolore con 16 spicchi bianco/rosso.
+///
+/// Serve a discriminare albedo vs luce sul filo chiaro del bordo (vedi
+/// `generate_disc_texture_with`): il colore degli spicchi viene MOLTIPLICATO
+/// dalla lightmap, il colore della stella arriva DALLA lightmap. Se il filo
+/// resta giallo anche sopra lo spicchio rosso, non è albedo.
+///
+/// Default `false`: la resa normale non cambia finché non lo attivi.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticSectors(pub bool);
+
 impl BodyTextureCache {
+    /// Modalità diagnostica corrente (`true` = spicchi). Serve ai sistemi per
+    /// capire se la texture in mano al corpo è ancora quella giusta.
+    pub fn spicchi_mode(&self) -> bool {
+        self.spicchi
+    }
+
     /// Texture per il lato `size`, generandole la prima volta.
     pub fn get_or_build(&mut self, size: usize, images: &mut Assets<Image>) -> BodyTextureSet {
+        self.get_or_build_with(size, images, self.spicchi)
+    }
+
+    /// Come `get_or_build`, ma con la modalità spicchi esplicita: se cambia
+    /// rispetto alla cache, la svuota (le texture cambiano tutte insieme).
+    pub fn get_or_build_with(
+        &mut self,
+        size: usize,
+        images: &mut Assets<Image>,
+        spicchi: bool,
+    ) -> BodyTextureSet {
+        if self.spicchi != spicchi {
+            self.sets.clear();
+            self.spicchi = spicchi;
+        }
         if let Some(set) = self.sets.get(&size) {
             return set.clone();
         }
-        let disc = images.add(generate_disc_texture(size));
+        let disc = images.add(generate_disc_texture_with(size, spicchi));
         let normal = images.add(build_image(
             generate_sphere_normal_map(size),
             size as u32,
@@ -235,6 +281,7 @@ impl Plugin for FireflyBridgePlugin {
             .init_resource::<GlowCurve>()
             .init_resource::<AmbientLight>()
             .init_resource::<ShadowAlgo>()
+            .init_resource::<DiagnosticSectors>()
             // Idempotente: si attiva al primo frame in cui la camera esiste.
             .add_systems(Update, setup_firefly_camera)
             // Ticket 19: rigenera la glow texture al cambio curva globale e
@@ -678,6 +725,7 @@ fn sync_body_sprite_sizes(
     mut commands: Commands,
     mut cache: ResMut<BodyTextureCache>,
     mut images: ResMut<Assets<Image>>,
+    diag: Option<Res<DiagnosticSectors>>,
     bodies: Query<
         (
             Entity,
@@ -697,12 +745,13 @@ fn sync_body_sprite_sizes(
         Has<FireflyGlowOuter>,
     )>,
 ) {
+    let spicchi = diag.map(|d| d.0).unwrap_or(false);
     for (entity, body, children, glow, applied) in bodies.iter() {
         // 1) Corpo: diametro + texture alla risoluzione del raggio.
         let tex_size = texture_size_for_radius(body.radius);
-        let needs_new_texture = applied.map(|a| a.0) != Some(tex_size);
+        let needs_new_texture = applied.map(|a| a.0) != Some(tex_size) || cache.spicchi_mode() != spicchi;
         let new_set = if needs_new_texture {
-            Some(cache.get_or_build(tex_size, &mut images))
+            Some(cache.get_or_build_with(tex_size, &mut images, spicchi))
         } else {
             None
         };

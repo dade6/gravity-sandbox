@@ -137,6 +137,31 @@ pub(crate) fn build_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
 /// col raggio in unità mondo (`custom_size = radius*2`) — vedi
 /// `texture_size_for_radius` in firefly_bridge.rs.
 pub(crate) fn generate_disc_texture(size: usize) -> Image {
+    generate_disc_texture_with(size, false)
+}
+
+/// Numero di spicchi del disco di DIAGNOSI (vedi `generate_disc_texture_with`).
+pub(crate) const DIAG_SECTORS: usize = 16;
+
+/// Disco con eventuale TEXTURE A SPICCHI per la diagnosi del bordo.
+///
+/// `spicchi = false` → disco bianco come sempre (la sprite è tinta col colore
+/// del corpo, quindi in scena appare monocolore).
+///
+/// `spicchi = true` → 16 spicchi alternati BIANCO / ROSSO. Serve a rispondere a
+/// una domanda sola: **il filo chiaro sul bordo del pianeta è albedo o luce?**
+/// - Il colore degli spicchi arriva dal pixel della sprite e viene MOLTIPLICATO
+///   dalla lightmap: è **albedo**.
+/// - Il colore della stella arriva dalla lightmap (`light_color`): è **luce**.
+/// Guardando il bordo: se il filo è ROSSO dove c'è lo spicchio rosso, il
+/// colore viene dall'albedo (texture/maschera). Se resta GIALLO anche sopra lo
+/// spicchio rosso, la luce non sta moltiplicando quell'albedo ma **si somma o
+/// sovrascrive** sopra di essa.
+///
+/// La copertura dell'alpha è IDENTICA al disco normale (stessa `radius` e
+/// stessa formula), così la silhouette e il bordo antialiasato non cambiano:
+/// altrimenti il test confronterebbe due cose insieme.
+pub(crate) fn generate_disc_texture_with(size: usize, spicchi: bool) -> Image {
     let mut pixels = vec![0u8; size * size * 4];
     let center = (size as f32 - 1.0) / 2.0;
     // v0.14.202 — NON toccare il disco: il bordo non coperto lo chiude
@@ -145,6 +170,7 @@ pub(crate) fn generate_disc_texture(size: usize) -> Image {
     // (un lato con copertura piena, l'altro no) e lasciava comunque 1-1.5
     // texel scoperti: il margine sull'occluder risolve su tutti i bucket.
     let radius = size as f32 / 2.0 - 1.0;
+    let settore = std::f32::consts::TAU / DIAG_SECTORS as f32;
     for y in 0..size {
         for x in 0..size {
             let dx = x as f32 - center;
@@ -154,9 +180,27 @@ pub(crate) fn generate_disc_texture(size: usize) -> Image {
             // vede appena il disco supera ~100 px a schermo.
             let coverage = (radius + 0.5 - dist).clamp(0.0, 1.0);
             let i = (y * size + x) * 4;
-            pixels[i] = 255;
-            pixels[i + 1] = 255;
-            pixels[i + 2] = 255;
+            if spicchi {
+                // atan2 in [0, TAU); gli spicchi pari sono bianchi, i dispari
+                // rossi. Il colore resta pieno: la sprite lo moltiplica per la
+                // tinta del corpo, quindi in scena si vede "corpo × bianco" e
+                // "corpo × rosso" — due albedi ben distinti.
+                let ang = dy.atan2(dx).rem_euclid(std::f32::consts::TAU);
+                let idx = (ang / settore) as usize % DIAG_SECTORS;
+                if idx % 2 == 0 {
+                    pixels[i] = 255;
+                    pixels[i + 1] = 255;
+                    pixels[i + 2] = 255;
+                } else {
+                    pixels[i] = 255;
+                    pixels[i + 1] = 0;
+                    pixels[i + 2] = 0;
+                }
+            } else {
+                pixels[i] = 255;
+                pixels[i + 1] = 255;
+                pixels[i + 2] = 255;
+            }
             pixels[i + 3] = (coverage * 255.0) as u8;
         }
     }
@@ -665,6 +709,58 @@ impl Plugin for TexturePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// La copertura dell'alpha deve essere IDENTICA fra disco normale e disco
+    /// a spicchi: se cambiasse, il test diagnostico confronterebbe due cose
+    /// insieme (colore E silhouette) e non direbbe niente sul bordo.
+    #[test]
+    fn spicchi_preserve_disc_coverage() {
+        for size in [64usize, 128, 256] {
+            let normale = generate_disc_texture_with(size, false);
+            let spicchi = generate_disc_texture_with(size, true);
+            let a = normale.data.expect("disco normale");
+            let b = spicchi.data.expect("disco spicchi");
+            let mut diversi = 0;
+            for i in (3..a.len()).step_by(4) {
+                if a[i] != b[i] {
+                    diversi += 1;
+                }
+            }
+            assert_eq!(diversi, 0, "size {size}: {diversi} texel con alpha diverso");
+        }
+    }
+
+    /// Ogni spicchio deve cambiare colore e devono essercene esattamente
+    /// `DIAG_SECTORS` alternati: un disco tutto bianco non discriminerebbe
+    /// albedo da luce.
+    #[test]
+    fn spicchi_alternate_white_and_red_sixteen_times() {
+        let size = 256usize;
+        let img = generate_disc_texture_with(size, true);
+        let px = img.data.expect("spicchi");
+        let center = (size as f32 - 1.0) / 2.0;
+        // Anello a metà raggio: campiona un colore per settore.
+        let r = size as f32 / 4.0;
+        let mut settori: Vec<(u8, u8)> = Vec::new();
+        for k in 0..DIAG_SECTORS {
+            let ang = std::f32::consts::TAU * (k as f32 + 0.5) / DIAG_SECTORS as f32;
+            let x = (center + r * ang.cos()) as usize;
+            let y = (center + r * ang.sin()) as usize;
+            let i = (y * size + x) * 4;
+            settori.push((px[i + 1], px[i + 2])); // G, B (R è 255 in entrambi)
+        }
+        for k in 0..DIAG_SECTORS {
+            let (g, b) = settori[k];
+            let atteso_bianco = k % 2 == 0;
+            let is_bianco = g > 200 && b > 200;
+            let is_rosso = g < 60 && b < 60;
+            assert!(
+                if atteso_bianco { is_bianco } else { is_rosso },
+                "settore {k}: rgb(G={g},B={b}) atteso {}",
+                if atteso_bianco { "bianco" } else { "rosso" }
+            );
+        }
+    }
 
     /// Verifica che la normal map della sfera sia matematicamente corretta:
     /// - centro: punta verso l'osservatore (RGB ≈ (128,128,255), blu puro)
