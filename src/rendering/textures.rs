@@ -139,6 +139,11 @@ pub(crate) fn build_image(pixels: Vec<u8>, width: u32, height: u32) -> Image {
 pub(crate) fn generate_disc_texture(size: usize) -> Image {
     let mut pixels = vec![0u8; size * size * 4];
     let center = (size as f32 - 1.0) / 2.0;
+    // v0.14.202 — NON toccare il disco: il bordo non coperto lo chiude
+    // `occluder_radius` in firefly_bridge.rs, allargando l'occluder di 1.5
+    // texel. Cambiare qui il raggio a `size/2` rendeva il disco asimmetrico
+    // (un lato con copertura piena, l'altro no) e lasciava comunque 1-1.5
+    // texel scoperti: il margine sull'occluder risolve su tutti i bucket.
     let radius = size as f32 / 2.0 - 1.0;
     for y in 0..size {
         for x in 0..size {

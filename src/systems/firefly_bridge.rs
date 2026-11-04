@@ -616,9 +616,12 @@ fn spawn_planet_occluders(
             continue;
         }
         // Occluder2d::circle ha gia' z_sorting: true di default (from_shape)
-        commands
-            .entity(entity)
-            .insert((FireflyOccluderAttached, Occluder2d::circle(body.radius)));
+        // v0.14.202: raggio con margine per coprire il bordo antialiasato del
+        // disco (vedi `occluder_radius`).
+        commands.entity(entity).insert((
+            FireflyOccluderAttached,
+            Occluder2d::circle(occluder_radius(body.radius)),
+        ));
     }
 }
 
@@ -632,8 +635,30 @@ fn sync_occluders(
         if body.luminous {
             continue;
         }
-        *occ = Occluder2d::circle(body.radius);
+        *occ = Occluder2d::circle(occluder_radius(body.radius));
     }
+}
+
+/// v0.14.202 — l'occluder sborda di un texel per coprire il bordo del disco.
+///
+/// La silhouette del pianeta è l'alpha di `generate_disc_texture`, steso su
+/// `custom_size = radius*2`: il bordo viene antialiasato su ~1 texel, dove
+/// l'alpha scende da 255 a 0. Se l'occluder ha esattamente `radius`, quegli
+/// ultimi texel (alpha > 0 ma fuori dal cerchio) NON ricevono ombra e si
+/// vedono come un filo colorato sul bordo del pianeta — giallo su Rocky,
+/// arancione su Beta, verde su Alpha — evidente appena si alza la luce stella.
+///
+/// Il residuo dipende dalla risoluzione della texture: `1.5 texel` su un lato,
+/// cioè (in frazione del raggio) 1.17% a size=128, 0.59% a 256, 0.29% a 512.
+/// Qui si aggiunge esattamente quel margine: 1.5 texel convertiti in unità
+/// mondo, con un minimo dell'1% per i bucket più piccoli.
+fn occluder_radius(body_radius: f32) -> f32 {
+    let tex_size = texture_size_for_radius(body_radius) as f32;
+    // lati in pixel di un texel alla risoluzione usata per questo raggio
+    let texel_world = (body_radius * 2.0 / tex_size).max(0.0);
+    // 1.5 texel + 1% del raggio: copre il bordo antialias su ogni bucket
+    // senza allargare l'ombra in modo percepibile (su r=200 sono ~3 unità).
+    body_radius + texel_world * 1.5 + body_radius * 0.01
 }
 
 /// La sprite del corpo deve seguire il raggio, come già fa `sync_occluders`
