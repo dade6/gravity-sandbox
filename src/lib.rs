@@ -822,7 +822,87 @@ mod tests {
     /// `desmos_round_check` dipende solo da `lights`/`round_occluders`/
     /// `light_index`: la si avvolge in uno stub coi campi realmente usati.
     /// Una shader non compilabile = schermo nero e `cargo check` non la vede.
+    /// v0.14.208 — GATE OBBLIGATORIO: la shader dei coni deve essere WGSL VALIDO
+    /// NELLA SUA INTEREZZA, non solo nel blocco `desmos_round_check`.
+    ///
+    /// La v0.14.207 è arrivata su device con lo schermo NERO e la UI assente:
+    /// `normal.rgb != vec3f(0.0)` NON è WGSL valido (il confronto `!=` fra
+    /// vettori non esiste, serve `any(a != b)`). L'errore non è nel blocco v2,
+    /// quindi il gate esistente non lo vedeva; e non lo vede nemmeno `cargo
+    /// check`, perché la shader viene compilata a RUNTIME dalla GPU.
     #[test]
+    fn create_lightmap_shader_body_is_valid_wgsl() {
+        let raw = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/create_lightmap.wgsl")
+            .expect("vendor shader");
+        // Estrae SOLO la funzione `fragment` (non la dichiarazione dei binding,
+        // che dipendono dal preprocessore e dalle struct reali).
+        let start = raw.find("@fragment").expect("funzione fragment mancante");
+        let body = &raw[start..];
+        let end = body
+            .find("\nfn poly_check")
+            .or_else(|| body.find("\nfn "))
+            .unwrap_or(body.len());
+        let mangled = body[..end]
+            .replace("@fragment", "")
+            .replace("@location(0)", "");
+        // Il preprocessore di Bevy risolve `#ifdef` prima di naga: qui si
+        // tengono SOLO le righe del ramo "true" e si scartano i guard, così il
+        // codice che resta è WGSL puro. I blocchi annidati sono rari in questo
+        // file (1 livello), quindi un contatore basta.
+        let mut senza_ifdef = String::new();
+        let mut profondita = 0i32;
+        let mut nel_ramo_else = false;
+        for riga in mangled.lines() {
+            let t = riga.trim_start();
+            if t.starts_with("#ifdef") {
+                profondita += 1;
+                continue;
+            }
+            if t.starts_with("#else") {
+                // Da qui in poi è il ramo "false": si scarta.
+                nel_ramo_else = true;
+                continue;
+            }
+            if t.starts_with("#endif") {
+                profondita = (profondita - 1).max(0);
+                nel_ramo_else = false;
+                continue;
+            }
+            if profondita == 0 {
+                senza_ifdef.push_str(riga);
+                senza_ifdef.push('\n');
+            }
+        }
+        let _ = nel_ramo_else;
+        let mangled = senza_ifdef;
+        assert!(
+            mangled.contains("normal_multi") || mangled.contains("desmos_round_check"),
+            "estrazione della fragment fallita: il blocco non contiene il codice atteso"
+        );
+        // Le uniform/funzioni esterne usate dal corpo vengono stub-ate: quello
+        // che si vuole verificare è la SINTASSI e i TIPI delle espressioni
+        // scritte a mano (es. `!=` su vettori), non il loro valore.
+        let stub = std::fs::read_to_string("src/shaders/create_lightmap_stub.wgsl")
+            .expect("stub della shader (src/shaders/create_lightmap_stub.wgsl)");
+        let full = format!("{stub}\n{mangled}\n");
+        match naga::front::wgsl::parse_str(&full) {
+            Ok(module) => {
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .unwrap_or_else(|e| {
+                    panic!("WGSL VALIDATION FAILED (create_lightmap fragment): {e:?}")
+                });
+            }
+            Err(e) => panic!(
+                "WGSL PARSE FAILED (create_lightmap fragment): {e}\n\
+                 Un errore qui = shader non compilata a runtime = SCHERMO NERO e UI ASSENTE."
+            ),
+        }
+    }
+
     fn shadow_v2_cone_is_valid_wgsl() {
         let raw = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/create_lightmap.wgsl")
             .expect("vendor shader");

@@ -266,7 +266,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
         // invece RGB validi con z ~128 (nz ≈ 0). Se è nero puro, il pixel non
         // è superficie: nessun rilievo, e `normal_multi` resta 1 per non
         // spegnere la luce su un pixel che non sappiamo leggere.
-        let has_surface = normal.a > 0 && normal.rgb != vec3f(0.0);
+        // ⚠️ WGSL: il confronto `!=` su vettori NON esiste (produce un errore
+        // di compilazione della shader a RUNTIME: schermo nero e UI assente,
+        // perché anche la UI passa dalla stessa pipeline). Va usato `any()`.
+        let has_surface = normal.a > 0 && any(normal.rgb != vec3f(0.0));
         if config.normal_mode != 0 && has_surface && normal.b != 0.1 {
             let normal_dir = mix(normalize(normal.xyz * 2f - 1f), vec3f(0f), config.normal_attenuation);
 
