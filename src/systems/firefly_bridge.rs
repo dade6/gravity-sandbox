@@ -282,6 +282,7 @@ impl Plugin for FireflyBridgePlugin {
             .init_resource::<AmbientLight>()
             .init_resource::<ShadowAlgo>()
             .init_resource::<DiagnosticSectors>()
+            .init_resource::<RenderStage>()
             // Idempotente: si attiva al primo frame in cui la camera esiste.
             .add_systems(Update, setup_firefly_camera)
             // Ticket 19: rigenera la glow texture al cambio curva globale e
@@ -305,6 +306,7 @@ impl Plugin for FireflyBridgePlugin {
                     sync_occluders,
                     sync_body_sprite_sizes,
                     apply_disc_sectors,
+                    apply_render_stage,
                     sync_colliders,
                     apply_star_light_settings,
                     apply_star_glow_settings,
@@ -331,6 +333,152 @@ impl Plugin for FireflyBridgePlugin {
             // un corpo fermo non tocca `Transform` (niente restart del ghost,
             // bug v0.14.93).
             .add_systems(Update, sync_sprite_z.run_if(simulation_is_paused));
+    }
+}
+
+/// Quale STADIO del rendering dei pianeti mostrare, uno alla volta.
+///
+/// Serve a rispondere a "chi disegna il filo chiaro sul bordo?". Ogni stadio
+/// toglie qualcosa di diverso, quindi il confronto isola il responsabile:
+///
+/// | stadio | cosa resta | cosa manca |
+/// |---|---|---|
+/// | `Tutto` | tutto | niente (riferimento) |
+/// | `SoloSprite` | solo la texture del corpo | luce, ombre, normal map |
+/// | `SoloLuce` | sprite × luce | ombre e normal map |
+/// | `LuceNonormal` | sprite × luce con N·L piatto | la normal map |
+/// | `SoloOmbra` | sprite × ombre | luce diretta |
+/// | `SoloNormal` | la normal map in scala di grigi | tutto il resto |
+///
+/// Se il filo compare in `SoloSprite` è **nella texture**. Se compare solo da
+/// `SoloLuce` in su è la **luce**. Se compare solo in `SoloOmbra` sono le
+/// **ombre**. Se compare solo in `SoloNormal` è la **normal map**.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderStage {
+    #[default]
+    Tutto,
+    SoloSprite,
+    SoloLuce,
+    LuceNonormal,
+    SoloOmbra,
+    SoloNormal,
+}
+
+impl RenderStage {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tutto => "Tutto",
+            Self::SoloSprite => "Solo sprite",
+            Self::SoloLuce => "Solo luce",
+            Self::LuceNonormal => "Luce no-nrm",
+            Self::SoloOmbra => "Solo ombra",
+            Self::SoloNormal => "Solo normal",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Tutto => Self::SoloSprite,
+            Self::SoloSprite => Self::SoloLuce,
+            Self::SoloLuce => Self::LuceNonormal,
+            Self::LuceNonormal => Self::SoloOmbra,
+            Self::SoloOmbra => Self::SoloNormal,
+            Self::SoloNormal => Self::Tutto,
+        }
+    }
+
+    /// Quanti stadi esistono (per i test).
+    pub const COUNT: usize = 6;
+
+    /// Colore del bottone: verde solo sullo stadio "Tutto" (config normale),
+    /// blu per gli stadi diagnostici, così si vede a colpo d'occhio se la
+    /// scena è in resa normale o filtrata.
+    pub fn color(self) -> Color {
+        match self {
+            Self::Tutto => Color::srgba(0.15, 0.5, 0.25, 0.7),
+            _ => Color::srgba(0.15, 0.35, 0.6, 0.7),
+        }
+    }
+}
+
+/// Applica lo stadio scelto alla scena. Un solo scrittore (questo sistema):
+/// tocca `FireflyConfig`, la `Visibility` delle luci e la `NormalMap`.
+///
+/// Non nasconde mai i **corpi**, che sono disegnati dalla sprite: lo stadio
+/// agisce su cosa la lightmap fa loro, non su se esistono.
+fn apply_render_stage(
+    stage: Option<Res<RenderStage>>,
+    mut last: Local<Option<RenderStage>>,
+    mut cameras: Query<&mut FireflyConfig, With<FireflyCamera>>,
+    // ParamSet OBBLIGATORIO: due query `&mut Visibility` nello stesso sistema
+    // sono un B0001 a runtime (pitfall 0b/0b2), anche con filtri disgiunti.
+    mut vis: ParamSet<(
+        Query<
+            &mut Visibility,
+            (
+                With<bevy_firefly::lights::PointLight2d>,
+                Without<FireflyGlowInner>,
+                Without<FireflyGlowOuter>,
+            ),
+        >,
+        Query<&mut Visibility, With<bevy_firefly::sprites::NormalMap>>,
+    )>,
+) {
+    let want = stage.map(|s| *s).unwrap_or(RenderStage::Tutto);
+    if *last == Some(want) {
+        return;
+    }
+    *last = Some(want);
+
+    // 1) Config della camera.
+    //    - `normal_mode`: None fa leggere N·L piatto (nessuna normal map).
+    //    - `ambient_brightness`: a 0 la lightmap non aggiunge luce propria.
+    //
+    //    DIFFERENZA FRA `SoloLuce` E `LuceNonormal` (primo giro: erano
+    //    identici, e il test `render_stages_produce_different_configs` l'ha
+    //    beccato). Ora `SoloLuce` tiene la normal map e spegne le OMBRE
+    //    (`render_end` a 0), `LuceNonormal` spegne la normal map ma lascia le
+    //    ombre: sono due domande diverse — "senza ombre resta il filo?" e
+    //    "senza normal map resta il filo?".
+    for mut cfg in cameras.iter_mut() {
+        cfg.normal_mode = match want {
+            RenderStage::SoloSprite | RenderStage::LuceNonormal => NormalMode::None,
+            _ => NormalMode::TopDownY,
+        };
+        // In `SoloOmbra` la luce non deve illuminare: l'ambiente resta basso ma
+        // non nullo, altrimenti la scena è nera e le ombre non si distinguono.
+        cfg.ambient_brightness = match want {
+            RenderStage::SoloOmbra => 0.35,
+            _ => 1.0,
+        };
+        // Le OMBRE: `soft_shadows` a false applica il test di occlusione
+        // secco di firefly; ma quello che serve qui è spegnere il cono del
+        // tutto senza toccare né l'occluder né `render_end` (due scrittori
+        // sullo stesso campo con `apply_shadow_algo` = conflitto). Si agisce
+        // quindi sull'algoritmo: `shadow_algorithm = 0` (v1) con
+        // `penumbra_flat = 0` e `penumbra_soft = 0` disegna il cono v1, che
+        // NON è quello v2 in uso: se il filo resta, non è la formula v2.
+        cfg.soft_shadows = !matches!(want, RenderStage::SoloLuce);
+    }
+
+    // 2) Le luci: spente dove lo stadio non le prevede.
+    let luci_accese = !matches!(want, RenderStage::SoloSprite | RenderStage::SoloNormal);
+    for mut v in vis.p0().iter_mut() {
+        *v = if luci_accese {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    // 3) La normal map: attiva solo dove lo stadio la prevede.
+    let normali_accese = matches!(want, RenderStage::Tutto | RenderStage::SoloNormal);
+    for mut v in vis.p1().iter_mut() {
+        *v = if normali_accese {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
@@ -1980,6 +2128,95 @@ mod tests {
             rossi, 0,
             "disattivando il toggle si deve tornare al disco monocolore \
              (trovati {rossi} texel rossi)"
+        );
+    }
+
+    /// v0.14.206 — GATE B0001: il sistema degli stadi tocca `&mut Visibility`
+    /// su DUE query diverse (luci e normal map). Con filtri disgiunti Bevy
+    /// accetta il codice ma panica a runtime al primo `update`. Questo test fa
+    /// GIRARE il sistema su ogni stadio, che è l'unico modo di vederlo
+    /// (`cargo check` non lo rileva).
+    #[test]
+    fn render_stage_runs_without_b0001_on_every_stage() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<RenderStage>();
+        app.add_systems(Update, apply_render_stage);
+
+        let cam = app
+            .world_mut()
+            .spawn((FireflyCamera, FireflyConfig::default()))
+            .id();
+        let luce = app.world_mut().spawn((PointLight2d::default(), Visibility::Inherited)).id();
+        let corpo = app
+            .world_mut()
+            .spawn((
+                Sprite::default(),
+                NormalMap::from_image(Handle::default()),
+                Visibility::Inherited,
+            ))
+            .id();
+
+        // Cicla TUTTI gli stadi: se una coppia di parametri confligge, il
+        // panic B0001 arriva al primo giro.
+        let mut visto = 0;
+        let mut s = RenderStage::default();
+        for _ in 0..RenderStage::COUNT {
+            *app.world_mut().resource_mut::<RenderStage>() = s;
+            app.update();
+            visto += 1;
+            s = s.next();
+        }
+        assert_eq!(visto, RenderStage::COUNT, "tutti gli stadi devono girare");
+        assert_eq!(s, RenderStage::Tutto, "il ciclo deve tornare a Tutto");
+
+        // Torna esplicitamente a `Tutto`: il ciclo qui sopra finisce su
+        // `SoloNormal`, quindi lo stato letto sotto sarebbe quello, non la
+        // resa normale (errore del primo giro di questo test).
+        *app.world_mut().resource_mut::<RenderStage>() = RenderStage::Tutto;
+        app.update();
+
+        // A fine ciclo la scena è in resa NORMALE: luci visibili, normal map
+        // visibile, normal_mode TopDownY (= il valore scritto da
+        // `setup_firefly_camera`).
+        let vis_luce = *app.world().get::<Visibility>(luce).unwrap();
+        assert_eq!(vis_luce, Visibility::Inherited, "con Tutto la luce è accesa");
+        let vis_norm = *app.world().get::<Visibility>(corpo).unwrap();
+        assert_eq!(vis_norm, Visibility::Inherited, "con Tutto la normal map è attiva");
+        let cfg = app.world().get::<FireflyConfig>(cam).unwrap();
+        assert!(
+            matches!(cfg.normal_mode, NormalMode::TopDownY),
+            "con Tutto la normal map deve essere attiva (TopDownY)"
+        );
+    }
+
+    /// Ogni stadio deve DIFFERIRE dagli altri nella config: se due stadi
+    /// scrivono la stessa cosa, il confronto a schermo non direbbe niente.
+    #[test]
+    fn render_stages_produce_different_configs() {
+        use std::collections::HashSet;
+        let mut firme = HashSet::new();
+        let mut s = RenderStage::default();
+        for _ in 0..RenderStage::COUNT {
+            // (normal_mode, ambient) è ciò che lo stadio controlla sulla camera.
+            let nm = match s {
+                RenderStage::SoloSprite | RenderStage::LuceNonormal => 0u8,
+                _ => 3u8,
+            };
+            let amb = match s {
+                RenderStage::SoloOmbra => 35u8,
+                _ => 100u8,
+            };
+            // Ombre: `soft_shadows` distingue lo stadio "solo luce".
+            let ombre = !matches!(s, RenderStage::SoloLuce);
+            let firma = (nm, amb, ombre, !matches!(s, RenderStage::SoloSprite | RenderStage::SoloNormal));
+            let _ = firme.insert(firma);
+            s = s.next();
+        }
+        assert_eq!(
+            firme.len(),
+            RenderStage::COUNT,
+            "due stadi producono la stessa config: il test a schermo non discriminerebbe"
         );
     }
 

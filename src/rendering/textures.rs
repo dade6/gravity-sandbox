@@ -229,6 +229,16 @@ pub(crate) fn generate_radial_glow_texture(size: u32, curve: &GlowCurve) -> Imag
     build_image(pixels, size, size)
 }
 
+/// Pendenza massima della normale sul bordo del disco: `nz` non scende sotto
+/// questa frazione di `√(dx²+dy²)`, cioè la normale non supera ~70° dalla
+/// direzione di vista. Vedi `generate_sphere_normal_map`.
+///
+/// **v0.14.207**: è ciò che impedisce a `normal_multi` di spegnersi sul bordo
+/// antialiasato (dove `dx → 1` e `nz → 0`), che era la causa del filo colorato
+/// del pianeta. Valore scelto perché `dot(n, luce)` al bordo resti ≥ ~0.35
+/// anche con `normal_attenuation = 0.2`.
+pub(crate) const NORMAL_RIM_Z_MIN: f32 = 0.35;
+
 /// Genera i pixel RGBA (non-sRGB) della normal map di una sfera: per ogni
 /// pixel dentro il disco, normale = normalize(x, y, √(1−x²−y²)) codificata
 /// come RGB = normal·0.5+0.5 (convenzione standard, luce da alto-sinistra).
@@ -274,7 +284,23 @@ pub(crate) fn generate_sphere_normal_map(size: usize) -> Vec<u8> {
                 continue;
             }
             let r2c = r2_disco.min(1.0);
-            let z = (1.0 - r2c).max(0.0).sqrt();
+            // v0.14.207 — LA NORMALE SUL BORDO NON DEVE ESSERE DI TAGLIO.
+            //
+            // `normalize(dx, dy, z)` con `dx → 1` dà `nz → 0`: la normale giace
+            // nel piano e `dot(n, luce) ≈ 0`. Sul bordo antialiasato questo
+            // spegneva `normal_multi` (che MOLTIPLICA la lightmap), lasciando
+            // il pixel fuori dalla moltiplicazione: la texture tornava visibile
+            // come filo colorato (riga 144 su fondo 19, con `Planet Light = 0`).
+            //
+            // Pavimento su `nz`: la normale non supera ~70° dalla direzione di
+            // vista, quindi il bordo riceve luce come una superficie sferica
+            // reale (non come un bordo infinitamente sottile).
+            //
+            // Quantità MOLTIPLICATIVA, non additiva: `z_naive` è già in [0,1] e
+            // il pavimento è `NORMAL_RIM_Z_MIN · √r2`, quindi `max(...)`
+            // mantiene il valore sempre <= 1 e la normale resta un versore
+            // (i canali RGB restano nella convenzione ×0.5+0.5).
+            let z = (1.0 - r2c).max(0.0).sqrt().max(NORMAL_RIM_Z_MIN * (dx * dx + dy * dy).sqrt());
             let len = (dx * dx + dy * dy + z * z).max(0.0001).sqrt();
             let (nx, ny, nz) = (dx / len, dy / len, z / len);
             pixels[i] = ((nx * 0.5 + 0.5) * 255.0) as u8;
@@ -710,7 +736,78 @@ impl Plugin for TexturePlugin {
 mod tests {
     use super::*;
 
-    /// La copertura dell'alpha deve essere IDENTICA fra disco normale e disco
+    /// v0.14.207 — LA NORMAL MAP DEVE COPIRE OGNI TEXEL CHE ENTRA NELLO STENCIL.
+    ///
+    /// Il difetto: lo stencil dei corpi scrive dal .190 con soglia 0.004
+    /// (bordo antialiasato incluso), ma la normal map restava a `color.a >= 1.0`.
+    /// Sui texel di bordo `res.normal` era `vec4(0)` → la shader trattava il
+    /// pixel come "senza superficie", la lightmap non lo moltiplicava, e la
+    /// texture del pianeta tornava visibile come filo colorato (a spicchi).
+    ///
+    /// Il test usa la STESSA soglia dello stencil (0.004) e pretende che ogni
+    /// texel sopra soglia abbia anche una normale non nulla.
+    #[test]
+    fn normal_map_covers_every_stencil_texel() {
+        use super::generate_disc_texture;
+        for size in [256usize, 512] {
+            let disc = generate_disc_texture(size);
+            let d = disc.data.as_ref().expect("disco").clone();
+            let n = generate_sphere_normal_map(size);
+            // Lo stencil scrive se `color.a >= 0.004` (STENCIL_MIN_ALPHA in
+            // sprite.wgsl). alpha 0.004 su 255 = 1.
+            let mut stencil_senza_normale = 0;
+            let mut primo = None;
+            for y in 0..size {
+                for x in 0..size {
+                    let i = (y * size + x) * 4;
+                    let a_disc = d[i + 3];
+                    let a_norm = n[i + 3];
+                    if a_disc >= 1 && a_norm == 0 {
+                        stencil_senza_normale += 1;
+                        primo.get_or_insert((x, y, a_disc));
+                    }
+                }
+            }
+            assert_eq!(
+                stencil_senza_normale, 0,
+                "size {size}: {stencil_senza_normale} texel entrano nello stencil \
+                 ma non hanno la normal map (primo {primo:?}) — la lightmap non li \
+                 moltiplica e la texture torna visibile sul bordo"
+            );
+        }
+    }
+
+    /// La normal map al bordo NON deve essere di taglio: `nz` deve restare
+    /// sopra il pavimento, altrimenti `dot(n, luce) = 0` e `normal_multi`
+    /// spegne la lightmap proprio sul bordo.
+    #[test]
+    fn rim_normal_is_not_edge_on() {
+        let size = 256usize;
+        let n = generate_sphere_normal_map(size);
+        let center = (size as f32 - 1.0) / 2.0;
+        let radius = size as f32 / 2.0 - 1.0;
+        // Versante verso la stella: riga centrale, colonna a sinistra.
+        let y = size / 2;
+        let mut minimo = 1.0f32;
+        let mut trovati = 0;
+        for x in 0..size {
+            let i = (y * size + x) * 4;
+            if n[i + 3] == 0 {
+                continue;
+            }
+            let nz = (n[i + 2] as f32 / 255.0) * 2.0 - 1.0;
+            minimo = minimo.min(nz);
+            trovati += 1;
+        }
+        assert!(trovati > 0, "nessun texel di disco sulla riga centrale");
+        // `nz` codificato: 0.35/sqrt(1+0.35²) = 0.33 -> ~170 -> 0.33 in [-1,1]
+        assert!(
+            minimo > 0.25,
+            "la normale scende a nz={minimo:.3} sul bordo: è di taglio e \
+             normal_multi spegne la luce esattamente lì"
+        );
+        let _ = (center, radius);
+    }
     /// a spicchi: se cambiasse, il test diagnostico confronterebbe due cose
     /// insieme (colore E silhouette) e non direbbe niente sul bordo.
     #[test]

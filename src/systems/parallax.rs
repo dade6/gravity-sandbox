@@ -1780,9 +1780,34 @@ mod tests {
     fn sprite_shader_normal_write_stays_independent_of_starfield() {
         let src = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/sprite.wgsl")
             .expect("vendored sprite shader must be present");
+        // v0.14.207: la soglia del ramo normal map NON è più la costante
+        // `1.0`, ma una variabile che vale 1.0 per TUTTO tranne i corpi
+        // (`Select(1.0, stencil_min_alpha, is_body)`): il bordo antialiasato
+        // dei pianeti deve ricevere la normal map, altrimenti la lightmap non
+        // lo moltiplica e la texture torna visibile come filo colorato.
+        //
+        // L'invariante da proteggere resta quella del .138: la scrittura della
+        // normal map NON deve dipendere dalla sentinella dello STARFIELD, e
+        // deve usare `select` (mai un if-expression).
         let normal_start = src
-            .find("if color.a >= 1.0 {")
-            .expect("the normal write must keep the crate's original condition");
+            .find("if color.a >= normal_min_alpha {")
+            .expect("il ramo normal map deve usare la soglia per-corpo");
+        // La soglia deve essere costruita con `select`: il terzo argomento è
+        // `is_body`, quindi NON dipende dalla sentinella dello starfield.
+        let soglia = src
+            .find("let normal_min_alpha = select(")
+            .expect("la soglia del ramo normal map deve usare select, non un if");
+        let riga_soglia = &src[soglia..src[soglia..].find('\n').map(|n| soglia + n).unwrap_or(src.len())];
+        assert!(
+            riga_soglia.contains("is_body"),
+            "la soglia e' pilotata da `is_body`, non dallo starfield"
+        );
+        assert!(
+            !riga_soglia.contains("is_starfield"),
+            "la scrittura della normal map NON deve dipendere dalla sentinella \
+             dello starfield (invariante del .138: tutti i pianeti perderebbero \
+             il terminatore)"
+        );
         let tail = &src[normal_start..];
         let normal_block = &tail[..tail.find("return res").unwrap_or(tail.len())];
         assert!(

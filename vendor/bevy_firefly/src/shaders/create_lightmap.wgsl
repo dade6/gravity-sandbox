@@ -253,7 +253,21 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
         var normal_multi = 1.0;
     
-        if config.normal_mode != 0 && normal.a > 0 && normal.b != 0.1 {
+        // v0.14.207: `normal.a > 0` NON basta più come test di "questo pixel è
+        // una superficie". Ora la normal map copre anche i texel di bordo
+        // antialiasati (vedi sprite.wgsl), dove la normale geometrica della
+        // sfera punta di taglio (nz → 0): `dot(n, luce) ≈ 0`, quindi
+        // `normal_multi` si spegnerebbe ESATTAMENTE sul bordo — lo stesso
+        // difetto, solo da un'altra parte.
+        //
+        // Il discriminante giusto è il NERO PURO: `res.normal` è `vec4(0)`
+        // quando la sprite non scrive nulla (fuori dal disco / sprite senza
+        // normal map), quindi tutti i canali sono 0. Un texel di bordo ha
+        // invece RGB validi con z ~128 (nz ≈ 0). Se è nero puro, il pixel non
+        // è superficie: nessun rilievo, e `normal_multi` resta 1 per non
+        // spegnere la luce su un pixel che non sappiamo leggere.
+        let has_surface = normal.a > 0 && normal.rgb != vec3f(0.0);
+        if config.normal_mode != 0 && has_surface && normal.b != 0.1 {
             let normal_dir = mix(normalize(normal.xyz * 2f - 1f), vec3f(0f), config.normal_attenuation);
 
             if normal.b == 0.0 {

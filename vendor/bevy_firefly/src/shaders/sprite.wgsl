@@ -120,7 +120,39 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
     // al posto di Planet Light (bug v0.14.138: "non si vede piu' la porzione
     // illuminata dei pianeti"). Il percorso critico per i pianeti NON deve
     // dipendere da nulla di nostro.
-    if color.a >= 1.0 {
+    // v0.14.207 — IL BORDO DEL PIANETA (strada C): la NORMAL MAP deve coprire
+    // gli stessi texel dello stencil, non solo quelli pieni.
+    //
+    // Storia: dal .190 lo stencil dei corpi si scrive già con soglia 0.004,
+    // quindi il bordo antialiasato ENTRA nello stencil e riceve `res *= shadow`.
+    // Ma la normal map restava a `color.a >= 1.0`: sui texel di bordo
+    // (`color.a` = copertura, 0.04..0.43) `res.normal` era `vec4(0)`, cioè
+    // `normal.a == 0` e `normal.b == 0`.
+    //
+    // Nella lightmap quel pixel prende il ramo `surface = halo` (pixel SENZA
+    // superficie) e `normal_multi = 0`: la lightmap vale ~0 invece di
+    // `intensity`. Con `Planet Light = 0` il valore giusto è **0**, ma il pixel
+    // composito conserva una parte di sprite NON moltiplicata, perché l'alpha
+    // del bordo è parziale: il colore della texture (a spicchi!) resta visibile
+    // come un filo luminoso che segue gli spicchi. Misurato: bordo 144 tu 19
+    // di fondo, con il cono nero a 1 alle spalle.
+    //
+    // Dato decisivo su device: con Halo = 10 e Planet Light = 0 il bordo è
+    // ancora colorato come gli spicchi, quindi non è la stella (la stella è
+    // spenta su quel percorso) ed è la texture che torna visibile dove la
+    // normal map manca.
+    //
+    // Fix: sugli stessi texel che scrivono lo stencil si scrive la normal map.
+    // Per i CORPI (`height == 0`) la soglia diventa `stencil_min_alpha` (0.004)
+    // invece di 1.0. Per tutto il resto (stella, aloni, starfield) resta
+    // esattamente `color.a >= 1.0`, cioè il comportamento originale del crate:
+    // il percorso critico degli altri sprite NON cambia.
+    //
+    // ⚠️ Il ramo `normal_dummy` resta invariato: la stella e gli sprite senza
+    // normal map continuano a scrivere il dummy (b == 0.1), che la shader
+    // tratta come "superficie piena senza rilievo".
+    let normal_min_alpha = select(1.0, stencil_min_alpha, is_body);
+    if color.a >= normal_min_alpha {
         if normal_dummy == 1 {
             res.normal = vec4<f32>(0, 0, f32(f16(0.1)), 1.0);
         }
