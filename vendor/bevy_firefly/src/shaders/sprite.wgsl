@@ -157,7 +157,27 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
             res.normal = vec4<f32>(0, 0, f32(f16(0.1)), 1.0);
         }
         else {
-            res.normal = normal;
+            // v0.14.209 — LA COPERTURA VIAGGIA NEL CANALE ALPHA DELLA NORMAL MAP.
+            //
+            // Ora che il bordo ha una normal map (v0.208), la lightmap gli
+            // applica l'ombra come a una superficie piena: su un pixel quasi
+            // trasparente (copertura 0.04..0.43) il risultato è che si vede la
+            // LIGHTMAP al posto del pianeta, cioè un ANELLO NERO di ~9 px fuori
+            // dalla silhouette (misurato: lum 3-12 tu 46 di fondo).
+            //
+            // La shader delle ombre ha bisogno di sapere QUANTO quel texel
+            // copre il pixel, per riportare l'ombra verso il fondo in
+            // proporzione: è l'antialiasing corretto. Il canale non usato della
+            // normal map (`a`) è libero — la shader legge solo `.rgb` per il
+            // rilievo e `.b` per la sentinella — e c'è spazio.
+            //
+            // `a` = copertura del disco in quel texel. Per la stella e per gli
+            // sprite senza normal map resta 1.0 (comportamento invariato).
+            // `a` = copertura del disco per i CORPI. Per ogni altro sprite con
+            // normal map resta 1.0: l'alpha di un alone è la trasparenza del
+            // glow, non la copertura di una silhouette, e usarla come copertura
+            // smorzerebbe la luce dell'alone.
+            res.normal = vec4<f32>(normal.rgb, select(1.0, color.a, is_body));
         }
     }
     else {

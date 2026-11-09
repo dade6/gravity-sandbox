@@ -305,6 +305,23 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             normal_multi = 1.0;
         }
 
+        // v0.14.209 — IL BORDO ANTIALIASATO NON DEVE DIVENTARE UN ANELLO NERO.
+        //
+        // Da v0.208 la normal map copre anche i texel di bordo del disco, dove
+        // la copertura (`normal.a`, scritta da sprite.wgsl) vale 0.04..0.43.
+        // Il pixel composito lì è quasi tutto fondo, ma la lightmap gli
+        // applicava l'ombra come a una superficie PIENA: il risultato è che si
+        // vedeva la lightmap al posto del pianeta, cioè una banda nera di ~9 px
+        // FUORI dalla silhouette (misurato: lum 3-12 contro 46 di fondo).
+        //
+        // La correzione è l'antialiasing corretto: sul bordo il pixel è
+        // `copertura·(colore·lightmap) + (1-copertura)·fondo`, e siccome
+        // `apply_lightmap` MOLTIPLICA la scena per la lightmap, la lightmap
+        // equivalente è la miscela fra il valore pieno e **1.0** (moltiplicare
+        // per 1 = lasciare il fondo com'è). Il raccordo si applica alla fine,
+        // sulla lightmap già calcolata, così non cambia nessuna formula del cono.
+        let copertura = clamp(normal.a, 0.0, 1.0);
+
         // Patch v0.14.165 (anello nero attorno alla stella, segnalato da Davide):
         // `surface` va calcolato PRIMA dei due rami, perché serve anche dentro
         // il core come PAVIMENTO. Il core usa `LightCore::falloff` di default
@@ -341,6 +358,26 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             // Halo Brightness e MAI a Planet Light.
             res = vec4f(light_color.xyz, 0) * surface * angle_multi * normal_multi * falloff(x, light.falloff, light.falloff_intensity);
         }
+
+        // v0.14.209 — RACCORDO DEL BORDO CON LA COPERTURA.
+        //
+        // Sui texel antialiasati del disco la normal map ora esiste (v0.208) e
+        // porta la copertura in `.a` (sprite.wgsl). Senza questo passaggio la
+        // lightmap applicava l'ombra PIENA a un pixel quasi trasparente: si
+        // vedeva la lightmap al posto del pianeta, cioè una banda NERA fuori
+        // dalla silhouette (misurato: lum 3-12 contro 46 di fondo, ~9 px).
+        //
+        // `apply_lightmap` MOLTIPLICA la scena per la lightmap, quindi il
+        // pixel composito `copertura·(colore·L) + (1-copertura)·fondo`
+        // corrisponde a una lightmap `miscela(L, 1.0, copertura)`: moltiplicare
+        // per 1 lascia il fondo intatto. Con copertura = 1 (tutti i texel
+        // pieni, e TUTTI gli altri sprite) la miscela è la vecchia `res`.
+        //
+        // Il raccordo si fa QUI e non dentro le formule del cono: ombre e
+        // penombra restano identiche, cambia solo quanto la lightmap incide
+        // sul pixel di bordo.
+        let raccordo = clamp(normal.a, 0.0, 1.0);
+        res = mix(vec4f(1.0, 1.0, 1.0, 0.0), res, raccordo);
 
         // TEST 5 RIMOSSO (v0.14.50): shader pulita, il problema era
         // l'auto-ombra dei pianeti -> risolto con z_sorting + z=-y (vedi
