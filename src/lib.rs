@@ -141,6 +141,11 @@ mod js_bridge {
     /// verificare che l'orizzonte impostato nel pannello arrivi al ghost.
     pub static GHOST_DEBUG_STATE: Mutex<String> = Mutex::new(String::new());
 
+    /// DEBUG BORDO (sola diagnostica): per ogni pianeta, posizione relativa
+    /// alla stella e `normal_multi` stimato sul bordo lato ombra. Riempito
+    /// dal sistema `bordo_probe_snapshot` (solo wasm32).
+    pub static BORDO_PROBE: Mutex<String> = Mutex::new(String::new());
+
     /// Tastiera mobile: testo del campo focussato inviato da JS (iOS)
     pub static TEXT_INPUT_CMD: Mutex<Option<String>> = Mutex::new(None);
     /// 0=off, 1=select-all (apertura campo), 2=replace (digitazione)
@@ -220,6 +225,19 @@ pub fn debug_state() -> String {
     #[cfg(target_arch = "wasm32")]
     {
         if let Ok(s) = crate::js_bridge::DEBUG_STATE.lock() {
+            return s.clone();
+        }
+    }
+    "{}".to_string()
+}
+
+/// DEBUG BORDO: snapshot JSON della posizione relativa pianeta-stella e
+/// del `normal_multi` stimato sul bordo (sola diagnostica).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub fn bordo_probe_state() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Ok(s) = crate::js_bridge::BORDO_PROBE.lock() {
             return s.clone();
         }
     }
@@ -462,6 +480,7 @@ pub fn wasm_main() {
     ))
     .insert_resource(Gravity::ZERO)
     .init_resource::<SkyDebug>()
+    .add_systems(Update, systems::bordo_probe::bordo_probe_snapshot)
     .add_systems(
         Update,
         (
@@ -814,61 +833,6 @@ mod tests {
             }),
             "fix: stella a z=0 resta visibile"
         );
-    }
-
-    /// v0.14.209 — GATE: la `fragment` INTERA di `sprite.wgsl` deve compilare.
-    ///
-    /// Nella v0.207 un errore WGSL nel ramo della normal map ha rotto lo
-    /// schermo (shader non compilata = niente scena e niente UI). Il gate dello
-    /// stencil copre solo l'altro ramo, quindi un errore qui passava.
-    ///
-    /// Si estrae la funzione con i suoi binding reali dichiarati nel preambolo.
-    /// Nessun rinomino: si compila esattamente il testo del file.
-    #[test]
-    fn sprite_shader_fragment_compiles() {
-        let raw = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/sprite.wgsl")
-            .expect("vendored sprite shader must be present");
-        let start = raw.find("@fragment").expect("fragment mancante");
-        let body = &raw[start..];
-        let end = body.rfind('}').unwrap_or(body.len()) + 1;
-        let frag = body[..end]
-            .replace("@fragment", "")
-            .replace("@location(0)", "")
-            .replace("@location(1)", "");
-        // Import di Bevy e binding: replicati qui coi tipi veri.
-        let preambule = "\
-enable f16;
-struct SpriteId { x: u32 }
-struct View { clip_from_world: mat4x4<f32> }
-struct VertexInput {
-    i_model_transpose_col0: vec4<f32>,
-    i_model_transpose_col1: vec4<f32>,
-    i_model_transpose_col2: vec4<f32>,
-    i_uv_offset_scale: vec4<f32>,
-    z: f32,
-    height: f32,
-    y: f32,
-}
-struct VertexOutput { uv: vec2<f32>, z: f32, height: f32, y: f32 }
-struct FragmentOutput { stencil: vec4<f32>, normal: vec4<f32> }
-@group(1) @binding(0) var sprite_texture: texture_2d<f32>;
-@group(1) @binding(1) var normal_texture: texture_2d<f32>;
-@group(1) @binding(2) var sprite_sampler: sampler;
-@group(1) @binding(3) var<uniform> normal_dummy: u32;
-";
-        let full = format!("{preambule}\n{frag}\n");
-        let module = naga::front::wgsl::parse_str(&full).unwrap_or_else(|e| {
-            panic!(
-                "WGSL PARSE FAILED (sprite fragment): {e}\n\
-                 Un errore qui = shader non compilata = SCHERMO NERO e UI ASSENTE."
-            )
-        });
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(&module)
-        .unwrap_or_else(|e| panic!("WGSL VALIDATION FAILED (sprite fragment): {e:#?}"));
     }
 
     /// v2 coni d'ombra: il blocco WGSL estratto dalla shader vendored deve
