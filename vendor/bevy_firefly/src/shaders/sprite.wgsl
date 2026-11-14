@@ -157,7 +157,45 @@ fn fragment(in: VertexOutput) -> FragmentOutput {
             res.normal = vec4<f32>(0, 0, f32(f16(0.1)), 1.0);
         }
         else {
-            res.normal = normal;
+            // v0.14.209 — LA COPERTURA VIAGGIA NEL CANALE ALPHA DELLA NORMAL MAP.
+            //
+            // Ora che il bordo ha una normal map (v0.208), la lightmap gli
+            // applica l'ombra come a una superficie piena: su un pixel quasi
+            // trasparente (copertura 0.04..0.43) il risultato è che si vede la
+            // LIGHTMAP al posto del pianeta, cioè un ANELLO NERO di ~9 px fuori
+            // dalla silhouette (misurato: lum 3-12 tu 46 di fondo).
+            //
+            // La shader delle ombre ha bisogno di sapere QUANTO quel texel
+            // copre il pixel, per riportare l'ombra verso il fondo in
+            // proporzione: è l'antialiasing corretto. Il canale non usato della
+            // normal map (`a`) è libero — la shader legge solo `.rgb` per il
+            // rilievo e `.b` per la sentinella — e c'è spazio.
+            //
+            // `a` = copertura del disco in quel texel. Per la stella e per gli
+            // sprite senza normal map resta 1.0 (comportamento invariato).
+            // `a` = copertura del disco per i CORPI. Per ogni altro sprite con
+            // normal map resta 1.0: l'alpha di un alone è la trasparenza del
+            // glow, non la copertura di una silhouette, e usarla come copertura
+            // smorzerebbe la luce dell'alone.
+            //
+            // LA NORMALE DI BORDO NON DEVE DIPENDERE DALLA COPERTURA.
+            //
+            // Sull'ultimo texel il campionamento bilineare mescola la normale
+            // valida con i texel VUOTI della normal map, che valgono
+            // `(0,0,0,0)`: l'RGB esce scalato per il peso dei texel validi
+            // (= `normal.a`), cioè PREMOLTIPLICATO. Decodificato com'è
+            // (`rgb*2-1`) quel valore scivola verso `(-1,-1,-1)`: una normale
+            // finta che punta sempre nella stessa direzione dello schermo,
+            // qualunque sia il lato del pianeta. Da lì il difetto "a seconda
+            // di dove sta il pianeta": bordo acceso sul lato in ombra con il
+            // pianeta in basso a destra della stella, bordo nero sul lato
+            // illuminato con il pianeta in alto a sinistra.
+            //
+            // Dividere per `normal.a` restituisce la media pesata delle sole
+            // normali valide. Dove la normal map non ha alpha (texture senza
+            // canale di copertura) si lascia l'RGB com'è.
+            let normal_rgb = select(normal.rgb, normal.rgb / max(normal.a, 0.0001), normal.a > 0.0);
+            res.normal = vec4<f32>(normal_rgb, select(1.0, color.a, is_body));
         }
     }
     else {
