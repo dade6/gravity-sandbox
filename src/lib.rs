@@ -958,6 +958,52 @@ struct FragmentOutput { stencil: vec4<f32>, normal: vec4<f32> }
         }
     }
 
+    /// GATE: la normale del bordo dei pianeti NON deve restare premoltiplicata.
+    ///
+    /// Sul bordo antialiasato la normale arriva scalata per la copertura due
+    /// volte: dal campionamento bilineare contro i texel vuoti della normal
+    /// map (`sprite.wgsl`) e dall'`ALPHA_BLENDING` del target, che moltiplica
+    /// l'RGB per l'alpha = copertura (`create_lightmap.wgsl` lo rilegge).
+    /// Decodificata com'è scivola verso `(-1,-1,-1)`, uguale su tutto il
+    /// contorno: bordo acceso sul lato in ombra con il pianeta in basso a
+    /// destra della stella, bordo nero sul lato illuminato con il pianeta in
+    /// alto a sinistra. Le due divisioni per l'alpha vanno tenute tutte e due.
+    ///
+    /// Il raccordo del bordo verso `1.0` della v0.14.209 non deve tornare:
+    /// accendeva a bianco pieno, senza ombra, il fondo attorno al pianeta.
+    #[test]
+    fn planet_edge_normal_is_unpremultiplied() {
+        let codice = |percorso: &str| {
+            std::fs::read_to_string(percorso)
+                .expect("vendor shader")
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let sprite = codice("vendor/bevy_firefly/src/shaders/sprite.wgsl");
+        assert!(
+            sprite.contains("normal.rgb / max(normal.a, 0.0001)"),
+            "sprite.wgsl: la normale campionata va divisa per il proprio alpha \
+             (i texel vuoti della normal map la scalano verso zero)"
+        );
+        let lightmap = codice("vendor/bevy_firefly/src/shaders/create_lightmap.wgsl");
+        assert!(
+            lightmap.contains("normal_raw.rgb / max(normal_raw.a, 0.0001)"),
+            "create_lightmap.wgsl: il target della normal map è alpha-blended, \
+             la normale letta va divisa per la copertura"
+        );
+        assert!(
+            !lightmap.contains("mix(vec4f(1.0, 1.0, 1.0, 0.0), res"),
+            "raccordo del bordo verso 1.0 reintrodotto: il bordo va raccordato \
+             con la luce del fondo (`res_bg`), che include l'ombra del pianeta"
+        );
+        assert!(
+            lightmap.contains("res = mix(res_bg, res, peso);"),
+            "il bordo deve raccordare luce del fondo e luce della superficie"
+        );
+    }
+
     fn shadow_v2_cone_is_valid_wgsl() {
         let raw = std::fs::read_to_string("vendor/bevy_firefly/src/shaders/create_lightmap.wgsl")
             .expect("vendor shader");
