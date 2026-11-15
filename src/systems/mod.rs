@@ -1,3 +1,4 @@
+pub mod bordo_probe;
 pub mod camera;
 pub mod camera_follow;
 pub mod firefly_bridge;

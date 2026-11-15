@@ -278,9 +278,17 @@ pub(crate) fn generate_sphere_normal_map(size: usize) -> Vec<u8> {
                 let scala = radius / (radius + 0.5);
                 (dx * dx + dy * dy) * scala * scala
             };
+            // v0.14.210 — ALPHA ANTIALIASATA COME IL DISCO.
+            // Il disco scrive `coverage = radius + 0.5 - dist` (dist in px), con
+            // clamp a [0,1]. Qui l'alpha segue la STESSA formula, così disco e
+            // normal map hanno copertura identica texel per texel (test
+            // `planet_textures_coincide_at_every_texel`). La normale (rgb) resta
+            // quella di prima, calcolata sul disco allargato.
+            let dist_px = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
+            let copertura = (radius + 0.5 - dist_px).clamp(0.0, 1.0);
             if r2_disco > 1.0 {
-                // Fuori dal disco: nessuna normale (nero, alpha 0)
-                pixels[i + 3] = 0;
+                // Fuori dal disco: nessuna normale (nero), alpha = copertura (0 oltre il bordo)
+                pixels[i + 3] = (copertura * 255.0) as u8;
                 continue;
             }
             let r2c = r2_disco.min(1.0);
@@ -306,7 +314,7 @@ pub(crate) fn generate_sphere_normal_map(size: usize) -> Vec<u8> {
             pixels[i] = ((nx * 0.5 + 0.5) * 255.0) as u8;
             pixels[i + 1] = ((ny * 0.5 + 0.5) * 255.0) as u8;
             pixels[i + 2] = ((nz * 0.5 + 0.5) * 255.0) as u8;
-            pixels[i + 3] = 255;
+            pixels[i + 3] = (copertura * 255.0) as u8;
         }
     }
     pixels
@@ -808,6 +816,208 @@ mod tests {
         );
         let _ = (center, radius);
     }
+    /// v0.14.210 — COINCIDENZA DELLE TEXTURE DEL PIANETA, per sottrazione.
+    ///
+    /// Sottrae, texel per texel, la copertura del disco (alpha di
+    /// `generate_disc_texture`) dalla copertura della normal map (alpha di
+    /// `generate_sphere_normal_map`). La differenza deve essere zero ovunque:
+    /// dove il disco copre e la normal map no, la lightmap applica l'ombra
+    /// piena a un texel quasi trasparente (anello scuro sul bordo).
+    /// Riporta anche il massimo scostamento, così il valore è misurato.
+    #[test]
+    fn planet_textures_coincide_at_every_texel() {
+        use super::{generate_disc_texture, generate_sphere_normal_map};
+        for size in [128usize, 256, 512] {
+            let disc = generate_disc_texture(size);
+            let d = disc.data.as_ref().expect("disco").clone();
+            let n = generate_sphere_normal_map(size);
+            let mut differenze = Vec::new();
+            let mut max_diff = 0i32;
+            for y in 0..size {
+                for x in 0..size {
+                    let i = (y * size + x) * 4;
+                    let diff = d[i + 3] as i32 - n[i + 3] as i32; // disco − normal
+                    if diff.abs() > max_diff {
+                        max_diff = diff.abs();
+                    }
+                    if diff != 0 {
+                        differenze.push((x, y, d[i + 3], n[i + 3]));
+                    }
+                }
+            }
+            assert!(
+                differenze.is_empty(),
+                "size {size}: {} texel dove disco e normal map differiscono \
+                 (scostamento massimo {max_diff}/255, primo (x,y,disco,normal) {:?})",
+                differenze.len(),
+                differenze.first()
+            );
+        }
+    }
+
+    /// v0.14.210 — ESPORTA le texture del pianeta come PNG per ispezione.
+    /// Nessuna asserzione sul contenuto: serve solo a produrre i file.
+    #[test]
+    fn export_planet_textures_png() {
+        use super::{generate_disc_texture, generate_sphere_normal_map};
+        let dir = std::path::PathBuf::from(
+            std::env::var("HOME").unwrap_or_default(),
+        )
+        .join(".hermes/cache/scratch/planet_textures");
+        std::fs::create_dir_all(&dir).expect("cartella export");
+        let size = 256usize;
+
+        // Disco colore (alpha = copertura antialiasata).
+        let disc = generate_disc_texture(size);
+        let d = disc.data.as_ref().expect("disco").clone();
+        let img = image::RgbaImage::from_raw(size as u32, size as u32, d)
+            .expect("buffer disco");
+        img.save(dir.join("disc_color_alpha.png")).expect("salva disco");
+
+        // Normal map (RGB = normale, alpha = copertura scritta).
+        let n = generate_sphere_normal_map(size);
+        let img = image::RgbaImage::from_raw(size as u32, size as u32, n)
+            .expect("buffer normal");
+        img.save(dir.join("normal_map.png")).expect("salva normal");
+
+        // Alpha disco e normal map affiancati in scala di grigio: differenze visibili.
+        let disc_alpha = disc.data.as_ref().unwrap();
+        let normal_raw = generate_sphere_normal_map(size);
+        let mut diff = vec![0u8; size * size * 4];
+        for i in (0..size * size * 4).step_by(4) {
+            let a = disc_alpha[i + 3] as i32;
+            let b = normal_raw[i + 3] as i32;
+            // rosso = normal copre più del disco, blu = disco copre più della normal
+            diff[i] = (b - a).max(0) as u8;
+            diff[i + 2] = (a - b).max(0) as u8;
+            diff[i + 3] = 255;
+        }
+        let img = image::RgbaImage::from_raw(size as u32, size as u32, diff)
+            .expect("buffer diff");
+        img.save(dir.join("alpha_diff.png")).expect("salva diff");
+        println!("PNG in {}", dir.display());
+    }
+
+    // ---------------------------------------------------------------------
+    // v0.14.215 — REPLICA CPU DEL BORDO LUMINOSO (senza GPU).
+    //
+    // Riproduce la composizione del pixel di bordo con la STESSA formula di
+    // `apply_lightmap.wgsl` + `create_lightmap.wgsl`, usando le texture reali
+    // generate da questo modulo. Due modalità, per mostrare il meccanismo:
+    //   - `raccordo = false` : com'è nella 0.14.208 (nessun `mix` di copertura).
+    //   - `raccordo = true`  : com'era nella 0.14.209 (`mix(1, L, copertura)`).
+    //
+    // Pixel finale = scena · light_frag,  light_frag = max(ambient·I, L).
+    // Scena = colore del pianeta (bianco pieno × tinta, qui 1.0) sul disco, e
+    // fondo scuro fuori. Il fondo "vero" è `FONDO`: un pixel del bordo che
+    // scende SOTTO il fondo è l'anello scuro; un pixel con luce > 0 dove la
+    // normale del bordo è di taglio è il filo chiaro.
+    // ---------------------------------------------------------------------
+
+    /// Fondo dello spazio (scuro, ma non nero: il cielo ha stelle/ambient).
+    const FONDO: f32 = 0.18;
+    /// Intensità della luce della stella sui pianeti (`light.intensity`).
+    const LUCE_PIANETA: f32 = 1.0;
+    /// Luce ambiente (preset: ambient.intensity = 0.02, colore bianco).
+    const AMBIENT: f32 = 0.02;
+
+    /// `normal_multi` = max(0, dot(n, luce)) con luce nel piano (TopDownY).
+    /// `n` è la normale della normal map (rgb ricodificati ×2−1).
+    fn normal_multi(nx: f32, ny: f32, nz: f32, lx: f32, ly: f32) -> f32 {
+        let l = (lx * lx + ly * ly).sqrt().max(1e-6);
+        let (lx, ly) = (lx / l, ly / l);
+        (nx * lx + ny * ly).max(0.0)
+    }
+
+    /// Composizione di un pixel di bordo. `c` = copertura del disco colore,
+    /// `n` = (nx,ny,nz,alpha_normal) decodificati, `raccordo` = modalità 209.
+    fn compone_pixel(c: f32, n: (f32, f32, f32, f32), lx: f32, ly: f32, raccordo: bool) -> f32 {
+        let has_surface = n.3 > 0.0;
+        // dentro lo shader: `normal_multi` solo se c'è una normale; se no, 1.
+        let nm = if has_surface { normal_multi(n.0, n.1, n.2, lx, ly) } else { 1.0 };
+        // `surface`: pianeta con normal map -> intensità della stella.
+        let surface = LUCE_PIANETA;
+        let mut lightmap = surface * nm;
+        if raccordo {
+            // v0.14.209: `mix(vec4(1), res, copertura)`.
+            lightmap = (1.0 - c) * 1.0 + c * lightmap;
+        }
+        // blend(bg=lightmap, fg=ambient*I) = max(ambient*I, lightmap)
+        let light_frag = lightmap.max(AMBIENT);
+        // scena: colore del pianeta sul disco (1.0), fondo fuori. Il bordo
+        // antialiasato è copertura·colore + (1−copertura)·fondo (cfr. 209).
+        let scena = c * 1.0 + (1.0 - c) * FONDO;
+        scena * light_frag
+    }
+
+    /// Replica: lungo la riga centrale, sul bordo del lato IN OMBRA (luce da
+    /// destra, la stella è a destra), il pixel finale deve restare >= fondo
+    /// dove il pianeta non copre: l'anello scuro è un pixel SOTTO il fondo.
+    /// Con il raccordo (209) l'anello sparisce; senza (208) resta.
+    #[test]
+    fn modello_luce_ombra_pianeta_senza_gpu() {
+        let size = 256usize;
+        let disc = generate_disc_texture(size);
+        let d = disc.data.as_ref().expect("disco").clone();
+        let nmap = generate_sphere_normal_map(size);
+        // luce da destra (stella a +x): sul lato sinistro (ombra) la normale
+        // del bordo punta a sinistra, quindi normal_multi ~ 0.
+        let (lx, ly) = (1.0f32, 0.0f32);
+        let y = size / 2;
+
+        let mut sotto_fondo_208 = 0usize;
+        let mut sotto_fondo_209 = 0usize;
+        let mut min_208 = f32::MAX;
+        let mut min_209 = f32::MAX;
+        for x in 0..size {
+            let i = (y * size + x) * 4;
+            let c = d[i + 3] as f32 / 255.0;
+            if c <= 0.0 {
+                continue; // fuori dal disco: nessun pixel di pianeta
+            }
+            let n = (
+                nmap[i] as f32 / 255.0 * 2.0 - 1.0,
+                nmap[i + 1] as f32 / 255.0 * 2.0 - 1.0,
+                nmap[i + 2] as f32 / 255.0 * 2.0 - 1.0,
+                nmap[i + 3] as f32 / 255.0,
+            );
+            let p208 = compone_pixel(c, n, lx, ly, false);
+            let p209 = compone_pixel(c, n, lx, ly, true);
+            min_208 = min_208.min(p208);
+            min_209 = min_209.min(p209);
+            // Anello scuro: confronto con il fondo SENZA pianeta, cioè la
+            // stessa luce con c = 0 (solo sfondo). Se il pixel di bordo è più
+            // scuro di quel fondo, il pianeta sta scurendo lo spazio: anello.
+            let fondo208 = compone_pixel(0.0, n, lx, ly, false);
+            let fondo209 = compone_pixel(0.0, n, lx, ly, true);
+            if p208 < fondo208 - 1e-4 {
+                sotto_fondo_208 += 1;
+            }
+            if p209 < fondo209 - 1e-4 {
+                sotto_fondo_209 += 1;
+            }
+        }
+        println!(
+            "REPLICA bordo ombra (riga centrale, lato stella a destra): \
+             senza raccordo (208): texel di bordo sotto il fondo = {sotto_fondo_208}, min = {min_208:.3}; \
+             con raccordo (209):  texel di bordo sotto il fondo = {sotto_fondo_209}, min = {min_209:.3}; fondo = {FONDO}"
+        );
+        // NOTA: questo test fissa il COMPORTAMENTO DEL MODELLO di composizione,
+        // NON riproduce il bug a schermo. Il modello usa un fondo costante e
+        // omette light_color, angle_multi e falloff della lightmap reale, quindi
+        // non prova il bordo luminoso sul device. Fissa i valori attuali: se
+        // cambiano, la formula di composizione è cambiata e va spiegato.
+        assert_eq!(
+            sotto_fondo_208, 0,
+            "modello (senza raccordo): atteso 0 texel sotto il fondo"
+        );
+        assert_eq!(
+            sotto_fondo_209, 150,
+            "modello (con raccordo 209): atteso 150 texel sotto il fondo; \
+             se cambia, la formula di composizione è cambiata"
+        );
+    }
+
     /// a spicchi: se cambiasse, il test diagnostico confronterebbe due cose
     /// insieme (colore E silhouette) e non direbbe niente sul bordo.
     #[test]
@@ -955,3 +1165,4 @@ mod tests {
         eprintln!("NORMAL MAP SALVATA: {}", path.display());
     }
 }
+
