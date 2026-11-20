@@ -209,7 +209,25 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
     var res = vec4f(0);
     
     let pos = ndc_to_world(frag_coord_to_ndc(in.position.xy * config.texture_scale));
-    let normal = textureLoad(normal_map, vec2<i32>(in.uv * vec2<f32>(textureDimensions(normal_map))), 0);
+    let normal_raw = textureLoad(normal_map, vec2<i32>(in.uv * vec2<f32>(textureDimensions(normal_map))), 0);
+    // LA NORMALE DI BORDO ARRIVA PREMOLTIPLICATA: VA DIVISA PER LA COPERTURA.
+    //
+    // Il target della normal map è scritto con `ALPHA_BLENDING` (pipelines.rs)
+    // e, per i corpi, l'alpha in uscita da sprite.wgsl è la COPERTURA del
+    // disco. Sul bordo antialiasato quindi il target contiene
+    // `rgb = normale·copertura` e `a = copertura`. Letto com'è, `rgb*2-1`
+    // scivola verso `(-1,-1,-1)`: una normale finta, uguale su tutto il
+    // contorno, che guarda sempre verso lo stesso angolo dello schermo.
+    // Sintomo: con il pianeta in basso a destra della stella il bordo del
+    // lato in ombra restava ACCESO, con il pianeta in alto a sinistra il bordo
+    // del lato illuminato diventava NERO.
+    //
+    // Dividendo per l'alpha si riottiene la normale vera. Con `a == 1` (texel
+    // pieni, dummy della stella, un corpo sopra un altro) non cambia niente.
+    let normal = vec4f(
+        select(normal_raw.rgb, normal_raw.rgb / max(normal_raw.a, 0.0001), normal_raw.a > 0.0),
+        normal_raw.a,
+    );
     let stencil = textureSample(sprite_stencil, texture_sampler, in.uv);
 
     let dist = distance(pos, light.pos);
@@ -305,6 +323,26 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             normal_multi = 1.0;
         }
 
+        // IL BORDO ANTIALIASATO DEL PIANETA: DUE LUCI, NON UNA.
+        //
+        // Sul bordo il pixel della scena è `copertura·pianeta +
+        // (1-copertura)·fondo`, e `apply_lightmap` lo MOLTIPLICA per un solo
+        // valore di lightmap. Il valore giusto sta fra due estremi:
+        //   - la luce della SUPERFICIE (`res`): intensity, rilievo, niente
+        //     auto-ombra;
+        //   - la luce del FONDO (`res_bg`): quella che avrebbe lo stesso pixel
+        //     se il pianeta non ci fosse, cioè l'alone `halo` CON l'ombra del
+        //     pianeta stesso.
+        // La v0.14.209 raccordava verso 1.0 (bianco pieno, senza ombra): sul
+        // lato in ombra il bordo restava acceso, e tutto lo spazio vuoto
+        // (copertura 0) riceveva 1.0 al posto dell'alone. Trattare il bordo
+        // come superficie piena dà invece l'anello nero a scalini della v0.208.
+        // `copertura` vale 1 sui texel pieni e su tutti gli sprite senza
+        // copertura parziale: lì il comportamento resta quello storico.
+        let copertura = clamp(normal.a, 0.0, 1.0);
+        let is_dummy_normal = normal.b == f32(f16(0.1));
+        let is_edge = copertura > 0.0 && copertura < 1.0 && !is_dummy_normal;
+
         // Patch v0.14.165 (anello nero attorno alla stella, segnalato da Davide):
         // `surface` va calcolato PRIMA dei due rami, perché serve anche dentro
         // il core come PAVIMENTO. Il core usa `LightCore::falloff` di default
@@ -322,6 +360,9 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
         //   delle stelle di sfondo, dischi) -> `halo` (emissivi).
         let surface = select(light.intensity, halo, normal.a == 0.0 || normal.b == f32(f16(0.1)));
 
+        // Luce del fondo sotto il bordo (usata solo se `is_edge`).
+        var res_bg = vec4f(0);
+
         if dist <= light.core_radius {
             // Patch v0.14.77 (Ticket 20): disco stella separato da intensity.
             // Solo core_boost contribuisce al disco: intensity pilota SOLO
@@ -332,6 +373,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             // al centro (boost) e si raccorda al livello dell'alone sul bordo,
             // invece di cadere a 0 e disegnare l'anello nero.
             res = vec4f(light_color.xyz, 0) * angle_multi * normal_multi * max(core_term, surface);
+            res_bg = vec4f(light_color.xyz, 0) * angle_multi * max(core_term, halo);
         }
         else {
             let x = (dist - light.core_radius) / (light.radius - light.core_radius);
@@ -339,14 +381,18 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
             // Vedi sopra: `surface` sceglie intensity (pianeti) o halo (tutto
             // il resto). Così il disco di luce attorno alla stella risponde a
             // Halo Brightness e MAI a Planet Light.
-            res = vec4f(light_color.xyz, 0) * surface * angle_multi * normal_multi * falloff(x, light.falloff, light.falloff_intensity);
+            let radial = falloff(x, light.falloff, light.falloff_intensity);
+            res = vec4f(light_color.xyz, 0) * surface * angle_multi * normal_multi * radial;
+            res_bg = vec4f(light_color.xyz, 0) * halo * angle_multi * radial;
         }
 
         // TEST 5 RIMOSSO (v0.14.50): shader pulita, il problema era
         // l'auto-ombra dei pianeti -> risolto con z_sorting + z=-y (vedi
         // firefly_bridge.rs).
 
-        if dot(res, res) < 0.0001 {
+        // Sul bordo serve anche l'ombra del fondo: si esce solo se sono
+        // spente tutte e due le luci.
+        if dot(res, res) < 0.0001 && (!is_edge || dot(res_bg, res_bg) < 0.0001) {
             return res;
         }
 
@@ -355,6 +401,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
         var sequence_index = 0u;
 
         var shadow = vec3f(1); 
+        // Ombra del FONDO sotto il bordo: come `shadow`, ma senza saltare
+        // l'occluder del corpo stesso (lo spazio dietro il pianeta sta nel
+        // suo cono). Aggiornata solo se `is_edge`.
+        var shadow_bg = vec3f(1);
 
         var bin = u32(floor(((atan2(pos.y - light.pos.y, pos.x - light.pos.x) + PI) / PI2) * f32(N_BINS)));
         bin = clamp(bin, 0, N_BINS-1);
@@ -384,6 +434,10 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
             // round occluder
             if occluder_type == 0 {
+                // `skip_surface`: l'occluder non fa ombra sulla SUPERFICIE di
+                // questo pixel (auto-ombra). Sul bordo però il fondo dietro al
+                // pianeta la riceve, quindi lì il calcolo non si salta.
+                var skip_surface = false;
                 if stencil.a > 0.1 {
                     // TORNO AL CHECK ORIGINALE DEL CRATE (>= - margin):
                     // con z = -y e margin default gli skip coprono
@@ -392,8 +446,11 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
                     // eclipse_occlusion (v0.14.63) perché il confronto
                     // esatto su stencil/occ non era affidabile nel render.
                     if config.z_sorting == 1 && round_occluders[occluder_index].z_sorting == 1 && stencil.g >= round_occluders[occluder_index].z - config.z_sorting_error_margin {
-                        continue;
+                        skip_surface = true;
                     }
+                }
+                if skip_surface && !is_edge {
+                    continue;
                 }
 
                 var result: f32;
@@ -410,7 +467,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
 
 
                 if result > 0.0 {
-                    shadow = shadow_blend(shadow, round_occluders[occluder_index].color.rgb, round_occluders[occluder_index].opacity * result);
+                    if !skip_surface {
+                        shadow = shadow_blend(shadow, round_occluders[occluder_index].color.rgb, round_occluders[occluder_index].opacity * result);
+                    }
+                    if is_edge {
+                        shadow_bg = shadow_blend(shadow_bg, round_occluders[occluder_index].color.rgb, round_occluders[occluder_index].opacity * result);
+                    }
                 }            
             }
             // poly occluder
@@ -424,6 +486,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
                 if prev_index != occluder_index {
                     if prev_index != 0u && accumulated_occlusion > 0.0 {
                         shadow = shadow_blend(shadow, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
+                        shadow_bg = shadow_blend(shadow_bg, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
                     }
                     accumulated_occlusion = 0.0;
                     prev_index = occluder_index;
@@ -441,13 +504,14 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
                 accumulated_occlusion = max(accumulated_occlusion, result);
             }
 
-            if dot(shadow, shadow) < 0.001 {
+            if dot(shadow, shadow) < 0.001 && (!is_edge || dot(shadow_bg, shadow_bg) < 0.001) {
                 break;
             }
         }
             
         if prev_index != 0u && accumulated_occlusion > 0.0 {
             shadow = shadow_blend(shadow, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
+            shadow_bg = shadow_blend(shadow_bg, poly_occluders[prev_index].color.rgb, poly_occluders[prev_index].opacity * accumulated_occlusion);
         }
 
         // v0.14.134 (supersede v0.14.132): le ombre dei pianeti oscurano
@@ -470,6 +534,33 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4f {
         var is_emissive_core = stencil.a > 0.1 && normal.b == f32(f16(0.1));
         if (!is_background_star && !is_emissive_core) {
             res *= vec4f(shadow, 1);
+            res_bg *= vec4f(shadow_bg, 1);
+        }
+
+        // RACCORDO DEL BORDO: da luce del fondo (copertura 0) a luce della
+        // superficie (copertura 1), continuo ai due estremi — niente scalino
+        // dove il disco finisce, niente salto verso l'interno.
+        //
+        // Con una sola lightmap moltiplicativa il raccordo esatto non esiste
+        // (servirebbero pianeta e fondo separati), quindi il peso dipende da
+        // quale delle due luci è più forte:
+        //   - superficie più chiara del fondo -> peso lineare `copertura`;
+        //   - superficie più SCURA del fondo (lato in ombra, zona del
+        //     terminatore, Halo alto con Planet Light basso) -> la superficie
+        //     pesa di più, perché l'albedo del pianeta è molto più chiaro del
+        //     cielo e basta poca luce del fondo per riaccenderlo come filo
+        //     colorato. `EDGE_SKY_RATIO` è il rapporto cielo/pianeta per cui
+        //     il raccordo è esatto: più basso = meno filo colorato, più alto =
+        //     meno scurimento del fondo a ridosso del bordo.
+        if is_edge {
+            // Dichiarato qui e non a livello di modulo: il gate naga in
+            // `src/lib.rs` valida solo il corpo della fragment.
+            let EDGE_SKY_RATIO = 0.15;
+            let lum_surface = dot(res.rgb, vec3f(1.0 / 3.0));
+            let lum_bg = dot(res_bg.rgb, vec3f(1.0 / 3.0));
+            let sky_ratio = select(1.0, EDGE_SKY_RATIO, lum_surface < lum_bg);
+            let peso = copertura / (copertura + (1.0 - copertura) * sky_ratio);
+            res = mix(res_bg, res, peso);
         }
     }
 
