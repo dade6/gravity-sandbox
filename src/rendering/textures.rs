@@ -241,7 +241,7 @@ pub(crate) const NORMAL_RIM_Z_MIN: f32 = 0.35;
 
 /// Genera i pixel RGBA (non-sRGB) della normal map di una sfera: per ogni
 /// pixel dentro il disco, normale = normalize(x, y, √(1−x²−y²)) codificata
-/// come RGB = normal·0.5+0.5 (convenzione standard, luce da alto-sinistra).
+/// come RGB = (normal·0.5+0.5)·alpha (premoltiplicato prima del filtro).
 /// Fuori dal disco: alpha 0 (nessuna superficie). Non-sRGB per costruzione
 /// (Rgba8Unorm) — caricare una normal map da PNG introduceva gamma errori
 /// e crash async su WASM, quindi la generiamo in codice.
@@ -282,8 +282,7 @@ pub(crate) fn generate_sphere_normal_map(size: usize) -> Vec<u8> {
             // Il disco scrive `coverage = radius + 0.5 - dist` (dist in px), con
             // clamp a [0,1]. Qui l'alpha segue la STESSA formula, così disco e
             // normal map hanno copertura identica texel per texel (test
-            // `planet_textures_coincide_at_every_texel`). La normale (rgb) resta
-            // quella di prima, calcolata sul disco allargato.
+            // `planet_textures_coincide_at_every_texel`).
             let dist_px = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
             let copertura = (radius + 0.5 - dist_px).clamp(0.0, 1.0);
             if r2_disco > 1.0 {
@@ -311,10 +310,15 @@ pub(crate) fn generate_sphere_normal_map(size: usize) -> Vec<u8> {
             let z = (1.0 - r2c).max(0.0).sqrt().max(NORMAL_RIM_Z_MIN * (dx * dx + dy * dy).sqrt());
             let len = (dx * dx + dy * dy + z * z).max(0.0001).sqrt();
             let (nx, ny, nz) = (dx / len, dy / len, z / len);
-            pixels[i] = ((nx * 0.5 + 0.5) * 255.0) as u8;
-            pixels[i + 1] = ((ny * 0.5 + 0.5) * 255.0) as u8;
-            pixels[i + 2] = ((nz * 0.5 + 0.5) * 255.0) as u8;
-            pixels[i + 3] = (copertura * 255.0) as u8;
+            // sprite.wgsl divide l'RGB filtrato per l'alpha filtrato.
+            // Premoltiplica prima del filtro, altrimenti una normale di un
+            // texel parziale viene amplificata e può illuminare il terminatore.
+            let alpha = (copertura * 255.0) as u8;
+            for (canale, normale) in pixels[i..i + 3].iter_mut().zip([nx, ny, nz]) {
+                let rgb = ((normale * 0.5 + 0.5) * 255.0) as u16;
+                *canale = ((rgb * u16::from(alpha) + 127) / 255) as u8;
+            }
+            pixels[i + 3] = alpha;
         }
     }
     pixels
@@ -803,7 +807,9 @@ mod tests {
             if n[i + 3] == 0 {
                 continue;
             }
-            let nz = (n[i + 2] as f32 / 255.0) * 2.0 - 1.0;
+            // Decodifica dopo aver annullato la premoltiplicazione,
+            // come fa lo shader prima di illuminare la superficie.
+            let nz = (n[i + 2] as f32 / n[i + 3] as f32) * 2.0 - 1.0;
             minimo = minimo.min(nz);
             trovati += 1;
         }
@@ -852,6 +858,24 @@ mod tests {
                 differenze.len(),
                 differenze.first()
             );
+        }
+    }
+
+    #[test]
+    fn planet_normal_rgb_is_premultiplied_at_the_rim() {
+        for size in [64usize, 128, 256, 512, 1024] {
+            let normali = generate_sphere_normal_map(size);
+            let mut parziali = 0;
+            for p in normali.chunks_exact(4) {
+                if (1..255).contains(&p[3]) {
+                    parziali += 1;
+                }
+                assert!(
+                    p[..3].iter().all(|&rgb| rgb <= p[3]),
+                    "RGB maggiore dell'alpha nella mappa {size}×{size}: {p:?}"
+                );
+            }
+            assert!(parziali > 0, "bordo antialiasato mancante a size={size}");
         }
     }
 
@@ -991,12 +1015,9 @@ mod tests {
             if c <= 0.0 {
                 continue; // fuori dal disco: nessun pixel di pianeta
             }
-            let n = (
-                nmap[i] as f32 / 255.0 * 2.0 - 1.0,
-                nmap[i + 1] as f32 / 255.0 * 2.0 - 1.0,
-                nmap[i + 2] as f32 / 255.0 * 2.0 - 1.0,
-                nmap[i + 3] as f32 / 255.0,
-            );
+            let alpha = nmap[i + 3] as f32;
+            let decodifica = |canale: usize| nmap[i + canale] as f32 / alpha.max(1.0) * 2.0 - 1.0;
+            let n = (decodifica(0), decodifica(1), decodifica(2), alpha / 255.0);
             let p208 = compone_pixel(c, n, lx, ly, false);
             let p209 = compone_pixel(c, n, lx, ly, true);
             min_208 = min_208.min(p208);

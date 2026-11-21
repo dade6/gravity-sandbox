@@ -16,7 +16,7 @@ python -m pip install -r scripts/render_cpu_bordo/requirements.txt
 export RENDER_CPU_DIR="$(mktemp -d)"
 # Se il target-dir del repository non è scrivibile, impostare CARGO_TARGET_DIR.
 cargo test --lib esporta_texture_render_cpu_bordo -- --ignored
-python scripts/render_cpu_bordo/verifica.py "$RENDER_CPU_DIR" --atteso v217 --immagine /tmp/bordo-beta.png
+python scripts/render_cpu_bordo/verifica.py "$RENDER_CPU_DIR" --atteso corretto --immagine /tmp/bordo-beta.png
 ```
 
 `--atteso v217` caratterizza il difetto della build originale: filo luminoso
