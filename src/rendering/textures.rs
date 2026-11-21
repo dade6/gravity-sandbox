@@ -855,6 +855,22 @@ mod tests {
         }
     }
 
+    /// Esporta le texture reali di Beta per il modello di rendering su CPU.
+    #[test]
+    #[ignore = "esportazione facoltativa per scripts/render_cpu_bordo"]
+    fn esporta_texture_render_cpu_bordo() {
+        let dir = std::path::PathBuf::from(
+            std::env::var_os("RENDER_CPU_DIR").expect("impostare RENDER_CPU_DIR"),
+        );
+        std::fs::create_dir_all(&dir).expect("cartella di esportazione");
+        let size = 128;
+        let disc = generate_disc_texture(size);
+        std::fs::write(dir.join("disco.rgba"), disc.data.as_ref().expect("disco"))
+            .expect("scrittura texture disco");
+        std::fs::write(dir.join("normali.rgba"), generate_sphere_normal_map(size))
+            .expect("scrittura texture normali");
+    }
+
     /// v0.14.210 — ESPORTA le texture del pianeta come PNG per ispezione.
     /// Nessuna asserzione sul contenuto: serve solo a produrre i file.
     #[test]
@@ -1165,4 +1181,3 @@ mod tests {
         eprintln!("NORMAL MAP SALVATA: {}", path.display());
     }
 }
-
